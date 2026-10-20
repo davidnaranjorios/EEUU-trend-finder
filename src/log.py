@@ -50,6 +50,7 @@ class RunRecord:
         self.sources = sources
         self.n_series: dict[str, int] = {}
         self.stage_seconds: dict[str, float] = {}
+        self.details: dict[str, Any] = {}
         self.status = "running"
 
     @contextmanager
@@ -71,6 +72,7 @@ class RunRecord:
             "n_series": self.n_series,
             "stage_seconds": {k: round(v, 3) for k, v in self.stage_seconds.items()},
             "status": self.status,
+            "details": self.details,
         }
 
 
@@ -92,4 +94,4 @@ def run(sources: list[str], runs_file: Path | str) -> Iterator[RunRecord]:
         path = Path(runs_file)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(out, ensure_ascii=False) + "\n")
+            fh.write(json.dumps(out, ensure_ascii=False, default=str) + "\n")

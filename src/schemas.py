@@ -51,6 +51,8 @@ SERIES_META = TableSpec(
         ("end_date", pa.date32(), True),
         ("last_updated", pa.timestamp("s", tz="UTC"), True),
         ("discontinued", pa.bool_(), False),
+        # Serie de terceros con copyright: se analiza, pero no se publica en el reporte.
+        ("copyrighted", pa.bool_(), False),
     ),
     key=("source", "series_id"),
 )

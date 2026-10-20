@@ -80,6 +80,7 @@ def test_series_meta_valid():
         "end_date": date(2020, 1, 1),
         "last_updated": datetime(2020, 1, 2, tzinfo=UTC),
         "discontinued": False,
+        "copyrighted": False,
     }
     validate(table(SERIES_META, [row]), SERIES_META)
 

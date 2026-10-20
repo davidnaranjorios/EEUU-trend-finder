@@ -46,6 +46,19 @@ fdr:
     shared_blocks_across_series: true
     seed: 20261020
 
+fred:
+  requests_per_minute: 100        # límite oficial: 120/min; margen de seguridad
+  max_retries: 6
+  backoff_base_s: 2.0
+  timeout_s: 60
+  n_buckets: 64
+  page_limit_series: 1000         # máximo de category/series y series/updates
+  page_limit_observations: 100000 # máximo de series/observations
+  obs_batch_size: 200
+  catalog_refresh_days: 30
+  updates_fallback_days: 13       # series/updates solo cubre las dos últimas semanas
+  verification_seed: 20261020
+
 logging:
   level: INFO
   runs_file: data/logs/runs.jsonl

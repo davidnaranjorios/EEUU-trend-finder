@@ -29,17 +29,16 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
 
 def validate_config(cfg: dict[str, Any]) -> None:
     """Lanza ConfigError si falta una sección o un valor está fuera de rango."""
-    for section in ("paths", "eligibility", "persistence", "fdr", "logging"):
-        if section not in cfg:
-            raise ConfigError(f"falta la sección '{section}'")
-
+    _section(cfg, "paths")
+    _section(cfg, "logging")
     for key in ("min_obs", "max_staleness_days"):
-        _check_per_frequency(cfg["eligibility"].get(key), f"eligibility.{key}")
+        _check_per_frequency(_section(cfg, "eligibility").get(key), f"eligibility.{key}")
     _check_per_frequency(
-        cfg["persistence"].get("min_consecutive_periods"), "persistence.min_consecutive_periods"
+        _section(cfg, "persistence").get("min_consecutive_periods"),
+        "persistence.min_consecutive_periods",
     )
 
-    fdr = cfg["fdr"]
+    fdr = _section(cfg, "fdr")
     q = fdr.get("q")
     if not isinstance(q, int | float) or not 0 < q < 1:
         raise ConfigError(f"fdr.q debe estar en (0, 1); recibido {q!r}")
@@ -60,6 +59,34 @@ def validate_config(cfg: dict[str, Any]) -> None:
     n = cal.get("n_resamples")
     if not isinstance(n, int) or n < 99:
         raise ConfigError("fdr.calibration.n_resamples debe ser un entero >= 99")
+
+    _validate_fred(_section(cfg, "fred"))
+
+
+def _section(cfg: dict[str, Any], name: str) -> dict[str, Any]:
+    if not isinstance(cfg.get(name), dict):
+        raise ConfigError(f"falta la sección '{name}'")
+    return cfg[name]
+
+
+def _validate_fred(fred: dict[str, Any]) -> None:
+    rpm = fred.get("requests_per_minute")
+    if not isinstance(rpm, int | float) or not 0 < rpm <= 120:
+        raise ConfigError("fred.requests_per_minute debe estar en (0, 120] (límite oficial)")
+    if not isinstance(fred.get("n_buckets"), int) or not 0 < fred["n_buckets"] <= 100:
+        raise ConfigError("fred.n_buckets debe ser un entero en 1..100")
+    if not 0 < fred.get("page_limit_series", 0) <= 1000:
+        raise ConfigError("fred.page_limit_series debe estar en 1..1000")
+    if not 0 < fred.get("page_limit_observations", 0) <= 100000:
+        raise ConfigError("fred.page_limit_observations debe estar en 1..100000")
+    if not 0 < fred.get("updates_fallback_days", 0) < 14:
+        raise ConfigError("fred.updates_fallback_days debe ser < 14 (ventana de series/updates)")
+    for key in ("max_retries", "obs_batch_size", "catalog_refresh_days", "verification_seed"):
+        if not isinstance(fred.get(key), int) or fred[key] < 0:
+            raise ConfigError(f"fred.{key} debe ser un entero no negativo")
+    for key in ("backoff_base_s", "timeout_s"):
+        if not isinstance(fred.get(key), int | float) or fred[key] <= 0:
+            raise ConfigError(f"fred.{key} debe ser positivo")
 
 
 def _check_per_frequency(value: Any, name: str) -> None:

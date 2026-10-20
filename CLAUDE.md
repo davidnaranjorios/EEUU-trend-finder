@@ -53,6 +53,7 @@ src/
   stats/       # FDR, desestacionalización, utilidades
   rank/        # triangulación, deduplicación y scoring
   report/      # generación del reporte HTML
+  catalog.py   # vistas DuckDB sobre data/processed
   config.py    # carga y validación de config.yaml
   log.py       # logs estructurados y registro de corridas
   schemas.py   # esquemas comunes (pyarrow) y validación
@@ -97,7 +98,12 @@ Definidos en `src/schemas.py`; todo dato que se escribe en `data/` pasa por `val
 | seasonal_adjustment | str |
 
 **Metadatos** (`data/processed/series_meta/`), clave `(source, series_id)`: `source, series_id,
-title, category_path, start_date, end_date, last_updated, discontinued`.
+title, category_path, start_date, end_date, last_updated, discontinued, copyrighted`.
+`copyrighted` marca series de terceros cuyo uso no personal requiere permiso del dueño (términos
+de FRED): se descargan y analizan, pero **no se publican en el reporte** sin ese permiso.
+
+Almacenamiento: `<tabla>/<fuente>/<NN>/part-*.parquet` con `NN = sha1(series_id) % n_buckets`;
+escritura idempotente en `src/ingest/store.py`; vistas DuckDB en `src/catalog.py`.
 
 **Texto** (`data/processed/text/`), clave `(source, doc_id, section)`: `source, doc_id, date,
 entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo, clave
@@ -152,7 +158,9 @@ repo y fallan sobre archivos trampa; los validadores de esquema rechazan datos i
 Descarga masiva de metadatos y observaciones, con actualización incremental.
 **Primer paso:** evaluar `fredapi` y `pyfredapi` (cobertura de ALFRED/vintages, recorrido del
 árbol de categorías, rate limit/backoff, modo incremental, mantenimiento y licencia) frente a
-un cliente propio, y documentar la decisión.
+un cliente propio, y documentar la decisión. Hecho: cliente propio, ver
+`docs/decisions/0001-cliente-fred.md`.
+Uso: `uv run python -m src.ingest.fred crawl | observations [--category ID] | update | pick-category`.
 **Terminado cuando:** puedo consultar en DuckDB todas las series de una categoría y una segunda
 ejecución no duplica filas (test).
 
@@ -177,7 +185,8 @@ Usar un subagente por fuente, todos produciendo el esquema común.
 
 ### Fase 5 — Triangulación, deduplicación y ranking
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia
-(series, gráficos, términos, q-values) y ningún candidato tiene una sola fuente (test).
+(series, gráficos, términos, q-values), ningún candidato tiene una sola fuente y ninguna serie
+con `copyrighted = true` aparece en el reporte publicado (tests).
 
 ### Fase 6 — Backtest
 Reconstruir el estado de los datos en fechas pasadas con vintages de ALFRED y medir:
