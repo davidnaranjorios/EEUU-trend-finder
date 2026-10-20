@@ -1,0 +1,7 @@
+# Set de evaluación aislado (principio 2). Solo lo lee eval/.
+# Lo rellena un humano antes de la Fase 6. Formato por evento:
+#   - id: identificador corto
+#     description: qué tendencia estructural fue
+#     reference_date: AAAA-MM-DD   # fecha en que se considera "reconocida"
+#     source_of_reference: cita o enlace que justifica la fecha
+events: []

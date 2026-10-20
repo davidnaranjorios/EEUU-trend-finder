@@ -1,0 +1,51 @@
+# Configuración del sistema. Prohibido listar temas, industrias, términos o series aquí
+# (principio 1; lo verifica tests/test_no_hardcoded_topics.py).
+
+paths:
+  data_dir: data
+  raw_dir: data/raw
+  processed_dir: data/processed
+  signals_dir: data/signals
+  logs_dir: data/logs
+  reports_dir: reports
+
+eligibility:
+  # Mínimo de observaciones por frecuencia para que una serie entre a los detectores.
+  min_obs:
+    D: 1000
+    W: 260
+    M: 120
+    Q: 40
+    A: 15
+  # Una serie sin actualizar en más de estos días se considera inactiva.
+  max_staleness_days:
+    D: 30
+    W: 60
+    M: 120
+    Q: 240
+    A: 730
+
+persistence:
+  # Periodos consecutivos que debe sostenerse una aceleración para contar.
+  min_consecutive_periods:
+    D: 60
+    W: 13
+    M: 6
+    Q: 3
+    A: 2
+
+fdr:
+  q: 0.05
+  method: bh                    # único método que decide el ranking
+  comparison_method: by         # solo se reporta como comparación
+  family: detector_run          # una familia por detector y por corrida
+  calibration:
+    method: stationary_bootstrap  # block bootstrap; no permutación simple
+    block_length: auto            # entero o "auto"
+    n_resamples: 999
+    shared_blocks_across_series: true
+    seed: 20261020
+
+logging:
+  level: INFO
+  runs_file: data/logs/runs.jsonl

@@ -1,0 +1,56 @@
+"""Principio 1: ni src/ ni config.yaml contienen temas, términos o series de interés.
+
+Es una heurística: atrapa listas literales largas de strings, claves temáticas en la config e
+IDs con forma de serie. No sustituye la revisión humana del diff.
+"""
+
+import pytest
+
+from src.config import DEFAULT_CONFIG_PATH, REPO_ROOT
+from tests.guards import hardcoded_topic_violations_py, hardcoded_topic_violations_yaml
+
+
+def test_no_hardcoded_topics():
+    violations = hardcoded_topic_violations_py(REPO_ROOT / "src")
+    violations += hardcoded_topic_violations_yaml(DEFAULT_CONFIG_PATH)
+    assert violations == [], "\n".join(violations)
+
+
+PY_TRAPS = {
+    "industry_list.py": "INDUSTRIES = ['a', 'b', 'c', 'd', 'e', 'f']\n",
+    "keyword_set.py": "KW = {'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7'}\n",
+    "mapping.py": "M = {'k1': 1, 'k2': 2, 'k3': 3, 'k4': 4, 'k5': 5, 'k6': 6}\n",
+    "series_id_digit.py": "SID = 'GDPC1'\n",
+    "series_id_canary.py": "def f():\n    return 'UNRATE'\n",
+}
+
+
+@pytest.mark.parametrize("filename", sorted(PY_TRAPS))
+def test_py_guard_catches_trap(tmp_path, filename):
+    (tmp_path / filename).write_text(PY_TRAPS[filename], encoding="utf-8")
+    assert hardcoded_topic_violations_py(tmp_path), f"la trampa {filename} no fue detectada"
+
+
+YAML_TRAPS = {
+    "topic_key.yaml": "detect:\n  topics: [x]\n",
+    "watchlist.yaml": "watchlist: []\n",
+    "long_list.yaml": "anything: [a, b, c, d, e, f]\n",
+    "series_value.yaml": "baseline: A191RL1Q225SBEA\n",
+}
+
+
+@pytest.mark.parametrize("filename", sorted(YAML_TRAPS))
+def test_yaml_guard_catches_trap(tmp_path, filename):
+    path = tmp_path / filename
+    path.write_text(YAML_TRAPS[filename], encoding="utf-8")
+    assert hardcoded_topic_violations_yaml(path), f"la trampa {filename} no fue detectada"
+
+
+def test_py_guard_allows_structural_code(tmp_path):
+    (tmp_path / "ok.py").write_text(
+        "FREQ = ('D', 'W', 'M', 'Q', 'A')\nlevel = 'INFO'\n"
+        "def to_dict(s):\n"
+        "    return {'a': s.a, 'b': s.b, 'c': s.c, 'd': s.d, 'e': s.e, 'f': s.f}\n",
+        encoding="utf-8",
+    )
+    assert hardcoded_topic_violations_py(tmp_path) == []
