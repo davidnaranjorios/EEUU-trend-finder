@@ -115,6 +115,8 @@ def signal_row(**overrides):
         "p_value": 0.01,
         "q_value": 0.04,
         "run_date": date(2020, 2, 1),
+        "run_id": "r1",
+        "n_tests": 120,
     }
     row.update(overrides)
     return row
@@ -126,7 +128,12 @@ def test_signals_valid():
 
 @pytest.mark.parametrize(
     "overrides",
-    [{"p_value": 1.5}, {"q_value": -0.1}, {"window_start": date(2021, 1, 1)}],
+    [
+        {"p_value": 1.5},
+        {"q_value": -0.1},
+        {"window_start": date(2021, 1, 1)},
+        {"n_tests": 0},
+    ],
 )
 def test_signals_out_of_range_rejected(overrides):
     with pytest.raises(SchemaError, match="signals"):

@@ -1,8 +1,10 @@
 """Servidor FRED en memoria para tests (formato JSON de la API real).
 
 Reproduce lo que el adaptador usa: category/children, category/series, series/observations
-(con rango realtime y recorte de realtime_start), series/updates y series/vintagedates, con
-paginación limit/offset, errores inyectables y registro de solicitudes.
+(con rango realtime y recorte de realtime_start), series/updates, series/vintagedates, tags,
+tags/series (con `count` inestable, como la API real), releases, release/sources,
+release/series y v2/release/observations (cursor, auth por header), con paginación
+limit/offset, errores inyectables y registro de solicitudes.
 """
 
 from __future__ import annotations
@@ -63,11 +65,17 @@ class FakeFred:
         self.infos: dict[str, dict[str, Any]] = {}
         self.obs: dict[str, list[dict[str, str]]] = {}
         self.updates: list[str] = []
-        self.vintage_cap: set[str] = set()
+        self.max_vintages = 2000
         self.missing: set[str] = set()
         self.fail_queue: list[int] = []
         self.always_fail: int | None = None
         self.requests: list[tuple[str, dict[str, str]]] = []
+        self.headers: list[dict[str, str]] = []
+        self.today = "2026-10-20"
+        # Metadatos de crawl-meta: tags por serie (grupo geot + "usa") y releases.
+        self.geot = ["nation", "state", "county", "transnational"]
+        self.tags_of: dict[str, set[str]] = {}
+        self.releases: dict[int, tuple[str, list[str]]] = {}  # id -> (agencia, series)
 
     # --- construcción de datos ---
 
@@ -105,6 +113,11 @@ class FakeFred:
             }
         )
 
+    def set_meta(self, sid: str, tags: set[str], release: int, agency: str) -> None:
+        self.tags_of[sid] = tags
+        name, members = self.releases.setdefault(release, (agency, []))
+        members.append(sid)
+
     # --- transporte ---
 
     def transport(self) -> httpx.MockTransport:
@@ -121,10 +134,13 @@ class FakeFred:
         endpoint = request.url.path.split("/fred/", 1)[1]
         params = dict(request.url.params)
         self.requests.append((endpoint, params))
+        self.headers.append(dict(request.headers))
         if self.always_fail is not None:
             return httpx.Response(self.always_fail, json={"error_message": "falla"})
         if self.fail_queue:
             return httpx.Response(self.fail_queue.pop(0), json={"error_message": "falla"})
+        if endpoint.startswith("v2/") and "Bearer " not in request.headers.get("authorization", ""):
+            return httpx.Response(401, json={"error_message": "falta la API key"})
         handler = getattr(self, "_" + endpoint.replace("/", "_"))
         return handler(params)
 
@@ -144,15 +160,89 @@ class FakeFred:
         return _page(p, [self.infos[s] for s in self.updates], "seriess")
 
     def _series_vintagedates(self, p: dict[str, str]) -> httpx.Response:
-        dates = sorted({r["realtime_start"] for r in self.obs[p["series_id"]]}, reverse=True)
-        return httpx.Response(200, json={"vintage_dates": dates[: int(p.get("limit", 10000))]})
+        dates = sorted({r["realtime_start"] for r in self.obs[p["series_id"]]})
+        if p.get("sort_order") == "desc":
+            dates.reverse()
+        return _page(p, dates, "vintage_dates")
+
+    def _tags(self, p: dict[str, str]) -> httpx.Response:
+        assert p["tag_group_id"] == "geot"
+        return _page(p, [{"name": t, "group_id": "geot"} for t in self.geot], "tags")
+
+    def _tags_series(self, p: dict[str, str]) -> httpx.Response:
+        tag = p["tag_names"]
+        items = [self.infos[s] for s in sorted(self.tags_of) if tag in self.tags_of[s]]
+        resp = _page(p, items, "seriess")
+        body = resp.json()
+        body["count"] = len(items) + 7  # la API real devuelve un count que no cuadra
+        return httpx.Response(200, json=body)
+
+    def _releases(self, p: dict[str, str]) -> httpx.Response:
+        return _page(
+            p, [{"id": rid, "name": f"R{rid}"} for rid in sorted(self.releases)], "releases"
+        )
+
+    def _release_sources(self, p: dict[str, str]) -> httpx.Response:
+        agency = self.releases[int(p["release_id"])][0]
+        return httpx.Response(200, json={"sources": [{"id": 1, "name": agency}]})
+
+    def _release_series(self, p: dict[str, str]) -> httpx.Response:
+        members = sorted(self.releases[int(p["release_id"])][1])
+        return _page(p, [self.infos[s] for s in members], "seriess")
+
+    def _v2_release_observations(self, p: dict[str, str]) -> httpx.Response:
+        """Cursor 'SERIE,FECHA': la página sigue desde esa observación (incluida)."""
+        limit = int(p.get("limit", 500000))
+        members = sorted(self.releases[int(p["release_id"])][1])
+        flat = [
+            (sid, o["date"], o["value"])
+            for sid in members
+            for o in sorted(self.obs[sid], key=lambda o: o["date"])
+            if o["realtime_end"] == REALTIME_MAX
+        ]
+        start = 0
+        if "next_cursor" in p:
+            sid, d = p["next_cursor"].split(",")
+            start = next(i for i, (s, dd, _) in enumerate(flat) if (s, dd) == (sid, d))
+        chunk = flat[start : start + limit]
+        series: list[dict[str, Any]] = []
+        for sid, d, v in chunk:
+            if not series or series[-1]["series_id"] != sid:
+                info = self.infos[sid]
+                series.append(
+                    {
+                        "series_id": sid,
+                        "title": info["title"],
+                        "frequency": info["frequency"],
+                        "units": info["units"],
+                        "seasonal_adjustment": info["seasonal_adjustment"],
+                        "last_updated": "2026-10-15T12:50:02Z",
+                        "copyright_id": "public domain: citation requested",
+                        "notes": "",
+                        "observations": [],
+                    }
+                )
+            series[-1]["observations"].append({"date": d, "value": v})
+        body: dict[str, Any] = {
+            "has_more": start + limit < len(flat),
+            "release": {"release_id": int(p["release_id"])},
+            "series": series,
+        }
+        if body["has_more"]:
+            nxt = flat[start + limit]
+            body["next_cursor"] = f"{nxt[0]},{nxt[1]}"
+        return httpx.Response(200, json=body)
 
     def _series_observations(self, p: dict[str, str]) -> httpx.Response:
         sid = p["series_id"]
         if sid in self.missing:
             return httpx.Response(400, json={"error_message": "The series does not exist."})
-        rs, re_ = p.get("realtime_start", REALTIME_MAX), p.get("realtime_end", REALTIME_MAX)
-        if sid in self.vintage_cap and rs == REALTIME_MIN:
+        # Como la API real: sin rango realtime, el rango es "hoy".
+        rs, re_ = p.get("realtime_start", self.today), p.get("realtime_end", self.today)
+        n_vintages = len(
+            {r["realtime_start"] for r in self.obs[sid] if rs <= r["realtime_start"] <= re_}
+        )
+        if n_vintages > self.max_vintages:
             return httpx.Response(
                 400,
                 json={"error_message": "This exceeds the maximum number of vintage dates (2000)."},
