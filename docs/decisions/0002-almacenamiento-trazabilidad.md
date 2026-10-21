@@ -115,6 +115,38 @@ Riesgos:
   mezclar series actualizadas y no actualizadas. `last_updated` permite detectarlo, y la
   actualización semanal vuelve a pedir lo que cambió.
 
+## Embudo medido (2026-10-21, `run_id 4f92e2a4…`, umbrales actuales de config.yaml)
+
+Las reglas se aplican en orden. Las cifras de tamaño son estimaciones: observaciones a partir de
+las fechas y la frecuencia, 15 B/fila en Parquet, 84 series/min con v1 y 3,4 s por página v2.
+
+| Paso | Series |
+|---|---|
+| Catálogo | 853.316 |
+| − descontinuada | 74.642 |
+| − frecuencia no soportada (SA, 5Y, BW...) | 2.680 |
+| − inactiva | 402.117 (341.403 anuales) |
+| − variante de otra serie | 128.036 |
+| = clasificadas | 245.841 |
+
+| Grupo | Series | Con copyright | Obs. estimadas | Parquet | v1 | v2 (releases / páginas / tiempo / transferencia) |
+|---|---|---|---|---|---|---|
+| nacional | 53.126 | 4.280 | 36,4 M | 546 MB | 10,5 h | 148 / 356 / 20 min / 5,1 GB |
+| regional | 100.411 | 106 | 21,1 M | 317 MB | 19,9 h | 45 / 124 / 7 min / 2,0 GB |
+| internacional | 25.179 | 9.799 | 22,8 M | 341 MB | 5,0 h | 37 / 215 / 12 min / 4,1 GB |
+| nuevas (< 10 años) | 63.845 | 6.493 | 10,6 M | 159 MB | 12,7 h | 49 / 202 / 11 min / 3,5 GB |
+| sin_geografia | 3.280 | 73 | 1,1 M | 16 MB | 0,7 h | 30 / 205 / 12 min / 4,0 GB |
+
+- `nuevas` por nivel: regional 58.714, nacional 3.446 e internacional 1.685.
+- Las filas de v2 son independientes por grupo. Los releases se comparten, así que bajar
+  varios grupos juntos cuesta menos que la suma.
+
+**Para decidir antes del VPS:** la regla de inactividad mide los días desde la *fecha de la
+última observación*, y FRED fecha las anuales al 1 de enero de su periodo. Un dato anual de
+2023 publicado a fines de 2024 ya cuenta 1.024 días. Con un umbral anual de 1.460 días en vez
+de 730, volverían 260.771 series anuales. Lo mismo, en menor escala, para las trimestrales:
+8.317 con el doble de umbral.
+
 ## Consecuencias
 
 - La descarga inicial deja de ser el cuello de botella. El costo dominante pasa a ser
