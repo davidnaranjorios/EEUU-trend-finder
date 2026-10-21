@@ -1,0 +1,10 @@
+# Datos y secretos: nunca en git
+data/
+.env
+
+# Python / herramientas
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
