@@ -1,7 +1,7 @@
 # 0003 — VPS Hetzner para ingesta y procesamiento, R2 como almacenamiento definitivo
 
 - Fecha: 2026-10-21
-- Estado: propuesta (se activa cuando se fijen los umbrales del embudo)
+- Estado: aceptada (2026-10-23; descarga inicial: solo el grupo nacional, ver ADR 0002)
 
 ## Contexto
 

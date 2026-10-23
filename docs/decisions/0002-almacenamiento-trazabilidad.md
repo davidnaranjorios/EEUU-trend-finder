@@ -1,7 +1,7 @@
 # 0002 — Almacenamiento en R2, vintages por muestra y linaje con run_id
 
 - Fecha: 2026-10-21
-- Estado: propuesta (pendiente de que se fijen los umbrales del embudo)
+- Estado: aceptada (umbrales fijados el 2026-10-23; ver "Umbrales fijados")
 
 ## Contexto
 
@@ -146,6 +146,19 @@ las fechas y la frecuencia, 15 B/fila en Parquet, 84 series/min con v1 y 3,4 s p
 2023 publicado a fines de 2024 ya cuenta 1.024 días. Con un umbral anual de 1.460 días en vez
 de 730, volverían 260.771 series anuales. Lo mismo, en menor escala, para las trimestrales:
 8.317 con el doble de umbral.
+
+## Umbrales fijados (2026-10-23)
+
+Decisión del responsable del proyecto, a la vista del embudo medido:
+
+1. **Inactividad:** se mantienen los umbrales de `eligibility.max_staleness_days` (anual 730
+   días). Las 341.403 series anuales que excluye quedan registradas en el linaje con su
+   último dato, por si se revisa más adelante.
+2. **Historia mínima:** 10 años (`eligibility.min_history_years`). Lo más corto va a `nuevas`.
+3. **Descarga inicial:** solo el grupo `nacional` (`download.groups`): 53.126 series, ~36 M de
+   observaciones, ~546 MB en Parquet, ~20 min vía v2.
+4. **Muestra de vintages:** 2.000 series del grupo nacional (`vintages.sample_size`,
+   `vintages.groups`).
 
 ## Consecuencias
 

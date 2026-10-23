@@ -24,6 +24,7 @@ eligibility:
     M: 120
     Q: 240
     A: 730
+  # Umbrales fijados el 2026-10-23 a la vista del embudo medido (ADR 0002).
   # Historia más corta que esto no se descarta: va al grupo "nuevas".
   min_history_years: 10
   # Una versión por variable (mismo título normalizado). Orden de preferencia del representante:
@@ -41,7 +42,7 @@ vintages:
   groups: [nacional]
   max_vintage_dates_per_request: 2000   # tope oficial de series/observations
 
-# Descarga inicial y semanal de valores vigentes (API v2 por release).
+# Descarga inicial y semanal de valores vigentes (API v2 por release). Decidido: solo nacional.
 download:
   groups: [nacional]
   v2_page_limit: 500000                 # máximo oficial de release/observations
