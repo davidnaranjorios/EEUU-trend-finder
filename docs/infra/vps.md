@@ -15,7 +15,22 @@ ssh-keygen -t ed25519 -C "eeuu-trend-finder" -f ~/.ssh/eeuu_trend
 
 Guarda `~/.ssh/eeuu_trend` en privado; la que se sube es `~/.ssh/eeuu_trend.pub`.
 
-## 2. Servidor y volumen (consola de Hetzner Cloud)
+## 2. Servidor y volumen
+
+**Opción A, por API (recomendada):** en la consola de Hetzner, entra al proyecto y ve a
+**Security → API tokens → Generate API token** (permiso *Read & Write*). Después:
+
+```
+HCLOUD_TOKEN=<token> SSH_PUBKEY_FILE=~/.ssh/eeuu_trend.pub bash infra/hcloud_create.sh
+```
+
+El script crea (o reutiliza, si ya existen) la llave SSH, un firewall con solo el puerto 22,
+un volumen de 100 GB y el servidor CPX32 con Ubuntu 24.04 en `nbg1`, con el volumen adjunto
+sin automontaje. Imprime `IP=` y `VOLUME_ID=` para el paso 5. Se puede cambiar con
+`LOCATION=`, `SERVER_TYPE=` o `VOLUME_GB=`.
+
+**Opción B, en la consola de Hetzner Cloud:**
+
 
 1. **Security → SSH Keys → Add SSH key:** pega el contenido de `eeuu_trend.pub`.
 2. **Servers → Add server:**
@@ -33,8 +48,12 @@ Guarda `~/.ssh/eeuu_trend` en privado; la que se sube es `~/.ssh/eeuu_trend.pub`
 
 ## 3. Bucket y llaves de R2 (panel de Cloudflare)
 
-1. **R2 Object Storage → Create bucket:** nombre `eeuu-trend-finder`, el mismo que
-   `storage.bucket` en `config.yaml`.
+1. **Bucket:** `eeuu-trend-finder`, el mismo que `storage.bucket` en `config.yaml`. Por API,
+   con un token de cuenta con permiso *Workers R2 Storage: Edit*:
+   ```
+   CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<id> bash infra/r2_create_bucket.sh
+   ```
+   O a mano: **R2 Object Storage → Create bucket**.
 2. **R2 → Manage API tokens → Create API token:**
    - Permiso: **Object Read & Write**.
    - Alcance: **solo el bucket `eeuu-trend-finder`**.
