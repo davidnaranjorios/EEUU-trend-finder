@@ -15,7 +15,7 @@ from src.ingest.fred import FRED_CATALOG, SERIES_ATTRS, SOURCE, Paths
 from src.ingest.store import upsert
 
 ENV = {
-    "CLOUDFLARE_ACCOUNT_ID": "acc",
+    "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
     "AWS_ACCESS_KEY_ID": "kid",
     "AWS_SECRET_ACCESS_KEY": "s'ecret",
 }
@@ -117,3 +117,14 @@ def test_local_views_include_lineage(paths):
         "SELECT group_name, rule, count(*) FROM eligibility GROUP BY ALL ORDER BY 1"
     ).fetchall()
     assert rows == [("excluida", "descontinuada", 1), ("nacional", "geografia", 2)]
+
+
+def test_r2_account_id_from_pasted_endpoint():
+    env = {
+        **ENV,
+        "CLOUDFLARE_ACCOUNT_ID": " https://0123456789ABCDEF0123456789abcdef.r2.cloudflarestorage.com\n",
+    }
+    stmt = r2_statements({"bucket": "b", "prefix": "p"}, env)[2]
+    assert "ACCOUNT_ID '0123456789abcdef0123456789abcdef'" in stmt
+    with pytest.raises(RuntimeError, match="quedan 3"):
+        r2_statements({"bucket": "b", "prefix": "p"}, {**ENV, "CLOUDFLARE_ACCOUNT_ID": "acc"})
