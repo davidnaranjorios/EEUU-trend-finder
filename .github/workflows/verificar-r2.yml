@@ -38,10 +38,15 @@ jobs:
             echo
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      # Leer miles de Parquet uno a uno por httpfs tardó más de 30 min; bajar processed/ con
+      # rclone (~500 MB) toma segundos y además prueba el mismo camino que usa la ingesta.
+      - name: Traer processed desde R2
+        run: infra/pull_r2.sh
       - name: Conteos con DuckDB
+        timeout-minutes: 10
         run: |
           {
             echo '```json'
-            uv run python -m src.catalog summary --r2
+            uv run python -m src.catalog summary
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"

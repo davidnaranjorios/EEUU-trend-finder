@@ -352,3 +352,10 @@ def test_rclone_pinned_and_sync_verified():
 def test_verify_workflow_is_read_only():
     text = (REPO_ROOT / ".github" / "workflows" / "verificar-r2.yml").read_text()
     assert "rclone sync" not in text and "sync_r2.sh" not in text and "FRED_API_KEY" not in text
+
+
+def test_workflow_summaries_read_local_copy():
+    for wf in ("ingesta.yml", "verificar-r2.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / wf).read_text()
+        assert "summary --r2" not in text  # httpfs sobre miles de Parquet no terminó en 30 min
+    assert "infra/pull_r2.sh" in (REPO_ROOT / ".github/workflows/verificar-r2.yml").read_text()

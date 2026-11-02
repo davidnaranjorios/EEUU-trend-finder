@@ -55,9 +55,9 @@ jobs:
             echo '```'
             tail -n 3 data/logs/runs.jsonl 2>/dev/null || echo "sin registros"
             echo '```'
-            echo "### Conteos en R2"
+            echo "### Conteos (copia local, ya sincronizada con R2)"
             echo '```json'
-            uv run python -m src.catalog summary --r2 2>&1 || true
+            timeout 600 uv run python -m src.catalog summary 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Logs de la corrida
