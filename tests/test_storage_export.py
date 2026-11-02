@@ -128,3 +128,11 @@ def test_r2_account_id_from_pasted_endpoint():
     assert "ACCOUNT_ID '0123456789abcdef0123456789abcdef'" in stmt
     with pytest.raises(RuntimeError, match="quedan 3"):
         r2_statements({"bucket": "b", "prefix": "p"}, {**ENV, "CLOUDFLARE_ACCOUNT_ID": "acc"})
+
+
+def test_summary_counts(paths):
+    from src.catalog import summary
+
+    s = summary(connect(paths.processed))
+    assert s["eligibility"] == {"run_id": "r1", "groups": {"nacional": 2, "excluida": 1}}
+    assert s["series"]["rows"] == 0 and s["series_meta"] == 0

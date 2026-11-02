@@ -336,3 +336,19 @@ def test_r2_credentials_shape(env, msg):
     else:
         assert out.returncode != 0 and msg in out.stderr
         assert "x" * 40 not in out.stderr  # nunca se imprime el valor
+
+
+def test_rclone_pinned_and_sync_verified():
+    install = (INFRA / "install_rclone.sh").read_text()
+    assert "sha256sum -c" in install and "downloads.rclone.org" in install
+    for wf in ("ingesta.yml", "verificar-r2.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / wf).read_text()
+        assert "infra/install_rclone.sh" in text and "apt-get install" not in text
+    sync = (INFRA / "sync_r2.sh").read_text()
+    assert "--no-update-modtime" in sync  # R2 responde 501 a la autocopia de mtime
+    assert "rclone check" in sync and "--one-way" in sync
+
+
+def test_verify_workflow_is_read_only():
+    text = (REPO_ROOT / ".github" / "workflows" / "verificar-r2.yml").read_text()
+    assert "rclone sync" not in text and "sync_r2.sh" not in text and "FRED_API_KEY" not in text

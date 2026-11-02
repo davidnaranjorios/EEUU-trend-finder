@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -84,5 +86,54 @@ def account_id(value: str) -> str:
     return v
 
 
+def summary(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+    """Conteos de verificación: filas, vigentes vs. fechadas y embudo de la última corrida."""
+    rows, n_series, current, dated, n_dated = con.execute(
+        "SELECT count(*), count(DISTINCT series_id), count(*) FILTER (vintage_date IS NULL), "
+        "count(*) FILTER (vintage_date IS NOT NULL), "
+        "count(DISTINCT series_id) FILTER (vintage_date IS NOT NULL) FROM series"
+    ).fetchone()
+    groups = con.execute(
+        "SELECT group_name, count(*) FROM eligibility "
+        "WHERE run_id = (SELECT max_by(run_id, decided_at) FROM eligibility) "
+        "GROUP BY 1 ORDER BY 2 DESC"
+    ).fetchall()
+    run_id = con.execute("SELECT max_by(run_id, decided_at) FROM eligibility").fetchone()[0]
+    return {
+        "series": {
+            "rows": rows,
+            "series": n_series,
+            "current_rows": current,
+            "vintage_rows": dated,
+            "series_with_vintages": n_dated,
+        },
+        "series_meta": con.execute("SELECT count(*) FROM series_meta").fetchone()[0],
+        "eligibility": {"run_id": run_id, "groups": dict(groups)},
+    }
+
+
+def main(argv: list[str] | None = None) -> None:
+    """`python -m src.catalog summary [--r2]`: conteos de verificación en JSON."""
+    from src.config import load_config
+
+    parser = argparse.ArgumentParser(prog="python -m src.catalog")
+    parser.add_argument("command", choices=["summary"])
+    parser.add_argument("--r2", action="store_true", help="leer de R2 en vez de data/processed")
+    args = parser.parse_args(argv)
+    cfg = load_config()
+    if args.r2:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+        con = connect_r2(cfg["storage"])
+    else:
+        con = connect(cfg["paths"]["processed_dir"])
+    print(json.dumps(summary(con), indent=2, ensure_ascii=False))
+
+
 def _quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+if __name__ == "__main__":
+    main()
