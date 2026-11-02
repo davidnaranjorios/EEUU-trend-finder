@@ -1,0 +1,12 @@
+[Unit]
+Description=EEUU trend finder: actualización semanal (domingo, 06:13 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 06:13:00 UTC
+RandomizedDelaySec=15min
+# Si el servidor estaba apagado a la hora programada, corre al arrancar.
+Persistent=true
+Unit=trend-weekly-update.service
+
+[Install]
+WantedBy=timers.target

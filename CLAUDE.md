@@ -53,7 +53,9 @@ src/
   stats/       # FDR, desestacionalización, utilidades
   rank/        # triangulación, deduplicación y scoring
   report/      # generación del reporte HTML
-  catalog.py   # vistas DuckDB sobre data/processed
+  catalog.py   # vistas DuckDB sobre data/processed (local o R2)
+  eligibility.py # embudo de elegibilidad con linaje por serie
+  export.py    # archivos pequeños para la futura web estática
   config.py    # carga y validación de config.yaml
   log.py       # logs estructurados y registro de corridas
   schemas.py   # esquemas comunes (pyarrow) y validación
@@ -61,7 +63,8 @@ eval/
   known_events.yaml
   backtest.py
 tests/
-data/          # raw/, processed/, signals/ (no versionado)
+infra/         # aprovisionamiento del VPS, systemd y sync a R2
+data/          # raw/, processed/, signals/, exports/ (no versionado)
 reports/
 ```
 
@@ -160,7 +163,10 @@ Descarga masiva de metadatos y observaciones, con actualización incremental.
 árbol de categorías, rate limit/backoff, modo incremental, mantenimiento y licencia) frente a
 un cliente propio, y documentar la decisión. Hecho: cliente propio, ver
 `docs/decisions/0001-cliente-fred.md`.
-Uso: `uv run python -m src.ingest.fred crawl | observations [--category ID] | update | pick-category`.
+Uso: `uv run python -m src.ingest.fred crawl | crawl-meta | observations [--category ID] |
+download | vintages [--ids-file F] | update | pick-category`, `uv run python -m src.eligibility
+run | funnel` y `uv run python -m src.export`. Almacenamiento y vintages: ADR 0002;
+infraestructura (VPS + R2): ADR 0003 y `docs/infra/vps.md`.
 **Terminado cuando:** puedo consultar en DuckDB todas las series de una categoría y una segunda
 ejecución no duplica filas (test).
 

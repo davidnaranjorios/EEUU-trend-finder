@@ -1,0 +1,28 @@
+[Unit]
+Description=EEUU trend finder: descarga inicial por tramos (reanudable)
+Documentation=file:///home/trend/app/docs/infra/vps.md
+After=network-online.target mnt-data.mount
+Wants=network-online.target
+RequiresMountsFor=/mnt/data
+# Una vez completa, no vuelve a correr (borrar el marcador para repetirla).
+ConditionPathExists=!/home/trend/app/data/processed/ingest_state/initial_download.done
+
+[Service]
+Type=exec
+User=trend
+Group=trend
+WorkingDirectory=/home/trend/app
+Environment=PATH=/home/trend/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/trend/app/infra/run_tramos.sh
+# Reanuda tras un corte (red, reinicio, error transitorio de la API) desde el último tramo.
+Restart=on-failure
+RestartSec=10min
+TimeoutStopSec=5min
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/mnt/data /home/trend
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

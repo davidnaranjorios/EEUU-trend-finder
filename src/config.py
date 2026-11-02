@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,58 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ConfigError("fdr.calibration.n_resamples debe ser un entero >= 99")
 
     _validate_fred(_section(cfg, "fred"))
+    _validate_eligibility(_section(cfg, "eligibility"))
+    _validate_vintages(_section(cfg, "vintages"))
+    _validate_groups(_section(cfg, "download").get("groups"), "download.groups")
+    v2_limit = cfg["download"].get("v2_page_limit")
+    if not isinstance(v2_limit, int) or not 0 < v2_limit <= 500000:
+        raise ConfigError("download.v2_page_limit debe estar en 1..500000")
+    storage = _section(cfg, "storage")
+    for key in ("bucket", "prefix"):
+        if not isinstance(storage.get(key), str) or not storage[key]:
+            raise ConfigError(f"storage.{key} debe ser un texto no vacío")
+
+
+# Grupos del embudo que se pueden descargar (los demás son exclusiones o diagnósticos).
+DOWNLOADABLE_GROUPS = ("nacional", "regional", "internacional", "nuevas")
+SEASONAL_CODES = ("SA", "SAAR", "SSA", "NSA", "NSAAR")
+
+
+def _validate_eligibility(el: dict[str, Any]) -> None:
+    years = el.get("min_history_years")
+    if not isinstance(years, int | float) or years <= 0:
+        raise ConfigError("eligibility.min_history_years debe ser positivo")
+    variants = el.get("variants")
+    if not isinstance(variants, dict):
+        raise ConfigError("falta eligibility.variants")
+    sa = variants.get("seasonal_preference")
+    if not isinstance(sa, list) or sorted(sa) != sorted(SEASONAL_CODES):
+        raise ConfigError(f"eligibility.variants.seasonal_preference debe ordenar {SEASONAL_CODES}")
+    freq = variants.get("frequency_preference")
+    if not isinstance(freq, list) or sorted(freq) != sorted(FREQUENCIES):
+        raise ConfigError(f"eligibility.variants.frequency_preference debe ordenar {FREQUENCIES}")
+    regex = variants.get("transformed_units_regex")
+    try:
+        re.compile(regex)
+    except (TypeError, re.error) as exc:
+        raise ConfigError(f"eligibility.variants.transformed_units_regex inválida: {exc}") from exc
+
+
+def _validate_vintages(v: dict[str, Any]) -> None:
+    for key in ("sample_size", "seed"):
+        if not isinstance(v.get(key), int) or v[key] < 0:
+            raise ConfigError(f"vintages.{key} debe ser un entero no negativo")
+    cap = v.get("max_vintage_dates_per_request")
+    if not isinstance(cap, int) or not 0 < cap <= 2000:
+        raise ConfigError("vintages.max_vintage_dates_per_request debe estar en 1..2000")
+    _validate_groups(v.get("groups"), "vintages.groups")
+
+
+def _validate_groups(groups: Any, name: str) -> None:
+    if not isinstance(groups, list) or not groups or not set(groups) <= set(DOWNLOADABLE_GROUPS):
+        raise ConfigError(
+            f"{name} debe ser una lista no vacía con valores de {DOWNLOADABLE_GROUPS}"
+        )
 
 
 def _section(cfg: dict[str, Any], name: str) -> dict[str, Any]:

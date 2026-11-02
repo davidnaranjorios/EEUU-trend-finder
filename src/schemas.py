@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import duckdb
 import pyarrow as pa
 
-from src.config import FREQUENCIES
+from src.config import DOWNLOADABLE_GROUPS, FREQUENCIES
 
 
 class SchemaError(ValueError):
@@ -95,11 +95,93 @@ SIGNALS = TableSpec(
         ("p_value", pa.float64(), False),
         ("q_value", pa.float64(), False),
         ("run_date", pa.date32(), False),
+        ("run_id", pa.string(), False),
+        # Número de pruebas de la familia contra las que se corrigió (BH).
+        ("n_tests", pa.int64(), False),
     ),
     key=("signal_id",),
 )
 
-ALL_SPECS = {spec.name: spec for spec in (SERIES, SERIES_META, TEXT_DOCS, TERM_FREQ, SIGNALS)}
+# --- Linaje (ADR 0002): toda decisión queda registrada con el run_id que la tomó. ---------------
+
+# Grupos y reglas del embudo de elegibilidad (src/eligibility.py).
+# Los grupos descargables más los dos que no se descargan: sin geografía y excluidas.
+ELIGIBILITY_GROUPS = (*DOWNLOADABLE_GROUPS, "sin_geografia", "excluida")
+
+ELIGIBILITY = TableSpec(
+    name="eligibility",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("series_id", pa.string(), False),
+        ("group_name", pa.string(), False),
+        ("rule", pa.string(), False),
+        ("detail", pa.string(), True),
+        ("geo_level", pa.string(), True),
+        ("frequency", pa.string(), True),
+        ("copyrighted", pa.bool_(), False),
+        ("decided_at", pa.timestamp("s", tz="UTC"), False),
+    ),
+    key=("run_id", "source", "series_id"),
+)
+
+DETECTOR_RUNS = TableSpec(
+    name="detector_runs",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("detector", pa.string(), False),
+        ("started_at", pa.timestamp("s", tz="UTC"), False),
+        ("finished_at", pa.timestamp("s", tz="UTC"), True),
+        ("n_tests", pa.int64(), False),
+        ("n_bh", pa.int64(), False),
+        ("n_by", pa.int64(), False),
+        ("q", pa.float64(), False),
+        ("params_json", pa.string(), False),
+    ),
+    key=("run_id", "detector"),
+)
+
+SERIES_TERM_LINKS = TableSpec(
+    name="series_term_links",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("series_id", pa.string(), False),
+        ("text_source", pa.string(), False),
+        ("term", pa.string(), False),
+        ("score", pa.float64(), False),
+        ("method", pa.string(), False),
+    ),
+    key=("run_id", "source", "series_id", "text_source", "term"),
+)
+
+CLUSTERS = TableSpec(
+    name="clusters",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("cluster_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("object_id", pa.string(), False),
+        ("role", pa.string(), False),  # representante o miembro
+        ("similarity", pa.float64(), True),
+    ),
+    key=("run_id", "cluster_id", "source", "object_id"),
+)
+
+ALL_SPECS = {
+    spec.name: spec
+    for spec in (
+        SERIES,
+        SERIES_META,
+        TEXT_DOCS,
+        TERM_FREQ,
+        SIGNALS,
+        ELIGIBILITY,
+        DETECTOR_RUNS,
+        SERIES_TERM_LINKS,
+        CLUSTERS,
+    )
+}
 
 
 def validate(table: pa.Table, spec: TableSpec) -> None:
@@ -123,6 +205,7 @@ def validate(table: pa.Table, spec: TableSpec) -> None:
             raise SchemaError(f"{spec.name}.{name}: contiene nulos y no es nullable")
 
     _check_domains(table, spec)
+    _check_lineage(table, spec)
     _check_unique_key(table, spec)
 
 
@@ -148,6 +231,37 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"signals: {bad[0]} filas con p/q fuera de [0,1] o ventana inválida")
+    con.close()
+
+
+def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
+    con = duckdb.connect()
+    con.register("t", table)
+    checks = {
+        ELIGIBILITY.name: (
+            "group_name NOT IN (SELECT unnest(?)) OR rule = ''",
+            [list(ELIGIBILITY_GROUPS)],
+            "grupo fuera de dominio o regla vacía",
+        ),
+        DETECTOR_RUNS.name: (
+            "n_tests < 0 OR n_bh < 0 OR n_by < 0 OR n_bh > n_tests OR n_by > n_tests "
+            "OR q <= 0 OR q >= 1",
+            [],
+            "conteos o q inconsistentes",
+        ),
+        SERIES_TERM_LINKS.name: (
+            "score < 0 OR score > 1 OR isnan(score)",
+            [],
+            "score fuera de [0,1]",
+        ),
+        CLUSTERS.name: ("role NOT IN ('representante', 'miembro')", [], "rol inválido"),
+        SIGNALS.name: ("n_tests < 1 OR run_id = ''", [], "n_tests < 1 o run_id vacío"),
+    }
+    if spec.name in checks:
+        where, params, msg = checks[spec.name]
+        bad = con.execute(f"SELECT count(*) FROM t WHERE {where}", params).fetchone()[0]
+        if bad:
+            raise SchemaError(f"{spec.name}: {bad} filas con {msg}")
     con.close()
 
 

@@ -73,6 +73,7 @@ class ApiClient:
         today: Callable[[], date] = date.today,
         rng: random.Random | None = None,
         logger: logging.Logger | None = None,
+        limiter: RateLimiter | None = None,
     ) -> None:
         # httpx registra la URL completa (con la API key) a nivel INFO: se silencia.
         logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -80,7 +81,8 @@ class ApiClient:
             base_url=base_url, timeout=timeout_s, headers=headers, transport=transport
         )
         self._auth = auth_params
-        self._limiter = RateLimiter(requests_per_minute, clock, sleep)
+        # Un limitador compartido permite que varios clientes respeten un mismo límite.
+        self._limiter = limiter or RateLimiter(requests_per_minute, clock, sleep)
         self._sleep = sleep
         self._today = today
         self._rng = rng or random.Random()

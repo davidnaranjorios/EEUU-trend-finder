@@ -11,9 +11,21 @@ from datetime import UTC, date, datetime, timedelta
 import pyarrow as pa
 import pytest
 
+from src import eligibility
 from src.catalog import connect
 from src.config import load_config
-from src.ingest.fred import FETCH_STATE, FRED_CATALOG, SOURCE, FredIngestor, Paths, eligibility
+from src.ingest.fred import (
+    EXIT_PENDING,
+    FETCH_STATE,
+    FRED_CATALOG,
+    SERIES_ATTRS,
+    SOURCE,
+    VINTAGE_SAMPLE,
+    FredIngestor,
+    Paths,
+    collapse_vintages,
+    stratified_sample,
+)
 from src.ingest.http import ApiClient, ApiError, RateLimiter
 from src.ingest.store import read_table, recover, upsert
 from src.log import run
@@ -58,6 +70,8 @@ def fake():
     f.add_series(2, make_info("DDD", frequency_short="SA"), n_obs=10)
     f.add_series(2, make_info("EEE", start="2025-01-01"), n_obs=20)
     f.add_series(2, make_info("FFF", notes=None), n_obs=320)
+    for sid in ("AAA", "BBB", "CCC", "DDD", "EEE", "FFF"):
+        f.set_meta(sid, {"nation", "usa"}, release=10 if sid < "D" else 20, agency=f"Ag{sid < 'C'}")
     return f
 
 
@@ -65,6 +79,7 @@ def fake():
 def cfg():
     c = copy.deepcopy(load_config())
     c["fred"].update(page_limit_series=2, page_limit_observations=50, obs_batch_size=2, n_buckets=4)
+    c["download"]["v2_page_limit"] = 250
     return c
 
 
@@ -74,27 +89,54 @@ def make(fake, cfg, tmp_path):
     clock = FakeClock()
     now = Now(T0)
 
-    def _make() -> FredIngestor:
-        client = ApiClient(
-            "https://api.stlouisfed.org/fred/",
-            {"api_key": API_KEY},
+    def _client(base: str, auth: dict, headers: dict | None, raw: bool) -> ApiClient:
+        return ApiClient(
+            base,
+            auth,
+            headers=headers,
             requests_per_minute=6000,
             max_retries=3,
             timeout_s=5,
             backoff_base_s=1.0,
-            raw_dir=paths.raw / SOURCE,
+            raw_dir=paths.raw / SOURCE if raw else None,
             transport=fake.transport(),
             clock=clock,
             sleep=clock.sleep,
             today=lambda: now().date(),
             rng=random.Random(0),
         )
-        return FredIngestor(client, cfg, paths, now=now)
+
+    def _make() -> FredIngestor:
+        client = _client("https://api.stlouisfed.org/fred/", {"api_key": API_KEY}, None, True)
+        v2 = _client(
+            "https://api.stlouisfed.org/fred/v2/",
+            {},
+            {"Authorization": f"Bearer {API_KEY}"},
+            False,
+        )
+        return FredIngestor(client, cfg, paths, now=now, v2=v2)
 
     _make.paths = paths
     _make.now = now
     _make.clock = clock
+    _make.cfg = cfg
     return _make
+
+
+def run_funnel(make, run_id="run-1", today=None):
+    catalog, attrs = eligibility.load_inputs(make.paths)
+    decisions = eligibility.classify(catalog, attrs, make.cfg, today or make.now().date())
+    eligibility.write_lineage(decisions, run_id, make.now(), make.paths, n_buckets=4)
+    return {d["series_id"]: d for d in decisions}
+
+
+def prepare(make):
+    """Catálogo + metadatos + embudo: deja las series objetivo listas para descargar."""
+    ing = make()
+    ing.crawl()
+    ing.crawl_meta()
+    run_funnel(make)
+    return ing
 
 
 def series_rows(paths):
@@ -135,32 +177,32 @@ def test_pagination_category_series(make, fake):
 # --- observations ------------------------------------------------------------------------------
 
 
-def test_eligibility_counts(make, cfg):
-    make().crawl()
-    catalog = read_table(FRED_CATALOG, make.paths.catalog, source=SOURCE).to_pylist()
-    eligible, counts = eligibility(catalog, cfg, T0.date())
-    assert sorted(r["series_id"] for r in eligible) == ["AAA", "BBB", "FFF"]
-    assert counts["discontinued"] == 1
-    assert counts["unsupported_frequency"] == {"SA": 1}
-    assert counts["too_short"] == 1
+def test_crawl_meta_geo_and_releases(make, fake):
+    ing = make()
+    ing.crawl()
+    stats = ing.crawl_meta()
+    attrs = {
+        r["series_id"]: r
+        for r in read_table(SERIES_ATTRS, make.paths.series_attrs, source=SOURCE).to_pylist()
+    }
+    assert attrs["AAA"]["geo_types"] == ["nation"] and attrs["AAA"]["is_usa"]
+    assert attrs["AAA"]["release_ids"] == [10] and attrs["AAA"]["agencies"] == ["AgTrue"]
+    assert stats["releases"] == 2 and stats["series_with_release"] == 6
+    # tags/series informa un count inflado: se pagina hasta la página corta, sin fallar.
+    assert stats["geo_tags"]["usa"] == 6
 
 
-def test_eligibility_uses_config(make, cfg):
-    make().crawl()
-    catalog = read_table(FRED_CATALOG, make.paths.catalog, source=SOURCE).to_pylist()
-    cfg["eligibility"]["min_obs"]["M"] = 10_000
-    eligible, counts = eligibility(catalog, cfg, T0.date())
-    assert eligible == [] and counts["too_short"] == 4
-    cfg["eligibility"]["min_obs"]["M"] = 120
-    _, counts = eligibility(catalog, cfg, T0.date() + timedelta(days=400))
-    assert counts["stale"] == 3 and counts["too_short"] == 1  # EEE se descarta antes
+def test_observations_require_funnel(make):
+    ing = make()
+    ing.crawl()
+    with pytest.raises(RuntimeError, match="embudo"):
+        ing.observations()
 
 
 def test_pagination_observations(make, fake):
-    ing = make()
-    ing.crawl()
+    ing = prepare(make)
     stats = ing.observations()
-    assert stats["fetched"] == 3
+    assert stats["targets"] == 3 and stats["fetched"] == 3
     # 320 observaciones con page_limit_observations=50: 7 páginas por serie.
     assert fake.count("series/observations", series_id="AAA") == 7
     rows = series_rows(make.paths)
@@ -168,22 +210,17 @@ def test_pagination_observations(make, fake):
     validate(rows, SERIES)
 
 
-def test_vintage_date_is_publication_date(make):
-    ing = make()
-    ing.crawl()
+def test_current_values_have_no_vintage(make):
+    ing = prepare(make)
     ing.observations()
-    row = next(
-        r
-        for r in series_rows(make.paths).to_pylist()
-        if r["series_id"] == "AAA" and r["date"] == date(2000, 1, 1)
-    )
-    assert row["vintage_date"] == date(2000, 2, 15)  # realtime_start, no la fecha de hoy
-    assert row["frequency"] == "M" and row["units"] == "Index"
+    rows = series_rows(make.paths).to_pylist()
+    assert {r["vintage_date"] for r in rows} == {None}  # "no aplica": no se inventa una fecha
+    row = next(r for r in rows if r["series_id"] == "AAA" and r["date"] == date(2000, 1, 1))
+    assert row["frequency"] == "M" and row["units"] == "Index" and row["value"] == 100.0
 
 
 def test_fred_idempotent(make):
-    ing = make()
-    ing.crawl()
+    ing = prepare(make)
     ing.observations()
     first = series_rows(make.paths)
     meta_first = read_table(SERIES_META, make.paths.series_meta, source=SOURCE)
@@ -206,18 +243,23 @@ def test_fred_idempotent(make):
     )
 
 
-def test_unsupported_frequency_not_fetched(make, fake):
-    ing = make()
-    ing.crawl()
-    stats = ing.observations()
-    assert stats["eligibility"]["unsupported_frequency"] == {"SA": 1}
-    assert fake.count("series/observations", series_id="DDD") == 0
+def test_only_target_groups_fetched(make, fake):
+    ing = prepare(make)
+    ing.observations()
+    fetched = {p["series_id"] for e, p in fake.requests if e == "series/observations"}
+    # CCC descontinuada, DDD frecuencia no soportada, EEE historia corta (grupo "nuevas").
+    assert fetched == {"AAA", "BBB", "FFF"}
+
+
+def test_observations_max_series_reports_pending(make):
+    ing = prepare(make)
+    assert ing.observations(max_series=2)["pending"] == 1
+    assert make().observations(max_series=2)["pending"] == 0
 
 
 def test_api_errors_per_series_are_counted(make, fake):
     fake.missing.add("BBB")
-    ing = make()
-    ing.crawl()
+    ing = prepare(make)
     stats = ing.observations()
     assert stats["series_errors"] == 1 and stats["fetched"] == 2
     # Sin estado guardado para BBB: se reintentará en la próxima corrida.
@@ -225,27 +267,147 @@ def test_api_errors_per_series_are_counted(make, fake):
     assert "BBB" not in {r["series_id"] for r in state}
 
 
-def test_vintage_cap_fallback(make, fake):
-    fake.vintage_cap.add("AAA")
-    ing = make()
-    ing.crawl()
-    stats = ing.observations()
-    assert stats["vintage_cap_fallbacks"] == 1
-    state = {
-        r["series_id"]: r
-        for r in read_table(FETCH_STATE, make.paths.fetch_state, source=SOURCE).to_pylist()
-    }
-    floor = state["AAA"]["realtime_floor"]
-    assert floor == date(2026, 9, 15)  # última vintage de AAA
+# --- download (API v2) -------------------------------------------------------------------------
+
+
+def test_v2_download_cursor_and_filter(make, fake):
+    ing = prepare(make)
+    stats = ing.download()
+    # Release 10: AAA, BBB, CCC (960 obs vigentes) con páginas de 250 -> 4 páginas.
+    # Release 20: DDD, EEE, FFF (350 obs) -> 2 páginas. Solo se escriben AAA, BBB y FFF.
+    assert stats["releases"] == 2 and stats["pending_releases"] == 0
+    assert stats["pages"] == 6
+    assert fake.count("v2/release/observations") == 6
+    rows = series_rows(make.paths)
+    assert sorted(set(rows.column("series_id").to_pylist())) == ["AAA", "BBB", "FFF"]
+    assert rows.num_rows == 3 * 320
+    assert set(rows.column("vintage_date").to_pylist()) == {None}
+    validate(rows, SERIES)
+
+
+def test_v2_download_same_as_v1(make):
+    ing = prepare(make)
+    ing.download()
+    via_v2 = checksum(series_rows(make.paths))
+    shutil.rmtree(make.paths.series)
+    shutil.rmtree(make.paths.fetch_state)
+    make().observations()
+    assert checksum(series_rows(make.paths)) == via_v2
+
+
+def test_v2_download_resumes_by_release(make, fake):
+    ing = prepare(make)
+    first = ing.download(max_releases=1)
+    assert first["releases_done_now"] == 1 and first["pending_releases"] == 1
+    calls = fake.count("v2/release/observations")
+    second = make().download()
+    assert second["releases_done_now"] == 1 and second["pending_releases"] == 0
+    assert fake.count("v2/release/observations", release_id="10") == calls  # no se repite
+    assert series_rows(make.paths).num_rows == 3 * 320
+    assert make().download()["releases_done_now"] == 0
+
+
+def test_v2_download_idempotent(make):
+    ing = prepare(make)
+    ing.download()
+    first = series_rows(make.paths)
+    make.paths.cursors.unlink()  # olvidar el progreso: se rebaja todo
+    stats = make().download()
+    assert stats["rows_written"] == 3 * 320
+    assert checksum(series_rows(make.paths)) == checksum(first)
+
+
+def test_cli_exit_code_when_pending(make, monkeypatch):
+    from src.ingest import fred as fred_mod
+
+    prepare(make)
+    monkeypatch.setenv("FRED_API_KEY", API_KEY)
+    monkeypatch.setattr(fred_mod.FredIngestor, "from_config", classmethod(lambda c, *a: make()))
+    monkeypatch.setattr(fred_mod, "load_config", lambda: make.cfg)
+    monkeypatch.setitem(make.cfg["logging"], "runs_file", str(make.paths.processed / "runs.jsonl"))
+    assert fred_mod.main(["download", "--max-releases", "1"]) == EXIT_PENDING
+    assert fred_mod.main(["download", "--max-releases", "1"]) == 0
+
+
+# --- vintages (muestra ALFRED) -----------------------------------------------------------------
+
+
+def test_vintage_sample_is_stratified_and_fixed(make):
+    ing = prepare(make)
+    make.cfg["vintages"]["sample_size"] = 2
+    stats = ing.vintages()
+    sample = read_table(VINTAGE_SAMPLE, make.paths.vintage_sample, source=SOURCE).to_pylist()
+    # Dos estratos (M|AgTrue: AAA, BBB; M|AgFalse: FFF): al menos una serie de cada uno.
+    assert {r["stratum"] for r in sample} == {"M|AgTrue", "M|AgFalse"}
+    assert stats["sample"] == len(sample) == 2
+    make.cfg["vintages"]["seed"] += 1  # otra semilla no vuelve a sortear: la muestra es fija
+    assert make().vintages()["sample"] == 2
+    again = read_table(VINTAGE_SAMPLE, make.paths.vintage_sample, source=SOURCE).to_pylist()
+    assert again == sample
+
+
+def test_vintage_date_is_publication_date(make):
+    ing = prepare(make)
+    ing.vintages(ids=["AAA"])
+    row = next(
+        r
+        for r in series_rows(make.paths).to_pylist()
+        if r["series_id"] == "AAA" and r["date"] == date(2000, 1, 1)
+    )
+    assert row["vintage_date"] == date(2000, 2, 15)  # realtime_start, no la fecha de hoy
+
+
+def test_vintages_split_into_windows_over_cap(make, fake):
+    fake.max_vintages = 100
+    make.cfg["vintages"]["max_vintage_dates_per_request"] = 100
+    make.cfg["vintages"]["sample_size"] = 0
+    fake.revise("AAA", "2000-01-01", "50.0", on="2001-01-01")
+    ing = prepare(make)
+    stats = ing.vintages(ids=["AAA"])
+    assert stats["fetched"] == 1 and stats["series_errors"] == 0
+    # 321 vintages con tope 100: 4 ventanas de series/observations, sin pedir más del tope.
+    windows = [p for e, p in fake.requests if e == "series/observations" and p["offset"] == "0"]
+    assert len(windows) == 4
     aaa = [r for r in series_rows(make.paths).to_pylist() if r["series_id"] == "AAA"]
-    assert len(aaa) == 320 and all(r["vintage_date"] >= floor for r in aaa)
+    assert len(aaa) == 321  # 320 publicaciones originales + la revisión, sin duplicados
+    first = sorted(
+        (r for r in aaa if r["date"] == date(2000, 1, 1)), key=lambda r: r["vintage_date"]
+    )
+    assert [(r["vintage_date"], r["value"]) for r in first] == [
+        (date(2000, 2, 15), 100.0),
+        (date(2001, 1, 1), 50.0),
+    ]
+
+
+def test_vintages_ids_extend_sample(make):
+    make.cfg["vintages"]["sample_size"] = 0
+    ing = prepare(make)
+    stats = ing.vintages(ids=["EEE", "NOPE"])
+    assert stats["extra_ids"] == 2 and stats["unknown_ids"] == 1 and stats["fetched"] == 1
+
+
+def test_collapse_vintages_drops_window_repeats():
+    obs = [
+        {"date": "2000-01-01", "realtime_start": "2000-02-15", "value": "1"},
+        {"date": "2000-01-01", "realtime_start": "2005-01-01", "value": "1"},  # borde de tramo
+        {"date": "2000-01-01", "realtime_start": "2006-01-01", "value": "2"},
+    ]
+    assert [o["realtime_start"] for o in collapse_vintages(obs)] == ["2000-02-15", "2006-01-01"]
+
+
+def test_stratified_sample_deterministic():
+    strata = {"A": [f"a{i}" for i in range(90)], "B": [f"b{i}" for i in range(10)], "C": ["c"]}
+    s1 = stratified_sample(strata, 20, seed=7)
+    assert s1 == stratified_sample(strata, 20, seed=7)
+    assert {k: len(v) for k, v in s1.items()} == {"A": 18, "B": 2, "C": 1}
+    assert s1 != stratified_sample(strata, 20, seed=8)
 
 
 # --- update / incremental ----------------------------------------------------------------------
 
 
 def test_fred_incremental(make, fake):
-    ing = make()
+    ing = prepare(make)
     ing.update()  # primera vez: crawl completo
     before = len(fake.requests)
 
@@ -262,19 +424,37 @@ def test_fred_incremental(make, fake):
     assert not any(e.startswith("category/") for e, _ in new_requests)
 
 
-def test_revision_appends_vintage(make, fake):
-    ing = make()
+def test_revision_replaces_current_value(make, fake):
+    ing = prepare(make)
     ing.update()
+    fake.revise("AAA", "2026-08-01", "999.0", on="2026-10-25")
+    fake.infos["AAA"]["last_updated"] = "2026-10-25 07:50:02-05"
+    fake.updates = ["AAA"]
+    fake.today = "2026-10-27"
+    make.now.t = T0 + timedelta(days=7)
+    stats = make().update()
+    assert stats["observations"]["rows_replaced"] == 1
+    con = connect(make.paths.processed)
+    rows = con.execute(
+        "SELECT vintage_date, value FROM series WHERE series_id='AAA' AND date='2026-08-01'"
+    ).fetchall()
+    assert rows == [(None, 999.0)]
+
+
+def test_revision_appends_vintage(make, fake):
+    ing = prepare(make)
+    ing.vintages(ids=["AAA"])
     fake.revise("AAA", "2026-08-01", "999.0", on="2026-10-25")
     fake.infos["AAA"]["last_updated"] = "2026-10-25 07:50:02-05"
     fake.updates = ["AAA"]
     make.now.t = T0 + timedelta(days=7)
     make().update()
+    make().vintages(ids=["AAA"])
 
     con = connect(make.paths.processed)
     rows = con.execute(
         "SELECT vintage_date, value FROM series WHERE series_id='AAA' AND date='2026-08-01' "
-        "ORDER BY vintage_date"
+        "AND vintage_date IS NOT NULL ORDER BY vintage_date"
     ).fetchall()
     assert rows == [(date(2026, 9, 15), 259.5), (date(2026, 10, 25), 999.0)]
     # Vista "tal como se conocía" en una fecha: sin información del futuro.
@@ -286,14 +466,14 @@ def test_revision_appends_vintage(make, fake):
 
 
 def test_update_falls_back_to_crawl_after_gap(make, fake):
-    make().update()
+    prepare(make).update()
     make.now.t = T0 + timedelta(days=20)  # más que la ventana de series/updates
     stats = make().update()
     assert stats["mode"] == "crawl_fallback"
 
 
 def test_retries_exhausted_abort_and_cursor_not_advanced(make, fake, tmp_path):
-    make().update()
+    prepare(make).update()
     cursors_before = json.loads(make.paths.cursors.read_text())
     fake.updates = ["AAA"]
     make.now.t = T0 + timedelta(days=7)
@@ -334,11 +514,15 @@ def test_rate_limiter_spacing():
     assert clock.t == pytest.approx(4.0)  # 1 s entre solicitudes a 60/min
 
 
-def test_api_key_never_written(make, caplog):
+def test_api_key_never_written(make, fake, caplog):
     caplog.set_level(logging.DEBUG)
-    ing = make()
-    ing.crawl()
+    ing = prepare(make)
     ing.observations()
+    ing.download()
+    # v2 la lleva en el header (no en la URL), y nunca llega a raw ni a los logs.
+    v2_headers = [h for (e, _), h in zip(fake.requests, fake.headers, strict=True) if "v2/" in e]
+    assert v2_headers and all(h["authorization"] == f"Bearer {API_KEY}" for h in v2_headers)
+    assert not any(API_KEY in str(p) for e, p in fake.requests if e.startswith("v2/"))
     for path in make.paths.raw.rglob("*.json.gz"):
         import gzip
 
@@ -350,8 +534,7 @@ def test_api_key_never_written(make, caplog):
 
 
 def test_duckdb_category_query(make):
-    ing = make()
-    ing.crawl()
+    ing = prepare(make)
     ing.observations()
     con = connect(make.paths.processed)
     rows = con.execute(
@@ -395,3 +578,12 @@ def test_store_recovers_interrupted_swap(tmp_path):
     recover(src)
     assert (src / "03" / "part-1.parquet").exists()
     assert not (src / "05.new-def").exists()
+
+
+def test_is_stale(make):
+    ing = make()
+    assert ing.is_stale("crawl") and ing.is_stale("crawl-meta")
+    ing.crawl()
+    assert not ing.is_stale("crawl") and ing.is_stale("crawl-meta")
+    make.now.t = T0 + timedelta(days=31)
+    assert make().is_stale("crawl")

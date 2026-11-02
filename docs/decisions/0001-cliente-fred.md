@@ -1,7 +1,7 @@
 # 0001 — Cliente FRED propio en lugar de fredapi / pyfredapi
 
 - Fecha: 2026-10-20
-- Estado: aceptada (Fase 1)
+- Estado: aceptada (Fase 1); el modelo de vintages queda reemplazado por el ADR 0002
 
 ## Contexto
 
@@ -48,7 +48,26 @@ paginación verificada contra `count` (falla en vez de truncar), copia raw sin c
 - **Frecuencias fuera del esquema** (BW, SA, ...): se excluyen y se cuentan por código.
 - **Copyright:** `copyrighted` en `series_meta`; si una serie no trae notas en
   `category/series`, el crawl lo reporta en `notes_missing` en vez de suponer "sin copyright".
-- **`discontinued`:** se detecta por el marcador "(DISCONTINUED)" del título. Pendiente de
-  confirmar contra el catálogo real en la verificación en vivo.
+- **`discontinued`:** se detecta por el sufijo "(DISCONTINUED)" del título. Confirmado contra
+  el catálogo real (2026-10-20, 853.316 series): el título marca 74.642 series y la etiqueta
+  `discontinued` 73.618. Coinciden en 73.569. Hay 1.073 solo con título (en parte porque la
+  paginación de la etiqueta se cortó) y 49 solo con etiqueta, 47 de ellas actualizadas en
+  octubre de 2026: la etiqueta tiene restos viejos. Se mantiene el título, y el filtro de
+  antigüedad descarta el resto.
 - Tabla interna `fred_catalog` (fuera del esquema común) guarda frecuencia, unidades y
   categorías para construir las filas de `series`.
+
+## Hallazgos de la verificación en vivo (2026-10-20/21)
+
+- **Series que no existen en ALFRED:** algunas series de FRED (p. ej. `ATNHPIUS16984Q`)
+  responden HTTP 400 "The series does not exist in ALFRED but may exist in FRED" cuando se
+  pide el rango realtime completo. Con el ADR 0002 solo la muestra de vintages pide ese rango;
+  esas series se cuentan en `series_errors` y quedan fuera de la muestra.
+- **Tope de 2.000 vintages:** afecta a muchas series diarias y a algunas mensuales. El
+  `realtime_floor` las fechaba en su última vintage, a veces el mismo día de la descarga. Lo
+  reemplazan las ventanas de `series/vintagedates` del ADR 0002.
+- **`tags/series` devuelve un `count` inestable** (73.850 y luego 73.196 para la misma
+  etiqueta) que no coincide con las filas servidas. Para ese endpoint el paginador termina en
+  la primera página corta (`trust_count=False`), en vez de fallar por "paginación incompleta".
+- Ritmo real de v1: ~84 series/min con 100 solicitudes/min configuradas; el tiempo de cada
+  respuesta pesa más que el tope.

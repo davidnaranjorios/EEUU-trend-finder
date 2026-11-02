@@ -27,13 +27,16 @@ import pyarrow as pa
 from dotenv import load_dotenv
 
 from src.config import REPO_ROOT, load_config
-from src.ingest.http import ApiClient, ApiError
-from src.ingest.store import read_table, upsert
+from src.ingest.http import ApiClient, ApiError, RateLimiter
+from src.ingest.store import UpsertResult, read_table, upsert
 from src.log import get_logger, run
-from src.schemas import SERIES, SERIES_META, TableSpec
+from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
 
 SOURCE = "fred"
 BASE_URL = "https://api.stlouisfed.org/fred/"
+BASE_URL_V2 = "https://api.stlouisfed.org/fred/v2/"
+# Código de salida cuando una corrida acotada (--max-*) deja trabajo pendiente.
+EXIT_PENDING = 10
 REALTIME_MIN = "1776-07-04"
 REALTIME_MAX = "9999-12-31"
 ROOT_CATEGORY = 0
@@ -62,6 +65,40 @@ FRED_CATALOG = TableSpec(
             pa.field("notes_present", pa.bool_(), nullable=False),
             pa.field("discontinued", pa.bool_(), nullable=False),
             pa.field("copyrighted", pa.bool_(), nullable=False),
+        ]
+    ),
+    key=("source", "series_id"),
+)
+
+# Atributos que no trae category/series: tipo geográfico (tags del grupo geot), si la serie es
+# de EE. UU., releases y agencias. Los nombres de tags salen de la API, no del código.
+SERIES_ATTRS = TableSpec(
+    name="fred_series_attrs",
+    schema=pa.schema(
+        [
+            pa.field("source", pa.string(), nullable=False),
+            pa.field("series_id", pa.string(), nullable=False),
+            pa.field("geo_types", pa.list_(pa.string())),
+            pa.field("is_usa", pa.bool_(), nullable=False),
+            pa.field("release_ids", pa.list_(pa.int64())),
+            pa.field("agencies", pa.list_(pa.string())),
+            pa.field("popularity", pa.int64()),
+        ]
+    ),
+    key=("source", "series_id"),
+)
+GEO_TAG_GROUP = "geot"
+USA_TAG = "usa"
+
+# Muestra estratificada para vintages de ALFRED: se sortea una vez y queda fija.
+VINTAGE_SAMPLE = TableSpec(
+    name="fred_vintage_sample",
+    schema=pa.schema(
+        [
+            pa.field("source", pa.string(), nullable=False),
+            pa.field("series_id", pa.string(), nullable=False),
+            pa.field("stratum", pa.string(), nullable=False),
+            pa.field("seed", pa.int64(), nullable=False),
         ]
     ),
     key=("source", "series_id"),
@@ -102,8 +139,24 @@ class Paths:
         return self.processed / "_internal" / "fred_catalog"
 
     @property
+    def series_attrs(self) -> Path:
+        return self.processed / "_internal" / "fred_series_attrs"
+
+    @property
     def fetch_state(self) -> Path:
         return self.processed / "ingest_state" / "fred_fetch"
+
+    @property
+    def vintage_state(self) -> Path:
+        return self.processed / "ingest_state" / "fred_vintages"
+
+    @property
+    def vintage_sample(self) -> Path:
+        return self.processed / "_internal" / "fred_vintage_sample"
+
+    @property
+    def eligibility(self) -> Path:
+        return self.processed / "lineage" / "eligibility"
 
     @property
     def cursors(self) -> Path:
@@ -121,8 +174,10 @@ class FredIngestor:
         *,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         logger: logging.Logger | None = None,
+        v2: ApiClient | None = None,
     ) -> None:
         self.client = client
+        self.v2 = v2
         self.cfg = cfg
         self.fred = cfg["fred"]
         self.paths = paths
@@ -134,18 +189,21 @@ class FredIngestor:
         cls, cfg: dict[str, Any], api_key: str, logger: logging.Logger | None = None
     ) -> FredIngestor:
         fred = cfg["fred"]
-        paths = Paths(_resolve(cfg["paths"]["processed_dir"]), _resolve(cfg["paths"]["raw_dir"]))
-        client = ApiClient(
-            BASE_URL,
-            {"api_key": api_key},
-            requests_per_minute=fred["requests_per_minute"],
-            max_retries=fred["max_retries"],
-            timeout_s=fred["timeout_s"],
-            backoff_base_s=fred["backoff_base_s"],
-            raw_dir=paths.raw / SOURCE,
-            logger=logger,
-        )
-        return cls(client, cfg, paths, logger=logger)
+        paths = paths_from_config(cfg)
+        # v1 y v2 comparten el rate limit: es un solo límite por API key.
+        limiter = RateLimiter(fred["requests_per_minute"])
+        common: dict[str, Any] = {
+            "requests_per_minute": fred["requests_per_minute"],
+            "max_retries": fred["max_retries"],
+            "timeout_s": fred["timeout_s"],
+            "backoff_base_s": fred["backoff_base_s"],
+            "limiter": limiter,
+            "logger": logger,
+        }
+        client = ApiClient(BASE_URL, {"api_key": api_key}, raw_dir=paths.raw / SOURCE, **common)
+        # v2 autentica por header. Sin copia raw: cada página pesa ~21 MB de JSON.
+        v2 = ApiClient(BASE_URL_V2, {}, headers={"Authorization": f"Bearer {api_key}"}, **common)
+        return cls(client, cfg, paths, logger=logger, v2=v2)
 
     # --- crawl ---------------------------------------------------------------------------------
 
@@ -189,36 +247,338 @@ class FredIngestor:
         self.log.info("crawl terminado", extra={"fields": stats})
         return stats
 
+    # --- crawl-meta ----------------------------------------------------------------------------
+
+    def crawl_meta(self) -> dict[str, Any]:
+        """Tipo geográfico, EE. UU./no, releases y agencias de cada serie (solo metadatos)."""
+        limit = self.fred["page_limit_series"]
+        geo: dict[str, set[str]] = defaultdict(set)
+        popularity: dict[str, int] = {}
+        tag_counts: dict[str, int] = {}
+        geo_tags = [
+            t["name"] for t in self._paged("tags", {"tag_group_id": GEO_TAG_GROUP}, "tags", limit)
+        ]
+        for tag in [*geo_tags, USA_TAG]:
+            n = 0
+            # tags/series devuelve un `count` inestable: se pagina hasta una página corta.
+            for info in self._paged(
+                "tags/series",
+                {"tag_names": tag},
+                "seriess",
+                limit,
+                use_cache=True,
+                trust_count=False,
+            ):
+                geo[info["id"]].add(tag)
+                popularity[info["id"]] = info.get("popularity")
+                n += 1
+            tag_counts[tag] = n
+
+        releases: dict[str, set[int]] = defaultdict(set)
+        agencies: dict[str, set[str]] = defaultdict(set)
+        all_releases = list(self._paged("releases", {}, "releases", limit))
+        for rel in all_releases:
+            rid = rel["id"]
+            names = [
+                s["name"]
+                for s in self._get("release/sources", {"release_id": rid}, use_cache=True)[
+                    "sources"
+                ]
+            ]
+            for info in self._paged(
+                "release/series", {"release_id": rid}, "seriess", limit, use_cache=True
+            ):
+                releases[info["id"]].add(rid)
+                agencies[info["id"]].update(names)
+                popularity.setdefault(info["id"], info.get("popularity"))
+
+        rows = []
+        for sid in sorted(geo.keys() | releases.keys()):
+            tags = geo.get(sid, set())
+            rows.append(
+                {
+                    "source": SOURCE,
+                    "series_id": sid,
+                    "geo_types": sorted(tags - {USA_TAG}),
+                    "is_usa": USA_TAG in tags,
+                    "release_ids": sorted(releases.get(sid, set())),
+                    "agencies": sorted(agencies.get(sid, set())),
+                    "popularity": popularity.get(sid),
+                }
+            )
+        upsert(
+            pa.Table.from_pylist(rows, schema=SERIES_ATTRS.schema),
+            SERIES_ATTRS,
+            self.paths.series_attrs,
+            source=SOURCE,
+            n_buckets=self.fred["n_buckets"],
+        )
+        self._save_cursor("last_crawl_meta_ok")
+        stats = {
+            "series": len(rows),
+            "geo_tags": tag_counts,
+            "releases": len(all_releases),
+            "series_with_release": sum(bool(r["release_ids"]) for r in rows),
+        }
+        self.log.info("crawl-meta terminado", extra={"fields": stats})
+        return stats
+
     # --- observations --------------------------------------------------------------------------
 
     def observations(
-        self, category_id: int | None = None, max_series: int | None = None
+        self,
+        category_id: int | None = None,
+        max_series: int | None = None,
+        ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Descarga observaciones de las series elegibles nuevas o actualizadas (reanudable)."""
-        catalog = read_table(FRED_CATALOG, self.paths.catalog, source=SOURCE).to_pylist()
-        if category_id is not None:
-            catalog = [r for r in catalog if category_id in (r["category_ids"] or [])]
-        eligible, counts = eligibility(catalog, self.cfg, self._now().date())
-        state = {
-            r["series_id"]: r
-            for r in read_table(FETCH_STATE, self.paths.fetch_state, source=SOURCE).to_pylist()
-        }
-        todo = sorted(
-            (r for r in eligible if _needs_fetch(r, state.get(r["series_id"]))),
-            key=lambda r: r["series_id"],
-        )
+        """Valores vigentes (v1) de las series objetivo nuevas o actualizadas (reanudable).
+
+        Objetivo: los grupos `download.groups` de la última corrida del embudo, o `ids`.
+        `vintage_date` queda NULL ("no aplica"): las revisiones reemplazan el valor. El
+        historial de publicación solo se guarda para la muestra de `vintages`.
+        """
+        targets = self._targets(ids, self.cfg["download"]["groups"], category_id)
+        state = self._state(self.paths.fetch_state)
+        todo = [r for r in targets if _needs_fetch(r, state.get(r["series_id"]))]
         if max_series is not None:
             todo = todo[:max_series]
+        tally = self._fetch_batches(todo, self.paths.fetch_state, self._fetch_current)
+        stats: dict[str, Any] = {"targets": len(targets), "to_fetch": len(todo), **tally}
+        stats["pending"] = _pending(targets, state, tally)
+        self.log.info("observaciones terminadas", extra={"fields": stats})
+        return stats
 
-        # Contadores: fetched, rows_*, vintage_cap_fallbacks, series_errors.
+    def _fetch_current(self, r: dict[str, Any]) -> list[dict[str, Any]]:
+        obs = self._paged(
+            "series/observations",
+            {"series_id": r["series_id"]},
+            "observations",
+            self.fred["page_limit_observations"],
+        )
+        return [_series_row(r, o["date"], o["value"], None) for o in obs]
+
+    # --- download (API v2 por release) ---------------------------------------------------------
+
+    def download(self, max_releases: int | None = None) -> dict[str, Any]:
+        """Valores vigentes de los grupos `download.groups` vía v2, un release por tramo.
+
+        Cada release terminado queda en el cursor `v2_releases_done` con su fecha: una corrida
+        cortada se reanuda en el primer release pendiente (las filas ya escritas no se
+        duplican). Solo se escriben las series objetivo; el resto del release se descarta.
+        """
+        if self.v2 is None:
+            raise RuntimeError("download requiere el cliente de la API v2")
+        targets = {r["series_id"]: r for r in self._targets(None, self.cfg["download"]["groups"])}
+        attrs = {
+            r["series_id"]: r
+            for r in read_table(SERIES_ATTRS, self.paths.series_attrs, source=SOURCE).to_pylist()
+            if r["series_id"] in targets
+        }
+        releases = sorted({rid for a in attrs.values() for rid in a["release_ids"] or []})
+        done = self._load_cursors().get("v2_releases_done", {})
+        pending = [rid for rid in releases if str(rid) not in done]
+        batch = list(pending if max_releases is None else pending[:max_releases])
+
         tally: Counter[str] = Counter()
+        for rid in batch:
+            res = self._download_release(rid, targets)
+            tally.update(res)
+            cursors = self._load_cursors()
+            cursors.setdefault("v2_releases_done", {})[str(rid)] = self._now().isoformat()
+            self._dump_cursors(cursors)
+            self.log.info(
+                "release descargado",
+                extra={"fields": {"release_id": rid, **res, "pending": len(pending) - 1}},
+            )
+            pending.remove(rid)
+        stats: dict[str, Any] = {
+            "targets": len(targets),
+            "targets_without_release": len(targets) - len(attrs),
+            "releases": len(releases),
+            "releases_done_now": len(batch),
+            "pending_releases": len(pending),
+            **tally,
+        }
+        self.log.info("download terminado", extra={"fields": stats})
+        return stats
+
+    def _download_release(self, rid: int, targets: dict[str, dict[str, Any]]) -> Counter[str]:
+        tally: Counter[str] = Counter()
+        params: dict[str, Any] = {
+            "release_id": rid,
+            "format": "json",
+            "limit": self.cfg["download"]["v2_page_limit"],
+        }
+        while True:
+            assert self.v2 is not None
+            data = self.v2.get_json("release/observations", params)
+            rows: list[dict[str, Any]] = []
+            seen: dict[str, int] = {}
+            for s in data["series"]:
+                tally["series_in_pages"] += 1
+                r = targets.get(s["series_id"])
+                if r is None:
+                    continue
+                rows.extend(_series_row(r, o["date"], o["value"], None) for o in s["observations"])
+                seen[s["series_id"]] = seen.get(s["series_id"], 0) + len(s["observations"])
+            self._write_rows(rows, [targets[sid] for sid in seen], seen, self.paths.fetch_state)
+            tally["rows_written"] += len(rows)
+            tally["pages"] += 1
+            if str(data.get("has_more")).lower() != "true":
+                return tally
+            params["next_cursor"] = data["next_cursor"]
+
+    # --- vintages (ALFRED, solo una muestra) ---------------------------------------------------
+
+    def vintages(
+        self, ids: list[str] | None = None, max_series: int | None = None
+    ) -> dict[str, Any]:
+        """Historial completo de publicación (ALFRED) para la muestra estratificada + `ids`.
+
+        La muestra se sortea una vez (semilla de config) y queda guardada en
+        `fred_vintage_sample`; las corridas siguientes la reutilizan. `ids` permite añadir
+        series desde fuera de src/ (p. ej., las que eval/ necesite) sin que src/ lea eval/.
+        """
+        sample = self._vintage_sample()
+        wanted = sorted(set(sample) | set(ids or []))
+        catalog = {
+            r["series_id"]: r
+            for r in read_table(
+                FRED_CATALOG,
+                self.paths.catalog,
+                source=SOURCE,
+                where="list_contains(?, series_id)",
+                params=[wanted],
+            ).to_pylist()
+            if FREQ_MAP.get(r["frequency_short"] or "")
+        }
+        state = self._state(self.paths.vintage_state)
+        targets = [catalog[s] for s in wanted if s in catalog]
+        todo = [r for r in targets if _needs_fetch(r, state.get(r["series_id"]))]
+        if max_series is not None:
+            todo = todo[:max_series]
+        tally = self._fetch_batches(todo, self.paths.vintage_state, self._fetch_vintages)
+        stats: dict[str, Any] = {
+            "sample": len(sample),
+            "extra_ids": len(set(ids or []) - set(sample)),
+            "unknown_ids": len(set(wanted) - set(catalog)),
+            "to_fetch": len(todo),
+            **tally,
+        }
+        stats["pending"] = _pending(targets, state, tally)
+        self.log.info("vintages terminadas", extra={"fields": stats})
+        return stats
+
+    def _vintage_sample(self) -> list[str]:
+        stored = read_table(VINTAGE_SAMPLE, self.paths.vintage_sample, source=SOURCE)
+        if stored.num_rows:
+            return sorted(stored.column("series_id").to_pylist())
+        vcfg = self.cfg["vintages"]
+        targets = self._targets(None, vcfg["groups"])
+        attrs = {
+            r["series_id"]: r
+            for r in read_table(SERIES_ATTRS, self.paths.series_attrs, source=SOURCE).to_pylist()
+        }
+        strata: dict[str, list[str]] = defaultdict(list)
+        for r in targets:
+            agencies = (attrs.get(r["series_id"]) or {}).get("agencies") or []
+            agency = agencies[0] if agencies else "sin_agencia"
+            strata[f"{FREQ_MAP[r['frequency_short']]}|{agency}"].append(r["series_id"])
+        picked = stratified_sample(strata, vcfg["sample_size"], vcfg["seed"])
+        rows = [
+            {"source": SOURCE, "series_id": sid, "stratum": stratum, "seed": vcfg["seed"]}
+            for stratum, sids in picked.items()
+            for sid in sids
+        ]
+        upsert(
+            pa.Table.from_pylist(rows, schema=VINTAGE_SAMPLE.schema),
+            VINTAGE_SAMPLE,
+            self.paths.vintage_sample,
+            source=SOURCE,
+            n_buckets=self.fred["n_buckets"],
+        )
+        self.log.info(
+            "muestra de vintages sorteada",
+            extra={"fields": {"series": len(rows), "strata": len(picked)}},
+        )
+        return sorted(r["series_id"] for r in rows)
+
+    def _fetch_vintages(self, r: dict[str, Any]) -> list[dict[str, Any]]:
+        """Todas las filas realtime, en tramos de a lo sumo N vintages por consulta."""
+        sid = r["series_id"]
+        dates = list(self._paged("series/vintagedates", {"series_id": sid}, "vintage_dates", 10000))
+        cap = self.cfg["vintages"]["max_vintage_dates_per_request"]
+        if len(dates) <= cap:
+            windows = [(REALTIME_MIN, REALTIME_MAX)]
+        else:
+            chunks = [dates[i : i + cap] for i in range(0, len(dates), cap)]
+            windows = [
+                (c[0], chunks[i + 1][0] if i + 1 < len(chunks) else REALTIME_MAX)
+                for i, c in enumerate(chunks)
+            ]
+            windows = [(s, _minus_one_day(e) if e != REALTIME_MAX else e) for s, e in windows]
+        obs: list[dict[str, Any]] = []
+        for start, end in windows:
+            obs.extend(
+                self._paged(
+                    "series/observations",
+                    {"series_id": sid, "realtime_start": start, "realtime_end": end},
+                    "observations",
+                    self.fred["page_limit_observations"],
+                )
+            )
+        return [
+            _series_row(r, o["date"], o["value"], date.fromisoformat(o["realtime_start"]))
+            for o in collapse_vintages(obs)
+        ]
+
+    # --- utilidades de descarga ----------------------------------------------------------------
+
+    def _targets(
+        self, ids: list[str] | None, groups: list[str], category_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Filas de catálogo de las series objetivo, ordenadas por id."""
+        if ids is None:
+            lineage = read_table(ELIGIBILITY, self.paths.eligibility, source=SOURCE)
+            if lineage.num_rows == 0:
+                raise RuntimeError(
+                    "no hay corridas del embudo; corre `python -m src.eligibility run`"
+                )
+            rows = lineage.to_pylist()
+            last = max(rows, key=lambda r: (r["decided_at"], r["run_id"]))["run_id"]
+            ids = [
+                r["series_id"] for r in rows if r["run_id"] == last and r["group_name"] in groups
+            ]
+        catalog = read_table(
+            FRED_CATALOG,
+            self.paths.catalog,
+            source=SOURCE,
+            where="list_contains(?, series_id)",
+            params=[sorted(set(ids))],
+        ).to_pylist()
+        out = [r for r in catalog if FREQ_MAP.get(r["frequency_short"] or "")]
+        if category_id is not None:
+            out = [r for r in out if category_id in (r["category_ids"] or [])]
+        return sorted(out, key=lambda r: r["series_id"])
+
+    def _state(self, path: Path) -> dict[str, dict[str, Any]]:
+        return {r["series_id"]: r for r in read_table(FETCH_STATE, path, source=SOURCE).to_pylist()}
+
+    def _fetch_batches(
+        self,
+        todo: list[dict[str, Any]],
+        state_path: Path,
+        fetch: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    ) -> Counter[str]:
+        tally: Counter[str] = Counter({"fetched": 0, "series_errors": 0})
         batch_size = self.fred["obs_batch_size"]
         for i in range(0, len(todo), batch_size):
-            series_rows: list[dict[str, Any]] = []
-            state_rows: list[dict[str, Any]] = []
+            rows: list[dict[str, Any]] = []
+            fetched: list[dict[str, Any]] = []
+            n_rows: dict[str, int] = {}
             for r in todo[i : i + batch_size]:
                 try:
-                    rows, floor, fell_back = self._fetch_series(r, state.get(r["series_id"]))
+                    got = fetch(r)
                 except ApiError as exc:
                     if exc.status is None:  # reintentos agotados: abortar la corrida
                         raise
@@ -228,34 +588,11 @@ class FredIngestor:
                         extra={"fields": {"series_id": r["series_id"], "error": str(exc)}},
                     )
                     continue
-                tally["vintage_cap_fallbacks"] += fell_back
-                series_rows.extend(rows)
-                state_rows.append(
-                    {
-                        "source": SOURCE,
-                        "series_id": r["series_id"],
-                        "last_updated": r["last_updated"],
-                        "fetched_at": self._now().replace(microsecond=0),
-                        "n_rows": len(rows),
-                        "realtime_floor": floor,
-                    }
-                )
-            # Primero los datos y después el estado: si algo se corta, se vuelve a pedir.
-            res = upsert(
-                pa.Table.from_pylist(series_rows, schema=SERIES.schema),
-                SERIES,
-                self.paths.series,
-                source=SOURCE,
-                n_buckets=self.fred["n_buckets"],
-            )
-            upsert(
-                pa.Table.from_pylist(state_rows, schema=FETCH_STATE.schema),
-                FETCH_STATE,
-                self.paths.fetch_state,
-                source=SOURCE,
-                n_buckets=self.fred["n_buckets"],
-            )
-            tally["fetched"] += len(state_rows)
+                rows.extend(got)
+                fetched.append(r)
+                n_rows[r["series_id"]] = len(got)
+            res = self._write_rows(rows, fetched, n_rows, state_path)
+            tally["fetched"] += len(fetched)
             tally["rows_inserted"] += res.inserted
             tally["rows_unchanged"] += res.unchanged
             tally["rows_replaced"] += res.replaced
@@ -263,70 +600,43 @@ class FredIngestor:
                 "lote de observaciones",
                 extra={"fields": {"done": tally["fetched"], "of": len(todo)}},
             )
-        if tally["rows_replaced"]:
-            self.log.warning(
-                "claves reescritas con valores distintos",
-                extra={"fields": {"rows_replaced": tally["rows_replaced"]}},
-            )
-        stats: dict[str, Any] = {"eligibility": counts, "to_fetch": len(todo), **tally}
-        for key in ("fetched", "series_errors", "vintage_cap_fallbacks"):
-            stats.setdefault(key, 0)
-        self.log.info("observaciones terminadas", extra={"fields": stats})
-        return stats
+        return tally
 
-    def _fetch_series(
-        self, r: dict[str, Any], st: dict[str, Any] | None
-    ) -> tuple[list[dict[str, Any]], date | None, bool]:
-        sid = r["series_id"]
-        floor: date | None = st["realtime_floor"] if st else None
-        fell_back = False
-        try:
-            obs = self._observations(sid, floor)
-        except ApiError as exc:
-            if floor is not None or exc.status != 400 or "vintage" not in str(exc).lower():
-                raise
-            # La serie excede el tope de vintages por consulta: se pide desde su última
-            # vintage. Las observaciones viejas quedan fechadas en esa vintage (más tarde que
-            # su publicación real), lo que nunca introduce información del futuro.
-            vd = self._get(
-                "series/vintagedates", {"series_id": sid, "sort_order": "desc", "limit": 1}
-            )
-            floor = date.fromisoformat(vd["vintage_dates"][0])
-            fell_back = True
-            self.log.warning(
-                "tope de vintages: se usa realtime_floor",
-                extra={"fields": {"series_id": sid, "realtime_floor": floor.isoformat()}},
-            )
-            obs = self._observations(sid, floor)
-
-        freq = FREQ_MAP[r["frequency_short"]]
-        rows = [
+    def _write_rows(
+        self,
+        rows: list[dict[str, Any]],
+        series: list[dict[str, Any]],
+        n_rows: dict[str, int],
+        state_path: Path,
+    ) -> UpsertResult:
+        # Primero los datos y después el estado: si algo se corta, se vuelve a pedir.
+        res = upsert(
+            pa.Table.from_pylist(rows, schema=SERIES.schema),
+            SERIES,
+            self.paths.series,
+            source=SOURCE,
+            n_buckets=self.fred["n_buckets"],
+        )
+        now = self._now().replace(microsecond=0)
+        state_rows = [
             {
                 "source": SOURCE,
-                "series_id": sid,
-                "date": date.fromisoformat(o["date"]),
-                "value": None if o["value"] == "." else float(o["value"]),
-                "vintage_date": date.fromisoformat(o["realtime_start"]),
-                "frequency": freq,
-                "units": r["units"],
-                "seasonal_adjustment": r["seasonal_adjustment"],
+                "series_id": r["series_id"],
+                "last_updated": r["last_updated"],
+                "fetched_at": now,
+                "n_rows": n_rows[r["series_id"]],
+                "realtime_floor": None,
             }
-            for o in obs
-            if o["realtime_end"] == REALTIME_MAX
+            for r in series
         ]
-        return rows, floor, fell_back
-
-    def _observations(self, sid: str, floor: date | None) -> list[dict[str, Any]]:
-        params = {
-            "series_id": sid,
-            "realtime_start": floor.isoformat() if floor else REALTIME_MIN,
-            "realtime_end": REALTIME_MAX,
-        }
-        return list(
-            self._paged(
-                "series/observations", params, "observations", self.fred["page_limit_observations"]
-            )
+        upsert(
+            pa.Table.from_pylist(state_rows, schema=FETCH_STATE.schema),
+            FETCH_STATE,
+            state_path,
+            source=SOURCE,
+            n_buckets=self.fred["n_buckets"],
         )
+        return res
 
     # --- update --------------------------------------------------------------------------------
 
@@ -388,16 +698,22 @@ class FredIngestor:
     # --- utilidades ----------------------------------------------------------------------------
 
     def pick_category(self, seed: int) -> dict[str, Any]:
-        """Categoría al azar (semilla fija) entre las que tienen series elegibles."""
-        catalog = read_table(FRED_CATALOG, self.paths.catalog, source=SOURCE).to_pylist()
-        eligible, _ = eligibility(catalog, self.cfg, self._now().date())
+        """Categoría al azar (semilla fija) entre las que tienen series objetivo."""
         counts: Counter[int] = Counter()
-        for r in eligible:
+        for r in self._targets(None, self.cfg["download"]["groups"]):
             counts.update(r["category_ids"] or [])
         if not counts:
-            raise RuntimeError("no hay categorías con series elegibles; corre crawl primero")
+            raise RuntimeError("no hay categorías con series objetivo; corre el embudo primero")
         cid = random.Random(seed).choice(sorted(counts))
         return {"category_id": cid, "eligible_series": counts[cid]}
+
+    def is_stale(self, cmd: str) -> bool:
+        """¿La última corrida exitosa de `crawl`/`crawl-meta` es más vieja que el umbral?"""
+        cursor = {"crawl": "last_crawl_ok", "crawl-meta": "last_crawl_meta_ok"}[cmd]
+        last = _parse_cursor(self._load_cursors().get(cursor))
+        return last is None or self._now() - last > timedelta(
+            days=self.fred["catalog_refresh_days"]
+        )
 
     def _get(
         self, endpoint: str, params: dict[str, Any], *, use_cache: bool = False
@@ -412,8 +728,13 @@ class FredIngestor:
         limit: int,
         *,
         use_cache: bool = False,
+        trust_count: bool = True,
     ) -> Iterator[dict[str, Any]]:
-        """Itera todas las páginas; falla si la API devuelve menos filas que `count`."""
+        """Itera todas las páginas; falla si la API devuelve menos filas que `count`.
+
+        Con `trust_count=False` (endpoints con `count` inestable) termina en la primera página
+        con menos de `limit` filas.
+        """
         offset = 0
         while True:
             data = self._get(
@@ -422,6 +743,10 @@ class FredIngestor:
             items = data[items_key]
             yield from items
             offset += len(items)
+            if not trust_count:
+                if len(items) < limit:
+                    return
+                continue
             total = int(data["count"])
             if offset >= total:
                 return
@@ -498,48 +823,77 @@ def to_series_meta(catalog: pa.Table) -> pa.Table:
     )
 
 
-def eligibility(
-    catalog: list[dict[str, Any]], cfg: dict[str, Any], today: date
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Filtro objetivo de elegibilidad (config.yaml). Devuelve las elegibles y los conteos."""
-    min_obs = cfg["eligibility"]["min_obs"]
-    max_stale = cfg["eligibility"]["max_staleness_days"]
-    counts: dict[str, Any] = {
-        "total": len(catalog),
-        "discontinued": 0,
-        "unsupported_frequency": Counter(),
-        "missing_dates": 0,
-        "too_short": 0,
-        "stale": 0,
-        "eligible": 0,
-    }
-    eligible = []
-    for r in catalog:
-        freq = FREQ_MAP.get(r["frequency_short"] or "")
-        start, end = r["observation_start"], r["observation_end"]
-        if r["discontinued"]:
-            counts["discontinued"] += 1
-        elif freq is None:
-            counts["unsupported_frequency"][r["frequency_short"]] += 1
-        elif start is None or end is None:
-            counts["missing_dates"] += 1
-        elif (end - start).days / PERIOD_DAYS[freq] + 1 < min_obs[freq]:
-            counts["too_short"] += 1
-        elif (today - end).days > max_stale[freq]:
-            counts["stale"] += 1
-        else:
-            eligible.append(r)
-    counts["eligible"] = len(eligible)
-    counts["unsupported_frequency"] = dict(counts["unsupported_frequency"])
-    return eligible, counts
-
-
 def parse_last_updated(value: str | None) -> datetime | None:
     """'2013-07-31 09:26:16-05' -> datetime UTC."""
     if not value:
         return None
     value = re.sub(r"([+-]\d{2})$", r"\g<1>00", value.strip())
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S%z").astimezone(UTC)
+
+
+def _series_row(
+    r: dict[str, Any], obs_date: str, value: str, vintage_date: date | None
+) -> dict[str, Any]:
+    return {
+        "source": SOURCE,
+        "series_id": r["series_id"],
+        "date": date.fromisoformat(obs_date),
+        "value": None if value == "." else float(value),
+        "vintage_date": vintage_date,
+        "frequency": FREQ_MAP[r["frequency_short"]],
+        "units": r["units"],
+        "seasonal_adjustment": r["seasonal_adjustment"],
+    }
+
+
+def collapse_vintages(obs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Una fila por (fecha, publicación de un valor distinto).
+
+    Al pedir el rango realtime en tramos, una fila vigente a través del borde aparece en los
+    dos tramos con el mismo valor; se conserva solo la primera (su fecha real de publicación).
+    """
+    out: list[dict[str, Any]] = []
+    last: dict[str, str] = {}
+    for o in sorted(obs, key=lambda o: (o["date"], o["realtime_start"])):
+        if last.get(o["date"]) == o["value"]:
+            continue
+        last[o["date"]] = o["value"]
+        out.append(o)
+    return out
+
+
+def stratified_sample(strata: dict[str, list[str]], size: int, seed: int) -> dict[str, list[str]]:
+    """Muestreo aleatorio estratificado proporcional, con al menos una serie por estrato.
+
+    Determinista dada la semilla. Si hay más estratos que `size`, cada estrato aporta una.
+    """
+    total = sum(len(v) for v in strata.values())
+    if total == 0 or size == 0:
+        return {}
+    rng = random.Random(seed)
+    out = {}
+    for name in sorted(strata):
+        members = sorted(strata[name])
+        k = min(len(members), max(1, round(size * len(members) / total)))
+        out[name] = sorted(rng.sample(members, k))
+    return out
+
+
+def paths_from_config(cfg: dict[str, Any]) -> Paths:
+    return Paths(_resolve(cfg["paths"]["processed_dir"]), _resolve(cfg["paths"]["raw_dir"]))
+
+
+def _minus_one_day(iso: str) -> str:
+    return (date.fromisoformat(iso) - timedelta(days=1)).isoformat()
+
+
+def _pending(
+    targets: list[dict[str, Any]], state: dict[str, dict[str, Any]], tally: Counter[str]
+) -> int:
+    """Series que quedan por bajar. Las que fallaron por error de la API no cuentan: se
+    reintentan en la próxima corrida, pero no deben mantener vivo un bucle de tramos."""
+    needed = sum(_needs_fetch(r, state.get(r["series_id"])) for r in targets)
+    return needed - tally["fetched"] - tally["series_errors"]
 
 
 def _needs_fetch(r: dict[str, Any], st: dict[str, Any] | None) -> bool:
@@ -565,10 +919,25 @@ def _resolve(path: str) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.ingest.fred")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("crawl", help="recorre el árbol de categorías completo")
-    obs = sub.add_parser("observations", help="descarga observaciones de series elegibles")
+    for name, help_ in (
+        ("crawl", "recorre el árbol de categorías completo"),
+        ("crawl-meta", "tipo geográfico, releases y agencias de cada serie"),
+    ):
+        c = sub.add_parser(name, help=help_)
+        c.add_argument(
+            "--if-stale",
+            action="store_true",
+            help="solo si la última corrida exitosa tiene más de fred.catalog_refresh_days",
+        )
+    obs = sub.add_parser("observations", help="valores vigentes (v1) de las series objetivo")
     obs.add_argument("--category", type=int, default=None)
     obs.add_argument("--max-series", type=int, default=None)
+    obs.add_argument("--ids-file", type=Path, default=None)
+    dl = sub.add_parser("download", help="valores vigentes vía API v2, un release por tramo")
+    dl.add_argument("--max-releases", type=int, default=None)
+    vin = sub.add_parser("vintages", help="historial ALFRED de la muestra estratificada")
+    vin.add_argument("--max-series", type=int, default=None)
+    vin.add_argument("--ids-file", type=Path, default=None, help="un id por línea")
     sub.add_parser("update", help="actualización incremental semanal")
     pick = sub.add_parser("pick-category", help="categoría al azar para verificación")
     pick.add_argument("--seed", type=int, default=None)
@@ -582,7 +951,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     logger = get_logger("ingest.fred", cfg["logging"]["level"])
     ingestor = FredIngestor.from_config(cfg, api_key, logger)
+    ids = _read_ids(args.ids_file) if getattr(args, "ids_file", None) else None
     try:
+        if getattr(args, "if_stale", False) and not ingestor.is_stale(args.cmd):
+            print(json.dumps({"skipped": args.cmd, "reason": "catálogo vigente"}))
+            return 0
         if args.cmd == "pick-category":
             seed = args.seed if args.seed is not None else cfg["fred"]["verification_seed"]
             print(json.dumps(ingestor.pick_category(seed)))
@@ -591,26 +964,44 @@ def main(argv: list[str] | None = None) -> int:
             with record.stage(args.cmd):
                 if args.cmd == "crawl":
                     stats: dict[str, Any] = ingestor.crawl()
+                elif args.cmd == "crawl-meta":
+                    stats = ingestor.crawl_meta()
                 elif args.cmd == "observations":
-                    stats = ingestor.observations(args.category, args.max_series)
+                    stats = ingestor.observations(args.category, args.max_series, ids)
+                elif args.cmd == "download":
+                    stats = ingestor.download(args.max_releases)
+                elif args.cmd == "vintages":
+                    stats = ingestor.vintages(ids, args.max_series)
                 else:
                     stats = ingestor.update()
             record.n_series[SOURCE] = _n_series(stats)
             record.details = {
                 "command": args.cmd,
                 "stats": stats,
-                "http_requests": ingestor.client.n_requests,
-                "http_retries": ingestor.client.n_retries,
+                "http_requests": ingestor.client.n_requests
+                + (ingestor.v2.n_requests if ingestor.v2 else 0),
+                "http_retries": ingestor.client.n_retries
+                + (ingestor.v2.n_retries if ingestor.v2 else 0),
             }
         print(json.dumps(stats, default=str, indent=2))
     finally:
         ingestor.client.close()
-    return 0
+        if ingestor.v2 is not None:
+            ingestor.v2.close()
+    pending = stats.get("pending_releases", stats.get("pending", 0))
+    return EXIT_PENDING if pending else 0
+
+
+def _read_ids(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return sorted({line.strip() for line in lines if line.strip() and not line.startswith("#")})
 
 
 def _n_series(stats: dict[str, Any]) -> int:
     if "observations" in stats:
         return stats["observations"]["fetched"]
+    if "releases_done_now" in stats:
+        return stats["targets"]
     return stats.get("fetched", stats.get("series", 0))
 
 
