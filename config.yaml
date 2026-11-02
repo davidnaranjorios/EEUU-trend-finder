@@ -49,7 +49,7 @@ download:
 
 # Parquet definitivo en Cloudflare R2. Credenciales solo en .env (AWS_*, CLOUDFLARE_ACCOUNT_ID).
 storage:
-  bucket: eeuu-trend-finder
+  bucket: trend-finder
   prefix: processed
 
 persistence:
