@@ -5,7 +5,7 @@ Tres pasos manuales, una sola vez. Después corre sola cada domingo.
 ## 1. Bucket de R2
 
 En el panel de Cloudflare: **R2 Object Storage → Create bucket**. Si no se llama
-`eeuu-trend-finder` (el valor de `storage.bucket` en `config.yaml`), anota el nombre para el
+`trend-finder` (el valor de `storage.bucket` en `config.yaml`), anota el nombre para el
 paso 3.
 
 ## 2. Credencial de acceso al bucket

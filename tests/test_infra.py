@@ -230,7 +230,7 @@ def test_r2_bucket_create_is_idempotent(fake_api):
     }
     assert "creado" in _run("r2_create_bucket.sh", env).stdout
     assert "ya existe" in _run("r2_create_bucket.sh", env).stdout
-    assert fake_api.buckets == {"eeuu-trend-finder"}
+    assert fake_api.buckets == {"trend-finder"}
 
 
 # --- GitHub Actions (ADR 0004) --------------------------------------------------------------

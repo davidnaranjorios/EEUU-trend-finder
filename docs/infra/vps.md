@@ -48,7 +48,7 @@ sin automontaje. Imprime `IP=` y `VOLUME_ID=` para el paso 5. Se puede cambiar c
 
 ## 3. Bucket y llaves de R2 (panel de Cloudflare)
 
-1. **Bucket:** `eeuu-trend-finder`, el mismo que `storage.bucket` en `config.yaml`. Por API,
+1. **Bucket:** `trend-finder`, el mismo que `storage.bucket` en `config.yaml`. Por API,
    con un token de cuenta con permiso *Workers R2 Storage: Edit*:
    ```
    CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<id> bash infra/r2_create_bucket.sh
@@ -56,7 +56,7 @@ sin automontaje. Imprime `IP=` y `VOLUME_ID=` para el paso 5. Se puede cambiar c
    O a mano: **R2 Object Storage → Create bucket**.
 2. **R2 → Manage API tokens → Create API token:**
    - Permiso: **Object Read & Write**.
-   - Alcance: **solo el bucket `eeuu-trend-finder`**.
+   - Alcance: **solo el bucket `trend-finder`**.
    - TTL a tu criterio.
 3. Copia, porque solo se muestran una vez:
    - **Access Key ID** → `AWS_ACCESS_KEY_ID`.

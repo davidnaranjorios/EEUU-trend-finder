@@ -9,7 +9,7 @@
 set -euo pipefail
 : "${CLOUDFLARE_API_TOKEN:?token de API de Cloudflare con Workers R2 Storage: Edit}"
 : "${CLOUDFLARE_ACCOUNT_ID:?ID de la cuenta de Cloudflare}"
-BUCKET="${BUCKET:-eeuu-trend-finder}"
+BUCKET="${BUCKET:-trend-finder}"
 API="${CLOUDFLARE_API:-https://api.cloudflare.com/client/v4}/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
 auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
 
