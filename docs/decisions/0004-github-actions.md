@@ -44,8 +44,8 @@ R2), mantener un servidor y pagar ~€42/mes.
   de terceros, a verificar en docs.github.com). Uso estimado: ~270 min la corrida inicial y
   ~400–500 min/mes en régimen (4 semanales y un crawl mensual).
 - **Programación:** GitHub solo ejecuta los `schedule` del workflow en la rama por defecto
-  (`main`). Además, desactiva los workflows programados de un repositorio sin actividad durante
-  60 días.
+  (`main`). En repositorios públicos, además, desactiva los programados tras 60 días sin
+  actividad; este repositorio es privado.
 
 ## Consecuencias
 
