@@ -276,3 +276,63 @@ def test_state_and_logs_round_trip_through_r2():
     entry = (INFRA / "run_actions.sh").read_text()
     assert "initial_download.done" in entry and "run_tramos.sh" in entry
     assert "weekly_update.sh" in entry
+
+
+ACC = "0123456789abcdef0123456789abcdef"
+KEY = "k" * 32
+SECRET = "s" * 64
+
+
+def _r2_env(**env):
+    base = {
+        "PATH": "/usr/bin:/bin",
+        "R2_BUCKET": "b",
+        "CLOUDFLARE_ACCOUNT_ID": ACC,
+        "AWS_ACCESS_KEY_ID": KEY,
+        "AWS_SECRET_ACCESS_KEY": SECRET,
+    }
+    return subprocess.run(
+        ["bash", "-c", "source infra/r2_env.sh && echo $RCLONE_CONFIG_R2_ENDPOINT"],
+        cwd=REPO_ROOT,
+        env={**base, **env},
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "account",
+    [
+        ACC,
+        f" {ACC}\n",
+        f"https://{ACC}.r2.cloudflarestorage.com",
+        f"{ACC}.r2.cloudflarestorage.com/",
+        ACC.upper(),
+    ],
+)
+def test_r2_endpoint_tolerates_pasted_account_id(account):
+    out = _r2_env(CLOUDFLARE_ACCOUNT_ID=account)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == f"https://{ACC}.r2.cloudflarestorage.com"
+
+
+def test_r2_endpoint_jurisdiction():
+    out = _r2_env(R2_JURISDICTION="EU")
+    assert out.stdout.strip() == f"https://{ACC}.eu.r2.cloudflarestorage.com"
+
+
+@pytest.mark.parametrize(
+    ("env", "msg"),
+    [
+        ({"CLOUDFLARE_ACCOUNT_ID": "mi-cuenta"}, "quedan 9"),
+        ({"AWS_ACCESS_KEY_ID": "x" * 40}, "Token value"),
+        ({"AWS_SECRET_ACCESS_KEY": SECRET + "\n "}, None),  # espacios: se limpian, pasa
+    ],
+)
+def test_r2_credentials_shape(env, msg):
+    out = _r2_env(**env)
+    if msg is None:
+        assert out.returncode == 0, out.stderr
+    else:
+        assert out.returncode != 0 and msg in out.stderr
+        assert "x" * 40 not in out.stderr  # nunca se imprime el valor

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -60,12 +61,27 @@ def r2_statements(storage: Mapping[str, Any], env: Mapping[str, str]) -> list[st
         "CREATE OR REPLACE SECRET r2 (TYPE r2, "
         f"KEY_ID {_quote(env['AWS_ACCESS_KEY_ID'])}, "
         f"SECRET {_quote(env['AWS_SECRET_ACCESS_KEY'])}, "
-        f"ACCOUNT_ID {_quote(env['CLOUDFLARE_ACCOUNT_ID'])})",
+        f"ACCOUNT_ID {_quote(account_id(env['CLOUDFLARE_ACCOUNT_ID']))})",
     ]
     for view, (subdir, _) in VIEWS.items():
         glob = _quote(f"{base}/{subdir}/*/*/*.parquet")
         stmts.append(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({glob})")
     return stmts
+
+
+def account_id(value: str) -> str:
+    """Account ID de Cloudflare aunque llegue con espacios o dentro de la URL del endpoint.
+
+    Misma limpieza que infra/r2_env.sh.
+    """
+    v = "".join(value.split()).removeprefix("https://").removeprefix("http://")
+    v = v.split("/", 1)[0].split(".", 1)[0].lower()
+    if not re.fullmatch(r"[0-9a-f]{32}", v):
+        raise RuntimeError(
+            "CLOUDFLARE_ACCOUNT_ID no es un Account ID de Cloudflare: se esperan 32 caracteres "
+            f"hexadecimales y, tras limpiar, quedan {len(v)}"
+        )
+    return v
 
 
 def _quote(value: str) -> str:
