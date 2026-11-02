@@ -37,7 +37,7 @@ jobs:
           python-version: "3.11"
       - run: uv sync --locked
       - name: Instalar rclone
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+        run: sudo infra/install_rclone.sh
       - name: Verificar secrets
         run: |
           for v in FRED_API_KEY CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
@@ -54,6 +54,10 @@ jobs:
             echo "## Ingesta FRED"
             echo '```'
             tail -n 3 data/logs/runs.jsonl 2>/dev/null || echo "sin registros"
+            echo '```'
+            echo "### Conteos en R2"
+            echo '```json'
+            uv run python -m src.catalog summary --r2 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Logs de la corrida

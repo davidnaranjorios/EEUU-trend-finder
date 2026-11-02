@@ -1,0 +1,47 @@
+# Verificación de solo lectura de lo que hay en R2 (ADR 0004): tamaño por carpeta y conteos
+# por tabla con DuckDB. No escribe nada. Se lanza a mano.
+name: Verificar R2
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked
+      - name: Instalar rclone
+        run: sudo infra/install_rclone.sh
+      - name: Tamaño por carpeta
+        run: |
+          source infra/r2_env.sh
+          {
+            echo "## R2: $BUCKET"
+            echo '```'
+            for dir in processed exports logs; do
+              echo "$dir: $(rclone size "r2:$BUCKET/$dir" --fast-list --json)"
+            done
+            rclone cat "r2:$BUCKET/exports/funnel.json" | head -c 4000
+            echo
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Conteos con DuckDB
+        run: |
+          {
+            echo '```json'
+            uv run python -m src.catalog summary --r2
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
