@@ -31,7 +31,8 @@ def test_bash_syntax_and_strict_mode(script):
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck no instalado")
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_shellcheck(script):
-    subprocess.run(["shellcheck", str(script)], check=True)
+    # -x sigue los `source` (p. ej. infra/r2_env.sh), resueltos desde la raíz del repo.
+    subprocess.run(["shellcheck", "-x", str(script)], check=True, cwd=REPO_ROOT)
 
 
 def test_initial_download_is_resumable_service():
