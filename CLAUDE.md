@@ -63,7 +63,7 @@ eval/
   known_events.yaml
   backtest.py
 tests/
-infra/         # aprovisionamiento del VPS, systemd y sync a R2
+infra/         # ingesta en GitHub Actions, sync con R2 y alternativa con VPS
 data/          # raw/, processed/, signals/, exports/ (no versionado)
 reports/
 ```
@@ -166,7 +166,8 @@ un cliente propio, y documentar la decisión. Hecho: cliente propio, ver
 Uso: `uv run python -m src.ingest.fred crawl | crawl-meta | observations [--category ID] |
 download | vintages [--ids-file F] | update | pick-category`, `uv run python -m src.eligibility
 run | funnel` y `uv run python -m src.export`. Almacenamiento y vintages: ADR 0002;
-infraestructura (VPS + R2): ADR 0003 y `docs/infra/vps.md`.
+infraestructura (GitHub Actions + R2): ADR 0004 y `docs/infra/github-actions.md`
+(alternativa con VPS: ADR 0003).
 **Terminado cuando:** puedo consultar en DuckDB todas las series de una categoría y una segunda
 ejecución no duplica filas (test).
 

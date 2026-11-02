@@ -4,6 +4,7 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
 STATE="data/processed/ingest_state"
+mkdir -p "$STATE"
 exec 9>"$STATE/.lock"
 flock -n 9 || { echo "otra ejecución tiene el lock" >&2; exit 1; }
 py() { uv run --quiet python "$@"; }

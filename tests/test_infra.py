@@ -230,3 +230,48 @@ def test_r2_bucket_create_is_idempotent(fake_api):
     assert "creado" in _run("r2_create_bucket.sh", env).stdout
     assert "ya existe" in _run("r2_create_bucket.sh", env).stdout
     assert fake_api.buckets == {"eeuu-trend-finder"}
+
+
+# --- GitHub Actions (ADR 0004) --------------------------------------------------------------
+
+
+def _workflow():
+    import yaml
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ingesta.yml").read_text())
+    wf["on"] = wf.pop(True, wf.get("on"))  # YAML 1.1 lee la clave `on` como True
+    return wf
+
+
+def test_workflow_schedule_and_no_overlap():
+    wf = _workflow()
+    assert wf["on"]["schedule"] and "workflow_dispatch" in wf["on"]
+    assert wf["concurrency"]["cancel-in-progress"] is False  # nunca cortar una corrida en curso
+    assert wf["permissions"] == {"contents": "read"}
+    assert wf["jobs"]["ingesta"]["timeout-minutes"] < 360  # límite de 6 h por job
+
+
+def test_workflow_secrets_and_order():
+    job = _workflow()["jobs"]["ingesta"]
+    for name in (
+        "FRED_API_KEY",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ):
+        assert job["env"][name] == "${{ secrets." + name + " }}"
+    runs = [s.get("run", "") for s in job["steps"]]
+    pull = next(i for i, r in enumerate(runs) if "pull_r2.sh" in r)
+    work = next(i for i, r in enumerate(runs) if "run_actions.sh" in r)
+    assert pull < work  # primero el estado anterior, después la ingesta
+
+
+def test_state_and_logs_round_trip_through_r2():
+    pull = (INFRA / "pull_r2.sh").read_text()
+    sync = (INFRA / "sync_r2.sh").read_text()
+    assert "rclone copy" in pull and "rclone sync" not in pull  # traer nunca borra
+    assert "for dir in processed logs" in pull
+    assert "for dir in processed exports logs" in sync
+    entry = (INFRA / "run_actions.sh").read_text()
+    assert "initial_download.done" in entry and "run_tramos.sh" in entry
+    assert "weekly_update.sh" in entry

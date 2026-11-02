@@ -1,7 +1,7 @@
 # 0003 — VPS Hetzner para ingesta y procesamiento, R2 como almacenamiento definitivo
 
 - Fecha: 2026-10-21
-- Estado: aceptada (2026-10-23; descarga inicial: solo el grupo nacional, ver ADR 0002)
+- Estado: reemplazada por el ADR 0004 (GitHub Actions + R2) el 2026-11-02; queda como alternativa
 
 ## Contexto
 
