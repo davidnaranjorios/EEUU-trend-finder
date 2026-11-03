@@ -70,6 +70,13 @@ R2), mantener un servidor y pagar ~€42/mes.
   `weekly_update.sh`. Lo delató `eligibility.run_id`, que seguía siendo el de la carga
   inicial tras la corrida del 2026-11-03. Ahora el marcador se crea antes del último sync
   (test).
+- **Primera semanal verificada (2026-11-03, corrida 41563483611).**
+  - Dijo `run_actions: actualización semanal`: 815 series actualizadas (876 filas nuevas,
+    929 reemplazadas) y vintages de 34 series.
+  - Duró 2 h 05 porque hizo un `crawl` completo (1 h 50). Es lo esperado una sola vez:
+    `update()` hace crawl si no hay `last_update_ok`, y la semanal nunca había corrido. Desde
+    ahí usa `series/updates` y repite el crawl cada `catalog_refresh_days` (30 días), como
+    estimaba este ADR (un crawl mensual).
 
 ## Límites y riesgos
 
