@@ -180,6 +180,38 @@ BY no deja ninguna señal de regime porque su p mínimo, con 99.999 réplicas, e
 ~1e-7 con m≈43.000. Con 53.008 series nacionales se espera un tiempo similar, de ~6–8 min. Sin
 escalación tardaba 3,4 min.
 
+## Corrida real en GitHub Actions (2026-11-03)
+
+Workflow Detectores, run 41673891959 sobre `main` (07acd8a): todas las series nacionales
+elegibles de FRED desde R2 (545 Parquet). Corrida `d024a86223d748a59b8b186983de5bb9`. El paso
+de detectores tardó 11 min 33 s en el runner de 4 núcleos (slope 7 min 41 s, regime 3 min 48 s
+con la escalación incluida). `sync_r2.sh` subió `detector_tests` (16 archivos),
+`detector_runs` (1), `signals` (18) y `logs` (2), y `rclone check` no encontró diferencias. Un
+intento anterior (run 41662623944) se canceló a mano antes de terminar y no escribió nada en R2.
+
+| Detector | Pruebas | BH | BY | Suben | Bajan | Con copyright (BH) | Método del p |
+|---|---|---|---|---|---|---|---|
+| slope | 39.698 | 301 | 114 | 270 | 31 | 10 | empirical 38.397, gpd 1.301 |
+| regime | 48.699 | 304 | 0 | 262 | 42 | 6 | empirical 46.982, empirical_esc 1.530, gpd_esc 187 |
+
+| Detector | Frec. | Pruebas | BH | BY |
+|---|---|---|---|---|
+| slope | A | 2.823 | 2 | 0 |
+| slope | Q | 20.295 | 191 | 84 |
+| slope | M | 11.467 | 82 | 15 |
+| slope | W | 699 | 16 | 6 |
+| slope | D | 4.414 | 10 | 9 |
+| regime | A | 11.733 | 0 | 0 |
+| regime | Q | 20.386 | 2 | 0 |
+| regime | M | 11.467 | 283 | 0 |
+| regime | W | 699 | 13 | 0 |
+| regime | D | 4.414 | 6 | 0 |
+
+En total hay 605 señales BH, un 0,7 % de las pruebas. Slope prueba menos anuales que regime
+(2.823 frente a 11.733) porque exige la línea base mínima de 33 periodos (§4b). Regime sigue sin
+señales BY, igual que en la muestra: ni con la cola GPD tras la escalación llega al p ~1e-7 que
+BY exige con m ≈ 49.000. Las longitudes de bloque medianas por grilla quedan entre 1,8 y 2,8.
+
 ## Consecuencias y límites
 - El post-blackening con margen es **conservador**: con ruido iid el tamaño real es ~3,7 % a un
   nivel nominal de 5 %. Se pierde potencia a cambio de no violar el principio 3.

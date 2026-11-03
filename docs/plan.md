@@ -238,7 +238,7 @@ comparado con el umbral fijado de antemano.
 | Bloque | Estado | PR |
 |---|---|---|
 | 0: pendientes menores | hecho; queda 0.4, la regla de `_trash/` que David crea en Cloudflare | #10, #12 |
-| 1: Fase 2 | código y tests listos; falta la corrida real en R2 (workflow Detectores tras el merge) | #14 |
+| 1: Fase 2 | hecho; corrida real en Actions (run 41673891959): 605 señales BH (slope 301, regime 304), 114 BY; tablas en R2 (ADR 0007) | #14, (este PR) |
 | 2: Fase 3 | pendiente | |
 | 3: Fase 4 | hecho; falta la descarga completa en Actions tras el merge | #16 |
 | 4: Fase 5 | código y tests listos (ADR 0009); falta la corrida real (Detectores con 4 fuentes y luego Reporte, que publica en GitHub Pages) | (este PR) |
