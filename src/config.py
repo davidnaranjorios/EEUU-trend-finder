@@ -232,6 +232,9 @@ def _validate_text_detect(td: dict[str, Any]) -> None:
         v = td.get(key)
         if not isinstance(v, int | float) or not 0 < v < 1:
             raise ConfigError(f"text_detect.{key} debe estar en (0, 1)")
+    ents = td.get("min_entities")
+    if not isinstance(ents, dict) or any(not isinstance(v, int) or v < 0 for v in ents.values()):
+        raise ConfigError("text_detect.min_entities: entero >= 0 por fuente (0 = sin filtro)")
     if not isinstance(td.get("phi_margin"), int | float) or td["phi_margin"] < 0:
         raise ConfigError("text_detect.phi_margin debe ser >= 0")
     for key in ("block_sample", "workers"):

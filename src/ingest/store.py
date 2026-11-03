@@ -287,9 +287,14 @@ def read_partitions(spec: TableSpec, root: Path, *, source: str) -> pa.Table:
     files = sorted(source_dir.glob("*/*.parquet")) if source_dir.is_dir() else []
     if not files:
         return spec.schema.empty_table()
-    return pa.concat_tables([pq.read_table(f).select(spec.schema.names) for f in files]).cast(
-        spec.schema
-    )
+    tables = []
+    for f in files:
+        t = pq.read_table(f)
+        for field in spec.schema:  # columnas nullable agregadas después (p. ej. n_entities)
+            if field.name not in t.column_names and field.nullable:
+                t = t.append_column(field.name, pa.nulls(t.num_rows, field.type))
+        tables.append(t.select(spec.schema.names))
+    return pa.concat_tables(tables).cast(spec.schema)
 
 
 def main(argv: list[str] | None = None) -> int:

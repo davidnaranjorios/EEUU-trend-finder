@@ -113,8 +113,9 @@ DuckDB en `src/catalog.py`. Linaje: `eligibility` (por qué cada serie entra o n
 **Texto** (`data/processed/text_docs/`), clave `(source, doc_id, section)`: `source, doc_id,
 date, entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo
 (`data/processed/term_freq/`), clave `(source, section, period, term)`: `source, section,
-period, term, doc_count, total_docs`. `section` separa Item 1A / Item 7 o el tipo de documento
-sin crear fuentes nuevas. Linaje en `lineage/text_ingest`. Particiones por periodo
+period, term, doc_count, total_docs, n_entities`. `section` separa Item 1A / Item 7 o el tipo de
+documento sin crear fuentes nuevas; `n_entities` cuenta entidades distintas (agencia, empresa)
+entre esos documentos (NULL = no medido, particiones anteriores; ADR 0008). Linaje en `lineage/text_ingest`. Particiones por periodo
 (`<tabla>/<fuente>/<periodo>/`), no por bucket; el texto completo no se guarda (ADR 0005).
 
 **Señales** (`data/signals/`), clave `signal_id`: `signal_id, source, object_id` (serie o término)`,

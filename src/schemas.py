@@ -81,6 +81,9 @@ TERM_FREQ = TableSpec(
         ("term", pa.string(), False),
         ("doc_count", pa.int64(), False),
         ("total_docs", pa.int64(), False),
+        # Entidades distintas (agencia, empresa) entre esos documentos; NULL = no medido
+        # (particiones anteriores a la versión 2 del esquema de texto, ADR 0008).
+        ("n_entities", pa.int64(), True),
     ),
     key=("source", "section", "period", "term"),
 )
@@ -293,7 +296,7 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
     if spec is TERM_FREQ:
         bad = con.execute(
             "SELECT count(*) FROM t WHERE doc_count < 0 OR total_docs <= 0 "
-            "OR doc_count > total_docs"
+            "OR doc_count > total_docs OR n_entities < 1 OR n_entities > doc_count"
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"term_freq: {bad[0]} filas con doc_count/total_docs inconsistentes")

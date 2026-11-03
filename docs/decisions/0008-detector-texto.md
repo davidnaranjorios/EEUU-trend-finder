@@ -1,8 +1,9 @@
 # 0008 — Detector de términos emergentes (Fase 3, parte B)
 
 - Fecha: 2026-11-03
-- Estado: propuesta implementada. Las recomendaciones A–D del plan de la parte B están a la
-  espera de confirmación de David; los parámetros quedan en `text_detect` de config.yaml.
+- Estado: aceptada. David aprobó el 2026-11-03 las recomendaciones A–D (grilla, `min_mean_share`
+  0,002, imputación en el tope y rama), la ventana reciente R separada, `phi_margin` 2,0 y la
+  medida de amplitud por entidad (sección 6).
 
 ## Contexto
 
@@ -73,6 +74,26 @@ El bootstrap y la FDR son los de la fase 2 (ADR 0007); no se duplican.
   p < 0,05 en 49 % / 74 % / 95 % de los casos y p < 0,001 en 6 % / 9 % / 29 %. Con 20 años
   anuales y ruido persistente, el detector solo ve cambios grandes. Es lo esperable (BackTrend
   2026) y conviene tenerlo presente al fijar el umbral de recall de la Fase 6.
+
+### 6. Amplitud por entidad (`term_freq.n_entities`)
+- La ingesta cuenta, por (fuente, sección, periodo, término), cuántas **entidades distintas**
+  (agencia en el Federal Register, CIK en EDGAR) usan el término. Un documento sin entidad
+  (p. ej. presidencial) cuenta como una entidad. Siempre 1 ≤ `n_entities` ≤ `doc_count`
+  (validado).
+- **Filtro neutral en el detector:** se excluye un término si el máximo de `n_entities` en los
+  subperiodos de la ventana reciente R es menor que `text_detect.min_entities[fuente]`. No mira
+  T, así que no sesga la FDR. Los excluidos quedan en `params_json` (`excluidos_amplitud`), y
+  los términos sin medida no se excluyen (`sin_medida_amplitud`). Valores: Federal Register 2;
+  EDGAR 0 (desactivado), porque cada 10-K es de una empresa y `n_entities ≈ doc_count`.
+- **Migración sin descarga:** `n_entities` es nullable. `python -m src.ingest.text migrate`
+  (lo corre `infra/run_texto.sh` antes de los tramos) reescribe las particiones viejas con la
+  columna en NULL. Es idempotente. Rellenarlas exige la lista de términos de cada documento, que
+  solo existe durante la ingesta (el texto no se guarda), así que no se puede sin re-descargar.
+- **Reproceso por versión de esquema:** el estado de cada periodo guarda `schema` (2 ahora). Un
+  periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` vuelve a correr en el
+  bucle normal de tramos.
+  - Federal Register: 2. Re-baja 2000–2026 una vez, ~330 zips y ~1,5 h en Actions.
+  - EDGAR: 1. No re-baja nada; sus trimestres ya cargados quedan con NULL.
 
 ## Verificación con datos reales (2026-11-03)
 

@@ -76,15 +76,38 @@ def read_temp_text(path: Path) -> str:
 
 
 class PeriodCounter:
-    """Cuenta, por sección, en cuántos documentos aparece cada hash de n-grama."""
+    """Cuenta, por sección, en cuántos documentos y en cuántas entidades distintas (agencia,
+    empresa) aparece cada hash de n-grama."""
 
     def __init__(self) -> None:
         self._chunks: dict[str, list[np.ndarray]] = defaultdict(list)
+        self._entities: dict[str, list[int]] = defaultdict(list)
+        self._entity_ids: dict[str | None, int] = {}
         self.total_docs: dict[str, int] = defaultdict(int)
 
-    def add(self, section: str, hashes: np.ndarray) -> None:
+    def add(self, section: str, hashes: np.ndarray, entity: str | None = None) -> None:
         self._chunks[section].append(hashes)
+        # Sin entidad (p. ej. documentos presidenciales) cuenta como una entidad más.
+        self._entities[section].append(self._entity_ids.setdefault(entity, len(self._entity_ids)))
         self.total_docs[section] += 1
+
+    def n_entities(self, section: str, hashes: np.ndarray) -> np.ndarray:
+        """Entidades distintas por hash de `hashes` (ordenados, como los da `retained`).
+
+        Documento por documento se guardan solo los aciertos como código (posición, entidad);
+        los pares repetidos son documentos de una misma entidad y cuentan una vez.
+        """
+        if hashes.size == 0:
+            return np.zeros(0, dtype=np.int64)
+        n_ent = max(len(self._entity_ids), 1)
+        codes = []
+        for chunk, ent in zip(self._chunks.get(section, []), self._entities[section], strict=True):
+            idx = np.searchsorted(hashes, chunk)
+            ok = idx < hashes.size
+            ok[ok] = hashes[idx[ok]] == chunk[ok]
+            codes.append(idx[ok].astype(np.int64) * n_ent + ent)
+        uniq = np.unique(np.concatenate(codes)) if codes else np.empty(0, dtype=np.int64)
+        return np.bincount(uniq // n_ent, minlength=hashes.size).astype(np.int64)
 
     def sections(self) -> list[str]:
         return sorted(self.total_docs)

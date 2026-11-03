@@ -119,13 +119,21 @@ def load_matrix(
     min_doc_count: int,
     min_mean_share: float,
     max_median_share: float,
+    min_entities: int = 0,
+    recent: int = 0,
 ) -> TermMatrix:
-    """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla."""
+    """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla.
+
+    Con `min_entities` > 0 se excluyen los términos cuya amplitud (máximo de `n_entities` en
+    los subperiodos de los últimos `recent` periodos de la grilla) es menor: un término que solo
+    usa una agencia (p. ej. el nombre de quien firma sus avisos) no es un fenómeno amplio. Los
+    términos sin medida (NULL, particiones anteriores al esquema 2) no se excluyen.
+    """
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
     con.execute(
-        "CREATE TEMP TABLE tf AS SELECT section, period, term, doc_count, total_docs "
-        "FROM read_parquet(?)",
+        "CREATE TEMP TABLE tf AS SELECT section, period, term, doc_count, total_docs, "
+        "n_entities FROM read_parquet(?, union_by_name = true)",
         [[str(f) for f in files]],
     )
     # Totales por sección y subperiodo (una fila por subperiodo con documentos).
@@ -179,6 +187,29 @@ def load_matrix(
         """,
         [min_mean_share],
     )
+    n_narrow = n_unmeasured = 0
+    if min_entities > 0 and recent > 0 and complete:
+        recent_grid = set(complete[-recent:])
+        recent_subs = sorted({p for _, p, _ in tot if to_grid(p, grid) in recent_grid})
+        con.execute(
+            """
+            CREATE TEMP TABLE breadth AS
+            SELECT k.section, k.term, max(tf.n_entities) AS amp
+            FROM keep k LEFT JOIN tf ON tf.section = k.section AND tf.term = k.term
+              AND tf.period IN (SELECT unnest(?))
+            GROUP BY 1, 2
+            """,
+            [recent_subs],
+        )
+        n_narrow, n_unmeasured = con.execute(
+            "SELECT count(*) FILTER (amp < ?), count(*) FILTER (amp IS NULL) FROM breadth",
+            [min_entities],
+        ).fetchone()
+        con.execute(
+            "DELETE FROM keep WHERE EXISTS (SELECT 1 FROM breadth b WHERE b.section = "
+            "keep.section AND b.term = keep.term AND b.amp < ?)",
+            [min_entities],
+        )
     n_all = con.execute("SELECT count(*) FROM (SELECT DISTINCT section, term FROM tf)").fetchone()[
         0
     ]
@@ -187,6 +218,8 @@ def load_matrix(
         "candidatos": int(n_all),
         "palabras_funcionales": int(n_stop),
         "excluidos_prefiltro": int(n_all - len(keys)),
+        "excluidos_amplitud": int(n_narrow),
+        "sin_medida_amplitud": int(n_unmeasured),
     }
     if not keys or not complete:
         con.close()
@@ -322,6 +355,8 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         cfg["text"]["min_doc_count"],
         td["min_mean_share"],
         td["max_median_share"],
+        min_entities=td["min_entities"].get(source, 0),
+        recent=max(td["recent"][grid], persistence),
     )
     g = len(m.periods)
     if g < window + recent + 3:

@@ -47,6 +47,10 @@ from src.log import get_logger, run
 from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
 
 EXIT_PENDING = 10
+# Versión del esquema de las particiones que escribe la ingesta. 2: term_freq.n_entities
+# (ADR 0008). Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se
+# vuelve a procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
+SCHEMA_VERSION = 2
 DOC_LEVEL = "*"  # `section` de las decisiones sobre el documento entero
 TABLE_DIRS = {
     TEXT_DOCS.name: "text_docs",
@@ -182,7 +186,7 @@ def finalize_period(
                     status, detail = "duplicado", f"duplicado_de={seen_hash[key]}"
                 else:
                     seen_hash[key] = doc.doc_id
-                    counter.add(sec.section, sec.hashes)
+                    counter.add(sec.section, sec.hashes, doc.entity)
                     tmp_by_section.setdefault(sec.section, []).append(sec.tmp_path)
                     text_rows.append(
                         {
@@ -211,10 +215,11 @@ def finalize_period(
     freq_rows: list[dict[str, Any]] = []
     for section in counter.sections():
         hashes, counts = counter.retained(section, min_doc_count)
+        entities = counter.n_entities(section, hashes)
         texts = (read_temp_text(Path(p)) for p in tmp_by_section[section])
         strings = resolve_strings(hashes, texts, n_max)
         total = counter.total_docs[section]
-        for h, c in zip(hashes.tolist(), counts.tolist(), strict=True):
+        for h, c, e in zip(hashes.tolist(), counts.tolist(), entities.tolist(), strict=True):
             freq_rows.append(
                 {
                     "source": source,
@@ -223,6 +228,7 @@ def finalize_period(
                     "term": strings[h],
                     "doc_count": c,
                     "total_docs": total,
+                    "n_entities": e,
                 }
             )
 
@@ -259,11 +265,16 @@ class TextState:
     def is_done(self, period: str) -> bool:
         return bool(self.periods.get(period, {}).get("closed"))
 
-    def needs_run(self, period: str, refresh_hours: float, now: datetime) -> bool:
-        """Cerrado y procesado: nunca más. Abierto: si su última pasada tiene más de
-        `refresh_hours` (así un bucle de tramos termina aunque el periodo siga abierto)."""
+    def needs_run(
+        self, period: str, refresh_hours: float, now: datetime, min_schema: int = 1
+    ) -> bool:
+        """Cerrado y procesado con un esquema >= `min_schema`: nunca más. Abierto: si su última
+        pasada tiene más de `refresh_hours` (así un bucle de tramos termina aunque el periodo
+        siga abierto)."""
         info = self.periods.get(period)
         if info is None:
+            return True
+        if info.get("schema", 1) < min_schema:
             return True
         if info.get("closed"):
             return False
@@ -273,6 +284,7 @@ class TextState:
     def mark(self, period: str, *, closed: bool, run_id: str, stats: dict[str, Any]) -> None:
         self.periods[period] = {
             "closed": closed,
+            "schema": SCHEMA_VERSION,
             "run_id": run_id,
             "processed_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "docs": stats["docs"],
@@ -306,7 +318,10 @@ def run_source(
     state = TextState(processed_dir, src.name)
     now = datetime.now(UTC)
     refresh = text_cfg["open_refresh_hours"]
-    candidates = only_periods or [p for p in src.periods(today) if state.needs_run(p, refresh, now)]
+    min_schema = cfg[src.name].get("reprocess_below_schema", 1)
+    candidates = only_periods or [
+        p for p in src.periods(today) if state.needs_run(p, refresh, now, min_schema)
+    ]
     todo = candidates[:max_periods] if max_periods is not None else candidates
     n_workers = text_cfg["workers"] if workers is None else workers
     # forkserver: el proceso principal tiene hilos (httpx) y fork() con hilos puede bloquearse.
@@ -356,6 +371,37 @@ def run_source(
         "periods_done_now": done,
         "pending": 0 if only_periods else len(candidates) - len(todo),
     }
+
+
+def migrate(processed_dir: Path) -> dict[str, int]:
+    """Lleva las particiones de `term_freq` al esquema actual sin descargar nada (idempotente).
+
+    Las escritas antes de la versión 2 no tienen `n_entities`: se reescriben con la columna en
+    NULL ("no medido"; nunca un valor inventado). Las que ya la tienen no se tocan.
+    """
+    import pyarrow.parquet as pq
+
+    root = processed_dir / TABLE_DIRS[TERM_FREQ.name]
+    out = {"particiones": 0, "migradas": 0}
+    for part in sorted(p for p in root.glob("*/*") if p.is_dir() and "." not in p.name):
+        files = sorted(part.glob("*.parquet"))
+        if not files:
+            continue
+        out["particiones"] += 1
+        if all("n_entities" in pq.read_schema(f).names for f in files):
+            continue
+        table = pa.concat_tables([pq.read_table(f) for f in files], promote_options="default")
+        if "n_entities" not in table.column_names:
+            table = table.append_column("n_entities", pa.nulls(table.num_rows, pa.int64()))
+        store.replace_partition(
+            table.select(TERM_FREQ.schema.names).cast(TERM_FREQ.schema),
+            TERM_FREQ,
+            root,
+            source=part.parent.name,
+            partition=part.name,
+        )
+        out["migradas"] += 1
+    return out
 
 
 def summary(processed_dir: Path) -> dict[str, Any]:
@@ -411,7 +457,7 @@ def build_source(name: str, cfg: dict[str, Any], raw_dir: Path) -> TextSource:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.ingest.text")
-    parser.add_argument("command", choices=["edgar", "federal_register", "summary"])
+    parser.add_argument("command", choices=["edgar", "federal_register", "summary", "migrate"])
     parser.add_argument("--max-periods", type=int, default=None)
     parser.add_argument("--periods", default=None, help="lista separada por comas")
     parser.add_argument("--sample", type=int, default=None, help="documentos al azar por periodo")
@@ -428,6 +474,9 @@ def main(argv: list[str] | None = None) -> int:
     processed = args.processed_dir or _resolve(cfg["paths"]["processed_dir"])
     if args.command == "summary":
         print(json.dumps(summary(processed), indent=2, default=str))
+        return 0
+    if args.command == "migrate":
+        print(json.dumps(migrate(processed)))
         return 0
     logger = get_logger(f"ingest.{args.command}", cfg["logging"]["level"])
     src = build_source(args.command, cfg, _resolve(cfg["paths"]["raw_dir"]))

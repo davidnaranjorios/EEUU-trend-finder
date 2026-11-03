@@ -42,6 +42,8 @@ tramos() {
   done
 }
 
+# Particiones de term_freq anteriores al esquema actual: columnas nuevas en NULL, sin descargar.
+py -m src.ingest.text migrate
 for src in "${SOURCES[@]}"; do
   tramos "$src"
 done

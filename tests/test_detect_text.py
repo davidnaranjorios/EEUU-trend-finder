@@ -50,8 +50,12 @@ def to_counts(rng, logits: np.ndarray, totals: np.ndarray) -> np.ndarray:
     return rng.binomial(totals.astype(int), p)
 
 
-def write_term_freq(processed, source, section, shares_by_term, min_doc_count, rng):
-    """term_freq trimestral sintético: share anual por término, binomial por trimestre."""
+def write_term_freq(processed, source, section, shares_by_term, min_doc_count, rng, entities=None):
+    """term_freq trimestral sintético: share anual por término, binomial por trimestre.
+
+    `entities` (término -> n): amplitud fija por término; por defecto, una entidad por documento.
+    """
+    entities = entities or {}
     for yi, year in enumerate(YEARS):
         for q, n in enumerate(Q_DOCS, start=1):
             rows = []
@@ -66,6 +70,7 @@ def write_term_freq(processed, source, section, shares_by_term, min_doc_count, r
                             "term": term,
                             "doc_count": c,
                             "total_docs": n,
+                            "n_entities": min(entities.get(term, c), c),
                         }
                     )
             store.replace_partition(
@@ -134,6 +139,36 @@ def test_injected_term_detected_and_isolated_jump_ignored(cfg, tmp_path):
     params = json.loads(r["params_json"])
     assert params["grid"] == "A" and params["window"] == 7 and params["persistence"] == 2
     assert params["recent"] == 4
+
+
+def test_breadth_filter_excludes_single_entity_terms(cfg, tmp_path):
+    """Mismo crecimiento en dos términos: el que usa una sola entidad (p. ej. el nombre de quien
+    firma los avisos de una agencia) no entra a la familia con min_entities = 2."""
+    rng = np.random.default_rng(11)
+    g = len(YEARS)
+    shares = {
+        f"ruido{i} palabra": 1 / (1 + np.exp(-lg)) for i, lg in enumerate(null_logits(rng, 40, g))
+    }
+    inj = np.full(g, 0.01)
+    inj[-3:] = [0.03, 0.06, 0.10]
+    shares["amplio nuevo"] = inj
+    shares["estrecho nuevo"] = inj.copy()
+    write_term_freq(
+        tmp_path / "processed",
+        "edgar",
+        "item_1a",
+        shares,
+        5,
+        rng,
+        entities={"estrecho nuevo": 1},
+    )
+    cfg["text_detect"]["min_entities"] = {"edgar": 2}
+    report = detect_source(cfg, "edgar", "run-amp", __import__("datetime").datetime.now())
+    found = {oid for oid, _, _ in report["top"]}
+    assert "item_1a|amplio nuevo" in found
+    assert "item_1a|estrecho nuevo" not in found
+    assert report["prefiltro"]["excluidos_amplitud"] == 1
+    assert report["n_tests"] == 41
 
 
 def test_statistic_requires_persistence():
