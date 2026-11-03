@@ -114,6 +114,19 @@ de cada serie; las filas agregadas cuentan por su `n_series`.
   exige un estado concreto, o timeouts/HTTP 524 del servidor en `intltrade` (transitorios: se
   reintentan en la corrida siguiente). Por eso el grupo `nacional` de Census es pequeño.
 
+## Primera corrida en Actions (run 41695786848, 2026-11-03)
+
+Terminó en verde, sin errores en las tres fuentes, pero el crawl usó los 60 min de cada una y
+la descarga no bajó nada: BLS clasificó 26 de 66 encuestas, BEA 474 de 2.014 tablas y Census 50
+de 89 datasets. Tres ajustes:
+
+- `update` reserva presupuesto para la descarga: cuando ya hay series objetivo, el crawl usa a
+  lo sumo `crawl_budget_share` (0,5) del presupuesto. Sin objetivos aún, usa todo.
+- `download` mira el presupuesto **antes** de `values_version`: en BEA esa versión es una
+  consulta de datos, y la corrida gastó 12 min en 436 unidades que igual quedaron pendientes.
+- BEA pasa a `catalog_refresh_days: 90`. Un crawl completo de BEA toma ~4,5 h; con 30 días y
+  60 min por semana no cabe, y la fuente recorrería el catálogo sin descargar nunca.
+
 ## Solape con FRED
 
 Muchas series de BLS, BEA y Census también están en FRED. No son fuentes independientes para

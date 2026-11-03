@@ -385,6 +385,12 @@ class SourceIngestor:
             if unit is None:
                 stats["units_missing"] += 1
                 continue
+            # El presupuesto se mira antes de `values_version`: en BEA esa versión es una
+            # consulta de datos, y sin presupuesto no hay nada que hacer con ella.
+            out_of_budget = budget_s is not None and self._clock() - t0 > budget_s
+            if (max_units is not None and stats["units_fetched"] >= max_units) or out_of_budget:
+                pending += 1
+                continue
             version = self.adapter.values_version(unit)
             prev = state.get(unit_id)
             if (
@@ -394,10 +400,6 @@ class SourceIngestor:
                 and prev["n_series"] == len(by_unit[unit_id])
             ):
                 stats["units_unchanged"] += 1
-                continue
-            out_of_budget = budget_s is not None and self._clock() - t0 > budget_s
-            if (max_units is not None and stats["units_fetched"] >= max_units) or out_of_budget:
-                pending += 1
                 continue
             got = self._retrying(unit, lambda u=unit: self._fetch_unit(u, by_unit[u.unit_id]))
             if got is None:
@@ -447,7 +449,13 @@ class SourceIngestor:
     def update(self, *, budget_s: float | None = None, run_id: str = "manual") -> dict[str, Any]:
         """Actualización semanal: crawl incremental y descarga, dentro de un mismo presupuesto."""
         t0 = self._clock()
-        crawl = self.crawl(run_id=run_id, budget_s=budget_s)
+        crawl_budget = budget_s
+        if budget_s is not None and self.targets():
+            # Con series objetivo ya clasificadas, el crawl no puede comerse todo el presupuesto:
+            # si no, una fuente con muchas unidades (BEA) recorre el catálogo cada semana y
+            # nunca descarga. Sin objetivos aún, el crawl usa el presupuesto entero.
+            crawl_budget = budget_s * self.scfg.get("crawl_budget_share", 0.5)
+        crawl = self.crawl(run_id=run_id, budget_s=crawl_budget)
         left = None if budget_s is None else max(0.0, budget_s - (self._clock() - t0))
         return {"crawl": crawl, "download": self.download(budget_s=left)}
 
