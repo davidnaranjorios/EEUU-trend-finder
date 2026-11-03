@@ -3,13 +3,21 @@
 Estructura: `<root>/<source>/<NN>/part-<uuid>.parquet`, con `NN = sha1(clave) % n_buckets`.
 Volver a escribir filas idénticas no añade nada. Si una clave llega con valores distintos, se
 reescribe el bucket conservando la versión nueva y se informa el conteo.
+
+Cada `upsert` con filas nuevas añade un `part-*.parquet` por bucket tocado. `compact` los junta
+en uno por bucket (ADR 0004): sin ella, la descarga inicial dejó 14.491 archivos en R2 y leerlos
+por httpfs no terminaba en 30 min. Uso: `uv run python -m src.ingest.store compact [DIR]`.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import os
+import re
 import shutil
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +28,10 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from src.schemas import TableSpec, validate
+
+BUCKET_DIR = re.compile(r"^\d{2}$")
+SWAP_DIR = re.compile(r"^\d{2}(\.(old|new)-.+)?$")
+SORT_COLUMNS = ("source", "series_id", "run_id", "date", "vintage_date")
 
 MAX_BUCKETS = 100  # los buckets son directorios de dos dígitos
 
@@ -169,6 +181,58 @@ def recover(source_dir: Path) -> None:
         shutil.rmtree(path)
 
 
+@dataclass
+class CompactResult:
+    buckets_compacted: int = 0
+    files_before: int = 0
+    files_after: int = 0
+    rows: int = 0
+
+
+def compact(root: Path) -> CompactResult:
+    """Junta en un solo archivo cada bucket `<tabla>/<fuente>/<NN>/` bajo `root` con más de uno.
+
+    Usa el mismo swap atómico que `upsert` (recuperable con `recover`) y verifica que el número
+    de filas no cambie. Los buckets que ya tienen un archivo no se tocan, así el sync a R2 solo
+    sube lo que cambió. Las filas se ordenan para que el resultado sea determinista.
+    """
+    result = CompactResult()
+    root = Path(root)
+    if not root.is_dir():
+        return result
+    # Primero deshace swaps cortados (`NN.old-*`/`NN.new-*`), aunque falte el `NN` original.
+    for source_dir in sorted({p.parent for p in root.rglob("*") if SWAP_DIR.match(p.name)}):
+        recover(source_dir)
+    for bucket_dir in sorted(p for p in root.rglob("*") if _is_bucket_dir(p)):
+        files = _parquet_files(bucket_dir)
+        result.files_before += len(files)
+        if len(files) <= 1:
+            result.files_after += len(files)
+            continue
+        table = pa.concat_tables([pq.read_table(f) for f in files])
+        sort_cols = [c for c in SORT_COLUMNS if c in table.column_names]
+        if sort_cols:
+            table = table.sort_by([(c, "ascending") for c in sort_cols])
+        _swap_bucket(bucket_dir, table)
+        after = _parquet_files(bucket_dir)
+        n_after = sum(pq.ParquetFile(f).metadata.num_rows for f in after)
+        if n_after != table.num_rows:
+            raise RuntimeError(f"compact: {bucket_dir}: {n_after} filas de {table.num_rows}")
+        result.buckets_compacted += 1
+        result.files_after += len(after)
+        result.rows += table.num_rows
+    return result
+
+
+def count_files(root: Path) -> int:
+    """Archivos Parquet bajo `root` (lo que cuenta `rclone size` en R2)."""
+    return sum(1 for _ in Path(root).rglob("*.parquet")) if Path(root).is_dir() else 0
+
+
+def _is_bucket_dir(path: Path) -> bool:
+    return path.is_dir() and bool(BUCKET_DIR.match(path.name))
+
+
 def read_table(
     spec: TableSpec,
     root: Path,
@@ -192,3 +256,29 @@ def read_table(
     finally:
         con.close()
     return table.cast(spec.schema)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m src.ingest.store compact [DIR]`: compacta data/processed (o DIR)."""
+    from src.config import REPO_ROOT, load_config
+    from src.log import run
+
+    parser = argparse.ArgumentParser(prog="python -m src.ingest.store")
+    parser.add_argument("command", choices=["compact"])
+    parser.add_argument("root", nargs="?", type=Path, default=None)
+    args = parser.parse_args(argv)
+    cfg = load_config()
+    root = args.root or REPO_ROOT / cfg["paths"]["processed_dir"]
+    runs_file = Path(cfg["logging"]["runs_file"])
+    runs_file = runs_file if runs_file.is_absolute() else REPO_ROOT / runs_file
+    sources = sorted({p.parent.name for p in Path(root).rglob("*") if _is_bucket_dir(p)})
+    with run(sources or ["ninguna"], runs_file) as record:
+        with record.stage("compact"):
+            res = compact(root)
+        record.details = {"command": "compact", "stats": res.__dict__}
+    print(json.dumps(res.__dict__))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

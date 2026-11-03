@@ -54,6 +54,18 @@ análisis, y alimentar una futura web estática sin consultar Parquet desde el n
 - **Series ligadas a `eval/`:** el principio 2 impide que `src/` las lea. Por eso `src/` expone
   `vintages --ids-file PATH` y será `eval/` (Fase 6) quien genere esa lista a partir de
   `known_events.yaml` y llame al comando. Hoy `known_events.yaml` está vacío.
+- **Motivo de las series sin vintages (2026-11-03).** De la muestra de 2.043 series, 5 quedaron
+  sin vintages en la corrida inicial:
+  - CRTINDEXTIER3, RCMFLBBEDTIPCT75 y RCMFLOLTVPCT75 no existen en ALFRED: FRED las tiene,
+    ALFRED no.
+  - DBAA y FIN14AAVOL fallaron por un error nuestro. FRED contó "2001 vintage dates" en
+    ventanas armadas con 2.000 fechas de `series/vintagedates`. Ahora, si FRED rechaza una
+    ventana por el tope, se parte en dos y se reintenta.
+
+  Cada intento queda en la tabla de linaje `lineage/vintages` (vista `vintage_lineage`), con
+  `run_id`, `status` (`ok`, `no_existe_en_alfred`, `error_api`), filas y motivo. "No existe en
+  ALFRED" no se reintenta mientras no cambie `last_updated`; `error_api` sí se reintenta.
+  `python -m src.catalog summary` muestra el motivo vigente por serie.
 - En una misma serie conviven filas `vintage_date IS NULL` (valor vigente) y filas con fecha
   (muestra). La clave `(source, series_id, date, vintage_date)` las separa. Los detectores leen
   las vigentes; el backtest, las fechadas.
@@ -66,6 +78,7 @@ esquemas viven en `src/schemas.py` y pasan por `validate()`:
 | Tabla | Clave | Contenido | Se llena en |
 |---|---|---|---|
 | `eligibility` | `run_id, source, series_id` | grupo, regla que la excluyó o clasificó, detalle (p. ej. `variante_de=<id>`), nivel geográfico, frecuencia, copyright | ahora (`src/eligibility.py`) |
+| `vintage_lineage` | `run_id, source, series_id` | resultado del historial ALFRED de cada serie de la muestra: status, filas, motivo | ahora (`fred.py vintages`) |
 | `detector_runs` | `run_id, detector` | n.º de pruebas, sobrevivientes BH y BY, q, parámetros | Fase 2 |
 | `signals` | `signal_id` | se agregan `run_id` y `n_tests` (contra cuántas pruebas se corrigió) | Fase 2 |
 | `series_term_links` | `run_id, source, series_id, text_source, term` | score de similitud en [0,1] y método | Fase 3/5 |
@@ -80,7 +93,8 @@ un test verifica que no falta ninguna.
 
 - `funnel.json`: el embudo de la última corrida.
 - `series/<NN>.json` y `series/index.json`: fichas de serie solo con metadatos, repartidas en
-  buckets por id.
+  buckets por id. Desde el 2026-11-03 (ADR 0004): solo `exports.groups`, formato columnar,
+  `categories.json` aparte y tope de tamaño.
 - Pendiente para la Fase 5: `crossings_graph.json` (grafo serie–término con score) y fichas con
   señales.
 
