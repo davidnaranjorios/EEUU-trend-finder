@@ -79,6 +79,41 @@ Una fuente que falla no detiene a las demás; el script termina en error al fina
 `SEC_USER_AGENT`, `BEA_API_KEY` y `CENSUS_API_KEY` se pasan al job; si falta uno, solo falla su
 fuente (aviso en "Verificar secrets").
 
+### 5. Cortes de conexión
+
+`http.stream` reintenta solo el inicio de una respuesta. En el crawl real, download.bls.gov cortó
+la conexión a mitad de `ca.series` (`Connection reset`) y la fuente entera terminó en error. La
+capa común repite la unidad (hasta `max_retries`; las escrituras son upserts, así que es
+idempotente) y, si sigue fallando, la deja pendiente (código 10) y sigue con las demás.
+
+## Medición real del embudo (crawl de solo catálogo, 2026-11-03)
+
+Corrido en el contenedor de desarrollo, sin descargar valores. Grupos según la última decisión
+de cada serie; las filas agregadas cuentan por su `n_series`.
+
+| Fuente | Unidades | Series | nacional | regional | internacional | nuevas | excluida |
+|---|---|---|---|---|---|---|---|
+| BLS | 66 de 66 | 183.746.187 | 299.620 | 60.342 | 0 | 6.188.387 | 177.197.838 |
+| BEA | 1.890 de 2.014 | 111.633 | 50.957 | 0 | 29.359 | 3.636 | 27.681 |
+| Census | 89 de 89 (45 sin series, ver abajo) | 584.286 | 5.157 | 0 | 134.851 | 890 | 443.388 |
+
+- Exclusiones por regla. BLS: inactiva 177.071.375, variante 111.790, frecuencia no soportada
+  14.661, sin fechas 12. BEA: inactiva 13.540, variante 11.971, sin fechas 2.170. Census:
+  inactiva 412.453, sin fechas 29.571, variante 1.364.
+- Tamaño estimado del grupo `nacional` (lo único que se descarga): BLS 290,7 MB, BEA 74,2 MB,
+  Census 13,3 MB de Parquet.
+- Tiempos: BLS 57 min para 61 encuestas (más 5 de un intento anterior); BEA ~3 h para 1.890
+  tablas (límite de 100 solicitudes/min); Census ~2 h 50 min en dos intentos. Con 60 min por
+  fuente y semana, el primer crawl de BEA y Census toma varias corridas, y el refresco a 30 días
+  de BEA ocupa buena parte del presupuesto: si estorba a la descarga, subir
+  `catalog_refresh_days` o `SOURCES_BUDGET_MIN`.
+- BLS: 13 encuestas quedan en una fila agregada cada una; el resto escribe ~7,1 M filas de linaje
+  por crawl completo. Las 6,2 M "nuevas" son casi todas de `oe` (anual, historia corta).
+- Census: de los 89 datasets, 45 no producen series en esta corrida: por tamaño (`excede_series`
+  / `excede_filas`, p. ej. `bds` 775.700 series), sin variable de tiempo o de valor, `qwi` que
+  exige un estado concreto, o timeouts/HTTP 524 del servidor en `intltrade` (transitorios: se
+  reintentan en la corrida siguiente). Por eso el grupo `nacional` de Census es pequeño.
+
 ## Solape con FRED
 
 Muchas series de BLS, BEA y Census también están en FRED. No son fuentes independientes para
