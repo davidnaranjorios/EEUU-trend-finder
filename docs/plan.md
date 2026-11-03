@@ -240,7 +240,7 @@ comparado con el umbral fijado de antemano.
 | 0: pendientes menores | hecho; queda 0.4, la regla de `_trash/` que David crea en Cloudflare | #10, #12 |
 | 1: Fase 2 | pendiente | |
 | 2: Fase 3 | pendiente | |
-| 3: Fase 4 | pendiente | |
+| 3: Fase 4 | hecho; falta la descarga completa en Actions tras el merge | #16 |
 | 4: Fase 5 | pendiente | |
 | 5: Fase 6 | pendiente | |
 | 6: Fase 7 | pendiente | |

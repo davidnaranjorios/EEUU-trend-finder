@@ -242,5 +242,7 @@ def test_summary_counts(paths):
     from src.catalog import summary
 
     s = summary(connect(paths.processed))
-    assert s["eligibility"] == {"run_id": "r1", "groups": {"nacional": 2, "excluida": 1}}
+    assert s["eligibility"] == {
+        "fred": {"last_run_id": "r1", "groups": {"nacional": 2, "excluida": 1}, "lineage_rows": 3}
+    }
     assert s["series"]["rows"] == 0 and s["series_meta"] == 0

@@ -108,18 +108,40 @@ def account_id(value: str) -> str:
 
 
 def summary(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
-    """Conteos de verificación: filas, vigentes vs. fechadas y embudo de la última corrida."""
+    """Conteos de verificación: filas, vigentes vs. fechadas, por fuente y embudo por fuente."""
     rows, n_series, current, dated, n_dated = con.execute(
         "SELECT count(*), count(DISTINCT series_id), count(*) FILTER (vintage_date IS NULL), "
         "count(*) FILTER (vintage_date IS NOT NULL), "
         "count(DISTINCT series_id) FILTER (vintage_date IS NOT NULL) FROM series"
     ).fetchone()
-    groups = con.execute(
-        "SELECT group_name, count(*) FROM eligibility "
-        "WHERE run_id = (SELECT max_by(run_id, decided_at) FROM eligibility) "
-        "GROUP BY 1 ORDER BY 2 DESC"
+    # Embudo por fuente: la última decisión de cada serie (las fuentes de la Fase 4 solo
+    # reprocesan las unidades que cambian, ADR 0007). Una fila agregada `<unidad>/*` cuenta por
+    # las n_series que resume.
+    funnel_rows = con.execute(
+        "SELECT source, group_name, sum(CASE WHEN ends_with(series_id, '/*') THEN coalesce("
+        "TRY_CAST(regexp_extract(detail, 'n_series=([0-9]+)', 1) AS BIGINT), 1) ELSE 1 END), "
+        "count(*) FROM (SELECT * FROM eligibility QUALIFY row_number() OVER (PARTITION BY "
+        "source, series_id ORDER BY decided_at DESC, run_id DESC) = 1) "
+        "GROUP BY 1, 2 ORDER BY 1, 3 DESC"
     ).fetchall()
-    run_id = con.execute("SELECT max_by(run_id, decided_at) FROM eligibility").fetchone()[0]
+    last_runs = dict(
+        con.execute(
+            "SELECT source, max_by(run_id, decided_at) FROM eligibility GROUP BY 1"
+        ).fetchall()
+    )
+    eligibility: dict[str, Any] = {}
+    for source, group, n, lineage_rows in funnel_rows:
+        e = eligibility.setdefault(
+            source, {"last_run_id": last_runs[source], "groups": {}, "lineage_rows": 0}
+        )
+        e["groups"][group] = int(n)
+        e["lineage_rows"] += int(lineage_rows)
+    per_source = con.execute(
+        "SELECT source, count(*), count(DISTINCT series_id) FROM series GROUP BY 1 ORDER BY 1"
+    ).fetchall()
+    meta_by_source = dict(
+        con.execute("SELECT source, count(*) FROM series_meta GROUP BY 1").fetchall()
+    )
     # Motivo vigente de cada serie de la muestra: el de su último intento.
     vintage_status = con.execute(
         "SELECT status, count(*), list(series_id ORDER BY series_id) FILTER (status <> 'ok') "
@@ -135,7 +157,11 @@ def summary(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             "series_with_vintages": n_dated,
         },
         "series_meta": con.execute("SELECT count(*) FROM series_meta").fetchone()[0],
-        "eligibility": {"run_id": run_id, "groups": dict(groups)},
+        "by_source": {
+            source: {"rows": rows_s, "series": n_s, "series_meta": meta_by_source.get(source, 0)}
+            for source, rows_s, n_s in per_source
+        },
+        "eligibility": eligibility,
         "vintage_lineage": {
             status: {"series": n, **({"ids": ids} if status != "ok" else {})}
             for status, n, ids in vintage_status
