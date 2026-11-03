@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -16,6 +16,7 @@ from src.ingest.common import (
     expand_aggregated,
     latest_decisions,
     lineage_series_count,
+    pending,
 )
 from tests.fakes_synthetic import SyntheticAdapter, _row
 
@@ -134,3 +135,34 @@ def test_estimate_counts_by_group_and_rule(tmp_path):
     assert est["excluidas_por_regla"] == {"inactiva": 5, "variante": 1}
     nac = est["tamano_por_grupo"]["nacional"]
     assert nac["series"] == 2 and nac["unidades"] == 2 and nac["obs_estimadas"] > 600
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        self.t += 10.0  # cada consulta del reloj avanza 10 s
+        return self.t
+
+
+def test_crawl_budget_leaves_units_pending_and_resumes(tmp_path):
+    adapter = SyntheticAdapter()
+    ing, _ = _ing(tmp_path, adapter)
+    ing._clock = _Clock()
+    first = ing.crawl(run_id="r1", budget_s=15)
+    assert first["units_processed"] >= 1 and first["units_pending"] >= 1
+    assert pending({"crawl": first})
+    ing._clock = _Clock()
+    second = ing.crawl(run_id="r2")
+    assert second["units_processed"] == first["units_pending"]
+    assert second["units_unchanged"] == first["units_processed"]
+
+
+def test_old_classification_is_refreshed(tmp_path):
+    adapter = SyntheticAdapter()
+    ing, _ = _ing(tmp_path, adapter, catalog_refresh_days=30)
+    ing.crawl(run_id="r1")
+    later = NOW + timedelta(days=31)
+    ing._now = lambda: later
+    assert ing.crawl(run_id="r2")["units_processed"] == 3

@@ -30,6 +30,10 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
+      # Fase 4 (ADR 0007). download.bls.gov exige un User-Agent con contacto: SEC_USER_AGENT.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      BEA_API_KEY: ${{ secrets.BEA_API_KEY }}
+      CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -42,6 +46,10 @@ jobs:
         run: |
           for v in FRED_API_KEY CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
             [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
+          done
+          # Sin estos, solo falla su fuente (sources_update.sh sigue con las demás).
+          for v in SEC_USER_AGENT BEA_API_KEY CENSUS_API_KEY; do
+            [ -n "${!v}" ] || echo "::warning::falta el secret $v"
           done
       - name: Traer estado desde R2
         run: infra/pull_r2.sh

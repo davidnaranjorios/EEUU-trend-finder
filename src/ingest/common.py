@@ -205,18 +205,22 @@ class SourceIngestor:
 
     # --- crawl + embudo ----------------------------------------------------------------------
 
-    def crawl(self, *, full: bool | None = None, run_id: str = "manual") -> dict[str, Any]:
-        """Catálogo, series_meta y linaje de las unidades nuevas o cambiadas.
+    def crawl(
+        self, *, full: bool = False, run_id: str = "manual", budget_s: float | None = None
+    ) -> dict[str, Any]:
+        """Catálogo, series_meta y linaje de las unidades que lo necesitan.
 
-        Con `full` (o si toca el refresco periódico) reprocesa todas las unidades: la regla de
-        inactividad depende de la fecha de hoy, no solo del archivo.
+        Una unidad se reprocesa si no tiene estado, si su versión cambió o es desconocida, o si
+        su última clasificación tiene más de `catalog_refresh_days` (la regla de inactividad
+        depende de la fecha de hoy, no solo del archivo). Con `full`, todas. Con `budget_s`,
+        corta entre unidades al pasar el presupuesto: lo pendiente sigue en la próxima corrida.
         """
-        if full is None:
-            full = self.is_stale()
         units = self.adapter.list_units()
         state = self._unit_state("catalog")
         today = self._now().date()
         decided_at = self._now().replace(microsecond=0)
+        refresh = timedelta(days=self.scfg["catalog_refresh_days"])
+        t0 = self._clock()
         stats: Counter[str] = Counter(units=len(units))
         for unit in units:
             prev = state.get(unit.unit_id)
@@ -225,12 +229,17 @@ class SourceIngestor:
                 and prev is not None
                 and unit.catalog_version is not None
                 and prev["version"] == unit.catalog_version
+                and self._now() - prev["done_at"] <= refresh
             ):
                 stats["units_unchanged"] += 1
                 continue
+            if budget_s is not None and self._clock() - t0 > budget_s:
+                stats["units_pending"] += 1
+                continue
             stats += self._crawl_unit(unit, run_id, decided_at, today)
             stats["units_processed"] += 1
-        self._save_cursor("last_crawl_ok")
+        if not stats["units_pending"]:
+            self._save_cursor("last_crawl_ok")
         out = dict(stats)
         self.log.info("crawl terminado", extra={"fields": {"source": self.source, **out}})
         return out
@@ -326,12 +335,6 @@ class SourceIngestor:
         self._set_state(unit.unit_id, "catalog", unit.catalog_version, n, stats["lineage_rows"])
         return stats
 
-    def is_stale(self) -> bool:
-        last = _parse_dt(self._load_cursors().get("last_crawl_ok"))
-        return last is None or self._now() - last > timedelta(
-            days=self.scfg["catalog_refresh_days"]
-        )
-
     # --- descarga ------------------------------------------------------------------------------
 
     def download(
@@ -407,9 +410,12 @@ class SourceIngestor:
             n_rows += len(batch)
         return res, n_rows
 
-    def update(self, *, budget_s: float | None = None) -> dict[str, Any]:
-        """Actualización semanal: crawl incremental (o completo si toca) y descarga."""
-        return {"crawl": self.crawl(), "download": self.download(budget_s=budget_s)}
+    def update(self, *, budget_s: float | None = None, run_id: str = "manual") -> dict[str, Any]:
+        """Actualización semanal: crawl incremental y descarga, dentro de un mismo presupuesto."""
+        t0 = self._clock()
+        crawl = self.crawl(run_id=run_id, budget_s=budget_s)
+        left = None if budget_s is None else max(0.0, budget_s - (self._clock() - t0))
+        return {"crawl": crawl, "download": self.download(budget_s=left)}
 
     def targets(self) -> dict[str, str]:
         """series_id -> unidad de las series de los grupos de `download.groups`."""
@@ -758,13 +764,9 @@ def main(
     """`python -m src.ingest.<fuente> crawl [--full] | download | update | estimate`."""
     parser = argparse.ArgumentParser(prog=f"python -m src.ingest.{source}")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    crawl = sub.add_parser("crawl", help="catálogo, series_meta y embudo (unidades cambiadas)")
+    crawl = sub.add_parser("crawl", help="catálogo, series_meta y embudo (unidades pendientes)")
     crawl.add_argument("--full", action="store_true", help="reprocesar todas las unidades")
-    crawl.add_argument(
-        "--if-stale",
-        action="store_true",
-        help="solo si el último crawl completo es más viejo que el refresco",
-    )
+    crawl.add_argument("--budget-min", type=float, default=None)
     dl = sub.add_parser("download", help="valores vigentes de las series objetivo")
     dl.add_argument("--max-units", type=int, default=None)
     dl.add_argument("--budget-min", type=float, default=None)
@@ -785,34 +787,31 @@ def main(
         return 0
     adapter = make_adapter(cfg, paths, log)
     ing = SourceIngestor(adapter, cfg, paths, logger=log)
-    budget = getattr(args, "budget_min", None)
-    budget_s = budget * 60 if budget is not None else None
+    budget_s = args.budget_min * 60 if args.budget_min is not None else None
     try:
         with run([source], resolve(cfg["logging"]["runs_file"])) as record:
             with record.stage(args.cmd):
                 if args.cmd == "crawl":
-                    if args.if_stale and not ing.is_stale():
-                        stats: dict[str, Any] = {"skipped": "catálogo al día"}
-                    else:
-                        stats = ing.crawl(full=True if args.full else None, run_id=record.run_id)
+                    stats: dict[str, Any] = ing.crawl(
+                        full=args.full, run_id=record.run_id, budget_s=budget_s
+                    )
                 elif args.cmd == "download":
                     stats = ing.download(max_units=args.max_units, budget_s=budget_s)
                 else:
-                    stats = {
-                        "crawl": ing.crawl(run_id=record.run_id),
-                        "download": ing.download(budget_s=budget_s),
-                    }
-            record.n_series[source] = int(
-                stats.get("series", stats.get("crawl", {}).get("series", 0))
-                if isinstance(stats.get("crawl", {}), dict)
-                else 0
-            )
+                    stats = ing.update(budget_s=budget_s, run_id=record.run_id)
+            crawl_stats = stats.get("crawl", stats)
+            record.n_series[source] = int(crawl_stats.get("series", 0))
             record.details = {"command": args.cmd, **stats}
     finally:
         adapter.close()
     print(json.dumps(stats, indent=2, ensure_ascii=False, default=str))
-    dl_stats = stats.get("download", stats) if isinstance(stats, dict) else {}
-    return EXIT_PENDING if dl_stats.get("units_pending") else 0
+    return EXIT_PENDING if pending(stats) else 0
+
+
+def pending(stats: dict[str, Any]) -> bool:
+    """¿Quedó trabajo para la próxima corrida (crawl o descarga cortados por presupuesto)?"""
+    parts = [stats[k] for k in ("crawl", "download") if k in stats] or [stats]
+    return any(p.get("units_pending") for p in parts)
 
 
 class _NullAdapter:
