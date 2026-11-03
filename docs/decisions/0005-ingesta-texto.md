@@ -104,9 +104,34 @@ govinfo no publica un límite de solicitudes; se usan 2 req/s y reintentos con b
 - Vistas DuckDB locales `text_docs`, `term_freq` y `text_ingest` en `src/catalog.py`. En R2 no
   se crean todavía (un glob vacío hace fallar la vista); se consultan sobre la copia local.
 
-## Volumen y tiempo
+## Volumen y tiempo (medido el 2026-11-03 en un contenedor de 4 vCPU y 16 GB)
 
-Medido en este contenedor el 2026-11-03; ver la sección "Medición" para las cifras.
+| Medición | Documentos | `term_freq` | Parquet | Tiempo | RSS máx. |
+|---|---|---|---|---|---|
+| EDGAR 2024Q1 completo (el trimestre más grande) | 4.918 presentaciones; 7.729 secciones `ok` | 2.462.173 filas | 35,0 MB (+0,6 MB `text_docs`) | 1.412 s (3,5 presentaciones/s) | 4,0 GB |
+| Federal Register 2024-01 | 2.097 | 178.399 filas | 2,2 MB | 18,7 s | — |
+| Federal Register 2000-02 | 2.731 | 150.777 filas | 1,9 MB | 14,8 s | — |
+
+Linaje de 2024Q1:
+- **Item 1A:** 3.803 `ok`, 869 `muy_corta`, 72 `sin_seccion` y 1 `duplicado`.
+- **Item 7:** 3.926 `ok`, 769 `muy_corta` y 50 `sin_seccion`.
+- **Excluidos:** 173 (168 10-K/A y 5 10-KT).
+- **Qué son las `muy_corta`:** casi siempre el encabezado solo (mediana de 31 caracteres en 1A y 103 en 7). Una muestra al azar resultó ser toda de fideicomisos de ABS (hipotecarios, de autos), cuyo Item 1A dice "Omitted".
+
+10-K + 10-K405 por trimestre:
+- 2008: 6.330 / 965 / 663 / 788 (≈ 8.700 al año).
+- 2024: 4.980 / 1.104 / 413 / 381 (≈ 6.900 al año).
+
+Extrapolación para la carga inicial:
+
+| Fuente | Presentaciones o docs | `term_freq` | Parquet | Tiempo |
+|---|---|---|---|---|
+| EDGAR 2006–2026 | ~165k presentaciones | ~75–90 M filas | ~1,0–1,3 GB | ~13–14 h (3 corridas de Actions de ~5 h) |
+| Federal Register 2000–2026 (322 meses) | ~750k docs | ~53 M filas | ~0,65 GB | ~1,5 h |
+
+- El total queda en ~2 GB nuevos en R2, que con lo actual (~1 GB) da ~3 GB de los 10 GB gratuitos.
+- En régimen, la corrida semanal reprocesa los periodos abiertos: un trimestre de EDGAR (≤ 25 min en Q1) y uno o dos meses del Federal Register.
+- **Cómo se estimaron las filas de los trimestres chicos:** se escalan con N^0,7 (`min_doc_count` poda más cuando hay menos documentos). Una cota lineal da cifras parecidas.
 
 ## Riesgos
 
