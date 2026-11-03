@@ -383,6 +383,22 @@ def test_actions_not_on_node20():
                 assert line.split("uses:")[1].strip() in allowed, f"{wf.name}: {line.strip()}"
 
 
+def test_initial_download_marker_reaches_r2():
+    # En Actions la máquina es nueva en cada corrida: el marcador solo existe si se sincronizó.
+    text = (INFRA / "run_tramos.sh").read_text()
+    marker = text.index('touch "$STATE/initial_download.done"')
+    assert "sync_r2" in text[marker:], "el último sync debe ir después del marcador"
+    # Y la entrada de Actions decide con ese marcador entre inicial y semanal.
+    actions = (INFRA / "run_actions.sh").read_text()
+    assert "initial_download.done" in actions and "infra/weekly_update.sh" in actions
+
+
+def test_install_rclone_no_sigpipe():
+    # `rclone version | head -n 1` con pipefail falla al azar con 141 (SIGPIPE).
+    text = (INFRA / "install_rclone.sh").read_text()
+    assert "| head" not in text
+
+
 TEXT_PATHS = (
     "processed/text_docs",
     "processed/term_freq",
