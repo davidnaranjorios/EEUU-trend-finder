@@ -86,6 +86,40 @@ fred:
   updates_fallback_days: 13       # series/updates solo cubre las dos últimas semanas
   verification_seed: 20261020
 
+# Fuentes de la Fase 4 (ADR 0005). Solo parámetros de acceso y de escritura: las unidades
+# (encuestas, tablas, datasets) salen del catálogo de cada fuente, nunca de esta lista.
+# Keys en el entorno: BLS_API_KEY, BEA_API_KEY, CENSUS_API_KEY; download.bls.gov exige un
+# User-Agent con contacto, que se lee de SEC_USER_AGENT (decisión del 2026-11-03).
+sources:
+  n_buckets: 64
+  user_agent_env: SEC_USER_AGENT
+  bls:
+    requests_per_minute: 60       # download.bls.gov no publica cupo; ritmo prudente
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    # Unidad entera excluida por una misma regla de fila (p. ej. encuesta sin datos recientes)
+    # con al menos este número de series: una fila de linaje agregada (null = una por serie).
+    lineage_aggregate_min_series: 100000
+  bea:
+    requests_per_minute: 80       # límite oficial: 100/min, 100 MB/min, 30 errores/min
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    lineage_aggregate_min_series: 100000
+  census:
+    requests_per_minute: 60       # sin cupo publicado con key
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    lineage_aggregate_min_series: 100000
+
 logging:
   level: INFO
   runs_file: data/logs/runs.jsonl

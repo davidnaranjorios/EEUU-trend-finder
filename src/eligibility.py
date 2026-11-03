@@ -56,7 +56,32 @@ def classify(
     cfg: dict[str, Any],
     today: date,
 ) -> list[dict[str, Any]]:
-    """Una decisión por serie: `group`, `rule`, `detail`, `geo_level`, `frequency`, ..."""
+    """Embudo de FRED: traduce fred_catalog + tags geográficos al catálogo neutral."""
+    rows = []
+    for r in catalog:
+        geo_level, geo_detail = geo_level_of(attrs.get(r["series_id"]))
+        rows.append(
+            {
+                **r,
+                "frequency": FREQ_MAP.get(r["frequency_short"] or ""),
+                "frequency_raw": r["frequency_short"],
+                "geo_level": geo_level,
+                "geo_detail": geo_detail,
+            }
+        )
+    return classify_rows(rows, cfg, today)
+
+
+def classify_rows(
+    catalog: Iterable[dict[str, Any]], cfg: dict[str, Any], today: date
+) -> list[dict[str, Any]]:
+    """Una decisión por serie del catálogo neutral (todas las fuentes).
+
+    Cada fila trae `series_id, title, frequency` (código del esquema o None), `frequency_raw`,
+    `units, seasonal_adjustment, observation_start, observation_end, discontinued,
+    copyrighted, geo_level, geo_detail`. Devuelve `group_name`, `rule`, `detail`, `geo_level`,
+    `frequency` y `copyrighted` por serie, ordenadas por id.
+    """
     el = cfg["eligibility"]
     max_stale = el["max_staleness_days"]
     min_days = el["min_history_years"] * 365.25
@@ -64,7 +89,7 @@ def classify(
     active: list[dict[str, Any]] = []
 
     for r in catalog:
-        freq = FREQ_MAP.get(r["frequency_short"] or "")
+        freq = r["frequency"]
         base = {
             "series_id": r["series_id"],
             "frequency": freq,  # NULL si no está soportada; el código va en `detail`
@@ -80,7 +105,7 @@ def classify(
                 **base,
                 "group_name": "excluida",
                 "rule": "frecuencia_no_soportada",
-                "detail": r["frequency_short"],
+                "detail": r["frequency_raw"],
             }
         elif start is None or end is None:
             out[r["series_id"]] = {**base, "group_name": "excluida", "rule": "sin_fechas"}
@@ -114,8 +139,7 @@ def classify(
 
     # Reglas 5 y 6: nivel geográfico y grupo de series nuevas.
     for r in keepers:
-        a = attrs.get(r["series_id"])
-        geo_level, geo_detail = geo_level_of(a)
+        geo_level, geo_detail = r["geo_level"] or "sin_geografia", r["geo_detail"]
         history = (r["observation_end"] - r["observation_start"]).days
         decision = {**r["_base"], "geo_level": geo_level, "detail": geo_detail}
         if geo_level == "sin_geografia":
