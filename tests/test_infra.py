@@ -275,8 +275,8 @@ def test_state_and_logs_round_trip_through_r2():
     pull = (INFRA / "pull_r2.sh").read_text()
     sync = (INFRA / "sync_r2.sh").read_text()
     assert "rclone copy" in pull and "rclone sync" not in pull  # traer nunca borra
-    assert "set -- processed logs" in pull and 'for dir in "$@"' in pull
-    assert "set -- processed exports logs" in sync and 'for dir in "$@"' in sync
+    assert "set -- processed signals logs" in pull and 'for dir in "$@"' in pull
+    assert "set -- processed signals exports logs" in sync and 'for dir in "$@"' in sync
     entry = (INFRA / "run_actions.sh").read_text()
     assert "initial_download.done" in entry and "run_tramos.sh" in entry
     assert "weekly_update.sh" in entry

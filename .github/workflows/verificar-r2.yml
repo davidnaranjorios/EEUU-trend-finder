@@ -31,7 +31,7 @@ jobs:
           {
             echo "## R2: $BUCKET"
             echo '```'
-            for dir in processed exports logs _trash; do
+            for dir in processed signals exports logs _trash; do
               echo "$dir: $(rclone size "r2:$BUCKET/$dir" --fast-list --json)"
             done
             rclone cat "r2:$BUCKET/exports/funnel.json" | head -c 4000

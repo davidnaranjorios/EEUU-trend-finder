@@ -61,6 +61,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if not isinstance(n, int) or n < 99:
         raise ConfigError("fdr.calibration.n_resamples debe ser un entero >= 99")
 
+    _validate_detect(_section(cfg, "detect"))
     _validate_fred(_section(cfg, "fred"))
     _validate_eligibility(_section(cfg, "eligibility"))
     _validate_vintages(_section(cfg, "vintages"))
@@ -100,6 +101,39 @@ def _validate_eligibility(el: dict[str, Any]) -> None:
         re.compile(regex)
     except (TypeError, re.error) as exc:
         raise ConfigError(f"eligibility.variants.transformed_units_regex inválida: {exc}") from exc
+
+
+DETECTORS = ("slope", "regime")
+GRIDS = ("M", "Q", "A")
+
+
+def _validate_detect(d: dict[str, Any]) -> None:
+    dets = d.get("detectors")
+    if not isinstance(dets, list) or not dets or not set(dets) <= set(DETECTORS):
+        raise ConfigError(f"detect.detectors debe ser una lista no vacía de {DETECTORS}")
+    win = d.get("slope_window")
+    if not isinstance(win, dict) or set(win) != set(GRIDS):
+        raise ConfigError(f"detect.slope_window debe definir las grillas {GRIDS}")
+    if any(not isinstance(v, int) or v < 3 for v in win.values()):
+        raise ConfigError("detect.slope_window: enteros >= 3")
+    for key in ("lookback_years", "workers", "slope_min_baseline"):
+        if not isinstance(d.get(key), int) or d[key] < 1:
+            raise ConfigError(f"detect.{key} debe ser un entero positivo")
+    if not isinstance(d.get("regime_escalate"), int) or d["regime_escalate"] < 0:
+        raise ConfigError("detect.regime_escalate debe ser un entero >= 0")
+    if not isinstance(d.get("phi_margin"), int | float) or d["phi_margin"] < 0:
+        raise ConfigError("detect.phi_margin debe ser >= 0")
+    if not isinstance(d.get("winsor_mad"), int | float) or d["winsor_mad"] <= 0:
+        raise ConfigError("detect.winsor_mad debe ser positivo")
+    share = d.get("max_gap_share")
+    if not isinstance(share, int | float) or not 0 <= share < 1:
+        raise ConfigError("detect.max_gap_share debe estar en [0, 1)")
+    tail = d.get("tail")
+    if not isinstance(tail, dict) or tail.get("method") not in ("gpd", "none"):
+        raise ConfigError("detect.tail.method debe ser 'gpd' o 'none'")
+    pelt = d.get("pelt")
+    if not isinstance(pelt, dict) or not isinstance(pelt.get("jump"), int) or pelt["jump"] < 1:
+        raise ConfigError("detect.pelt.jump debe ser un entero >= 1")
 
 
 def _validate_vintages(v: dict[str, Any]) -> None:

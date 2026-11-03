@@ -179,6 +179,12 @@ infraestructura (GitHub Actions + R2): ADR 0004 y `docs/infra/github-actions.md`
 ejecución no duplica filas (test).
 
 ### Fase 2 — Detector numérico + FDR
+Hecho: detectores `slope` (Theil-Sen, persistencia dentro del estadístico) y `regime` (CUSUM;
+PELT solo fecha), stationary bootstrap con índices compartidos y post-blackening AR(1), cola
+GPD para el piso del p, BH decide y BY compara. Diseño y mediciones: ADR 0007.
+Uso: `uv run python -m src.detect run [--shard I/N --run-id ID] | fdr --run-id ID | report`;
+en Actions, `.github/workflows/detectores.yml`. Tablas: `detector_tests` y `detector_runs`
+(`processed/lineage/`), `signals` (`data/signals/`).
 **Terminado cuando** (tests):
 - sobre datos sintéticos de ruido puro —incluyendo ruido AR(1) y **correlación entre series**—
   la tasa de falsos descubrimientos queda dentro de lo esperado por q;

@@ -9,7 +9,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
 # shellcheck source=infra/r2_env.sh
 source infra/r2_env.sh
-if [[ $# -eq 0 ]]; then set -- processed logs; fi
+if [[ $# -eq 0 ]]; then set -- processed signals logs; fi
 for dir in "$@"; do
   mkdir -p "data/$dir"
   rc=0

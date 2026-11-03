@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sincroniza data/processed, data/exports y data/logs a Cloudflare R2 (ADR 0002).
+# Sincroniza data/processed, data/signals, data/exports y data/logs a Cloudflare R2 (ADR 0002).
 # Con argumentos, solo esas rutas bajo data/ (p. ej. `sync_r2.sh processed/term_freq logs`):
 # así la ingesta de texto no toca las tablas de FRED (ADR 0005).
 #
@@ -23,7 +23,7 @@ if ! find "$PROCESSED" -name '*.parquet' -print -quit 2>/dev/null | grep -q .; t
 fi
 uv run --quiet python -m src.ingest.store compact
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-if [[ $# -eq 0 ]]; then set -- processed exports logs; fi
+if [[ $# -eq 0 ]]; then set -- processed signals exports logs; fi
 for dir in "$@"; do
   [[ -d "data/$dir" ]] || continue
   # Una tabla local sin Parquet borraría su copia en R2: se salta (el estado es JSON).
