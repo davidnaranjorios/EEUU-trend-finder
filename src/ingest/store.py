@@ -192,3 +192,37 @@ def read_table(
     finally:
         con.close()
     return table.cast(spec.schema)
+
+
+# --- Particiones por periodo (texto, ADR 0005) ------------------------------------------------
+
+
+def replace_partition(
+    table: pa.Table, spec: TableSpec, root: Path, *, source: str, partition: str
+) -> int:
+    """Reemplaza `<root>/<source>/<partition>/` completa por `table` (un archivo); idempotente.
+
+    Las tablas de texto se escriben por periodo: reprocesar un periodo lo reescribe entero, así
+    que volver a correr no duplica filas ni archivos. Devuelve el número de filas escritas.
+    """
+    validate(table, spec)
+    source_dir = Path(root) / source
+    recover(source_dir)
+    part_dir = source_dir / partition
+    if part_dir.exists():
+        _swap_bucket(part_dir, _conform(table, spec))
+    else:
+        _write_part(part_dir, _conform(table, spec))
+    return table.num_rows
+
+
+def read_partitions(spec: TableSpec, root: Path, *, source: str) -> pa.Table:
+    """Todas las particiones por periodo de `source` (vacía con su esquema si no hay)."""
+    source_dir = Path(root) / source
+    recover(source_dir)
+    files = sorted(source_dir.glob("*/*.parquet")) if source_dir.is_dir() else []
+    if not files:
+        return spec.schema.empty_table()
+    return pa.concat_tables([pq.read_table(f).select(spec.schema.names) for f in files]).cast(
+        spec.schema
+    )
