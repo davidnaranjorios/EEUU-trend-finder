@@ -587,3 +587,98 @@ def test_is_stale(make):
     assert not ing.is_stale("crawl") and ing.is_stale("crawl-meta")
     make.now.t = T0 + timedelta(days=31)
     assert make().is_stale("crawl")
+
+
+# --- vintages: motivo en el linaje y ventanas que FRED rechaza ---------------------------------
+
+
+def vintage_lineage(paths):
+    from src.schemas import VINTAGE_LINEAGE
+
+    return {
+        r["series_id"]: r
+        for r in read_table(VINTAGE_LINEAGE, paths.vintage_lineage, source=SOURCE).to_pylist()
+    }
+
+
+def test_vintages_not_in_alfred_has_reason_and_is_not_retried(make, fake):
+    fake.not_in_alfred.add("BBB")
+    make.cfg["vintages"]["sample_size"] = 0
+    ing = prepare(make)
+    stats = ing.vintages(ids=["AAA", "BBB"], run_id="v1")
+    assert stats["fetched"] == 1 and stats["no_data"] == 1 and stats["series_errors"] == 0
+    assert stats["pending"] == 0
+    lin = vintage_lineage(make.paths)
+    assert lin["AAA"]["status"] == "ok" and lin["AAA"]["n_rows"] > 0
+    assert lin["AAA"]["detail"] is None
+    assert lin["BBB"]["status"] == "no_existe_en_alfred" and lin["BBB"]["n_rows"] == 0
+    assert "does not exist in ALFRED" in lin["BBB"]["detail"]
+    # La segunda corrida no vuelve a pedirla mientras no cambie last_updated.
+    before = fake.count("series/vintagedates", series_id="BBB")
+    assert make().vintages(ids=["AAA", "BBB"], run_id="v2")["to_fetch"] == 0
+    assert fake.count("series/vintagedates", series_id="BBB") == before
+    # El motivo vigente aparece en los conteos de verificación.
+    from src.catalog import summary
+
+    vs = summary(connect(make.paths.processed))["vintage_lineage"]
+    assert vs == {"no_existe_en_alfred": {"series": 1, "ids": ["BBB"]}, "ok": {"series": 1}}
+
+
+def test_vintages_transient_error_is_recorded_and_retried(make, fake):
+    fake.missing.add("AAA")  # series/observations responde 400 genérico
+    make.cfg["vintages"]["sample_size"] = 0
+    ing = prepare(make)
+    stats = ing.vintages(ids=["AAA"], run_id="v1")
+    assert stats["series_errors"] == 1 and stats["no_data"] == 0
+    assert vintage_lineage(make.paths)["AAA"]["status"] == "error_api"
+    fake.missing.clear()
+    assert make().vintages(ids=["AAA"], run_id="v2")["fetched"] == 1
+
+
+def test_vintages_window_rejected_by_cap_is_split(make, fake):
+    # Como DBAA y FIN14AAVOL: FRED cuenta una fecha más que series/vintagedates.
+    fake.max_vintages = 100
+    fake.vintage_count_extra = 1
+    make.cfg["vintages"]["max_vintage_dates_per_request"] = 100
+    make.cfg["vintages"]["sample_size"] = 0
+    ing = prepare(make)
+    stats = ing.vintages(ids=["AAA"], run_id="v1")
+    assert stats["fetched"] == 1 and stats["series_errors"] == 0
+    aaa = [r for r in series_rows(make.paths).to_pylist() if r["series_id"] == "AAA"]
+    assert len(aaa) == 320  # el mismo resultado que sin el rechazo
+    assert vintage_lineage(make.paths)["AAA"]["status"] == "ok"
+
+
+# --- compactación: una segunda corrida no aumenta el número de archivos ------------------------
+
+
+def test_second_run_does_not_increase_files(make, fake):
+    from src.ingest.store import compact, count_files
+
+    ing = prepare(make)
+    ing.download()
+    ing.vintages(ids=["AAA", "FFF"], run_id="v1")
+    assert count_files(make.paths.processed) > len(list(make.paths.processed.rglob("??")))
+    compact(make.paths.processed)
+    after_first = count_files(make.paths.processed)
+    buckets = [p for p in make.paths.processed.rglob("??") if p.is_dir()]
+    assert all(len(list(b.glob("*.parquet"))) <= 1 for b in buckets)
+    rows_first = series_rows(make.paths).num_rows
+
+    # Segunda corrida completa con una revisión: más filas, mismos archivos.
+    fake.revise("AAA", "2026-08-01", "999.0", on="2026-10-25")
+    fake.infos["AAA"]["last_updated"] = "2026-10-25 07:50:02-05"
+    fake.updates = ["AAA"]
+    fake.today = "2026-10-27"
+    make.now.t = T0 + timedelta(days=7)
+    ing2 = make()
+    ing2.update()
+    ing2.vintages(ids=["AAA", "FFF"], run_id="v2")
+    run_funnel(make, run_id="run-2")
+    res = compact(make.paths.processed)
+    assert res.buckets_compacted > 0
+    assert count_files(make.paths.processed) == after_first
+    assert series_rows(make.paths).num_rows == rows_first + 1  # la nueva vintage de AAA
+    # Compactar de nuevo no toca nada.
+    again = compact(make.paths.processed)
+    assert again.buckets_compacted == 0 and again.files_after == after_first

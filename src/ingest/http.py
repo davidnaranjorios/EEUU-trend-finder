@@ -105,19 +105,56 @@ class ApiClient:
             with gzip.open(raw_path, "rt", encoding="utf-8") as fh:
                 return json.load(fh)["response"]
 
+        resp = self._request(endpoint, params)
+        data = resp.json()
+        self._save_raw(raw_path, endpoint, params, data)
+        return data
+
+    def get_bytes(self, endpoint: str, params: dict[str, Any] | None = None) -> bytes:
+        """Cuerpo de `endpoint` como bytes (descomprimido si llegó con gzip). Sin copia raw."""
+        return self._request(endpoint, params or {}).content
+
+    def download(self, endpoint: str, dest: Path, params: dict[str, Any] | None = None) -> int:
+        """Descarga `endpoint` a `dest` en streaming (archivos grandes); devuelve los bytes."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.tmp")
+
+        def _stream() -> tuple[httpx.Response, int]:
+            with self._http.stream("GET", endpoint, params={**(params or {}), **self._auth}) as r:
+                if r.status_code != 200:
+                    r.read()
+                    return r, 0
+                n = 0
+                with tmp.open("wb") as fh:
+                    for chunk in r.iter_bytes(1 << 20):
+                        fh.write(chunk)
+                        n += len(chunk)
+                return r, n
+
+        n = self._retrying(endpoint, _stream)
+        tmp.replace(dest)
+        return n
+
+    def _request(self, endpoint: str, params: dict[str, Any]) -> httpx.Response:
+        def _get() -> tuple[httpx.Response, httpx.Response]:
+            resp = self._http.get(endpoint, params={**params, **self._auth})
+            return resp, resp
+
+        return self._retrying(endpoint, _get)
+
+    def _retrying(self, endpoint: str, attempt_fn: Callable[[], tuple[httpx.Response, Any]]) -> Any:
+        """Ejecuta `attempt_fn` con rate limit y reintentos; devuelve su resultado si hay 200."""
         for attempt in range(self.max_retries + 1):
             self._limiter.wait()
             self.n_requests += 1
             retry_after: float | None = None
             try:
-                resp = self._http.get(endpoint, params={**params, **self._auth})
+                resp, out = attempt_fn()
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 reason = type(exc).__name__
             else:
                 if resp.status_code == 200:
-                    data = resp.json()
-                    self._save_raw(raw_path, endpoint, params, data)
-                    return data
+                    return out
                 if resp.status_code not in RETRYABLE_STATUS:
                     raise ApiError(
                         f"{endpoint}: HTTP {resp.status_code}: {_error_message(resp)}",
@@ -170,7 +207,7 @@ class ApiClient:
 def _error_message(resp: httpx.Response) -> str:
     try:
         return str(resp.json().get("error_message", ""))[:300]
-    except ValueError:
+    except (ValueError, AttributeError):
         return resp.text[:300]
 
 

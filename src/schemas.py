@@ -70,16 +70,19 @@ TEXT_DOCS = TableSpec(
     key=("source", "doc_id", "section"),
 )
 
+# `section` separa Item 1A / Item 7 (EDGAR) o el tipo de documento (Federal Register) sin
+# convertirlos en fuentes distintas: para la triangulación, la fuente es `source`.
 TERM_FREQ = TableSpec(
     name="term_freq",
     schema=_schema(
         ("source", pa.string(), False),
+        ("section", pa.string(), False),
         ("period", pa.string(), False),
         ("term", pa.string(), False),
         ("doc_count", pa.int64(), False),
         ("total_docs", pa.int64(), False),
     ),
-    key=("source", "period", "term"),
+    key=("source", "section", "period", "term"),
 )
 
 SIGNALS = TableSpec(
@@ -120,6 +123,23 @@ ELIGIBILITY = TableSpec(
         ("geo_level", pa.string(), True),
         ("frequency", pa.string(), True),
         ("copyrighted", pa.bool_(), False),
+        ("decided_at", pa.timestamp("s", tz="UTC"), False),
+    ),
+    key=("run_id", "source", "series_id"),
+)
+
+# Resultado de pedir el historial ALFRED de cada serie de la muestra de vintages (ADR 0002).
+# Una fila por serie intentada en cada corrida; el motivo vigente es el de la última corrida.
+VINTAGE_STATUSES = ("ok", "no_existe_en_alfred", "error_api")
+VINTAGE_LINEAGE = TableSpec(
+    name="vintage_lineage",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("series_id", pa.string(), False),
+        ("status", pa.string(), False),
+        ("n_rows", pa.int64(), False),
+        ("detail", pa.string(), True),
         ("decided_at", pa.timestamp("s", tz="UTC"), False),
     ),
     key=("run_id", "source", "series_id"),
@@ -183,6 +203,28 @@ SERIES_TERM_LINKS = TableSpec(
     key=("run_id", "source", "series_id", "text_source", "term"),
 )
 
+# Estados del linaje de texto: por qué cada documento/sección entró o no a las frecuencias.
+# `excluido` lleva el motivo en `detail` (formulario fuera de alcance, error de descarga...).
+TEXT_INGEST_STATUSES = ("ok", "sin_seccion", "muy_corta", "duplicado", "excluido")
+
+# Una fila por documento y sección de cada periodo procesado (la partición del periodo se
+# reemplaza completa al reprocesarlo). `section = "*"` marca decisiones sobre el documento entero.
+TEXT_INGEST = TableSpec(
+    name="text_ingest",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("doc_id", pa.string(), False),
+        ("section", pa.string(), False),
+        ("period", pa.string(), False),
+        ("status", pa.string(), False),
+        ("detail", pa.string(), True),
+        ("n_chars", pa.int64(), True),
+        ("decided_at", pa.timestamp("s", tz="UTC"), False),
+    ),
+    key=("run_id", "source", "doc_id", "section"),
+)
+
 CLUSTERS = TableSpec(
     name="clusters",
     schema=_schema(
@@ -205,10 +247,12 @@ ALL_SPECS = {
         TERM_FREQ,
         SIGNALS,
         ELIGIBILITY,
+        VINTAGE_LINEAGE,
         DETECTOR_RUNS,
         DETECTOR_TESTS,
         SERIES_TERM_LINKS,
         CLUSTERS,
+        TEXT_INGEST,
     )
 }
 
@@ -272,6 +316,11 @@ def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
             [list(ELIGIBILITY_GROUPS)],
             "grupo fuera de dominio o regla vacía",
         ),
+        VINTAGE_LINEAGE.name: (
+            "status NOT IN (SELECT unnest(?)) OR n_rows < 0 OR (status = 'ok') <> (detail IS NULL)",
+            [list(VINTAGE_STATUSES)],
+            "status fuera de dominio, n_rows negativo o motivo faltante",
+        ),
         DETECTOR_RUNS.name: (
             "n_tests < 0 OR n_bh < 0 OR n_by < 0 OR n_bh > n_tests OR n_by > n_tests "
             "OR q <= 0 OR q >= 1",
@@ -284,6 +333,11 @@ def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
             "score fuera de [0,1]",
         ),
         CLUSTERS.name: ("role NOT IN ('representante', 'miembro')", [], "rol inválido"),
+        TEXT_INGEST.name: (
+            "status NOT IN (SELECT unnest(?)) OR n_chars < 0",
+            [list(TEXT_INGEST_STATUSES)],
+            "estado fuera de dominio o n_chars negativo",
+        ),
         SIGNALS.name: ("n_tests < 1 OR run_id = ''", [], "n_tests < 1 o run_id vacío"),
         DETECTOR_TESTS.name: (
             "p_value NOT BETWEEN 0 AND 1 OR q_value NOT BETWEEN 0 AND 1 "

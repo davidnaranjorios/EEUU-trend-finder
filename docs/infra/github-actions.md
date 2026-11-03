@@ -43,6 +43,35 @@ vuelve a lanzarla: continúa donde quedó.
 
 A partir de ahí corre sola los domingos a las 06:13 UTC.
 
+## 5. Regla de expiración de `_trash/` (una vez)
+
+Cada sync manda a `_trash/<fecha>/` lo que borra o reemplaza en R2: la compactación reemplaza
+los Parquet que cambiaron cada semana (~0,5 GB). Sin una regla, `_trash/` crece sin límite y se
+come la capa gratuita (10 GB). Con 30 días quedan ~2–2,5 GB como respaldo.
+
+Pasos (documentación de Cloudflare "Object lifecycles", verificada el 2026-11-03):
+
+1. En el panel de Cloudflare: **R2 object storage → Overview** y elige el bucket
+   (`trend-finder`).
+2. Pestaña **Settings** → sección **Object Lifecycle Rules** → **Add rule**.
+3. Completa la regla:
+   - nombre: `expirar-trash`;
+   - alcance: **solo objetos con el prefijo** `_trash/` (con la barra final; nunca el bucket
+     entero, que borraría los datos);
+   - acción: **borrar objetos** (*delete uploaded objects*) **30 días** después de subidos.
+4. **Save changes**.
+
+Cloudflare borra los objetos vencidos normalmente dentro de las 24 h siguientes; para objetos
+que ya existían al crear la regla puede tardar más.
+
+**Comprobar:** la regla aparece en la lista de *Object Lifecycle Rules* con el prefijo `_trash/`
+y 30 días. El token S3 de la ingesta (*Object Read & Write*) no puede leer ni cambiar reglas
+(eso pide el permiso *Workers R2 Storage Write*), así que la comprobación es en el panel. El
+workflow "Verificar R2" muestra el tamaño de `_trash/`, que debe dejar de crecer pasado un mes.
+
+Alternativa por línea de comandos, con un token de Cloudflare que tenga ese permiso:
+`npx wrangler r2 bucket lifecycle list trend-finder`.
+
 ## Consultar los datos
 
 Desde cualquier máquina con los tres valores de R2 en un `.env`:

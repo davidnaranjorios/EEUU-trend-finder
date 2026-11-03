@@ -271,8 +271,8 @@ def test_state_and_logs_round_trip_through_r2():
     pull = (INFRA / "pull_r2.sh").read_text()
     sync = (INFRA / "sync_r2.sh").read_text()
     assert "rclone copy" in pull and "rclone sync" not in pull  # traer nunca borra
-    assert "for dir in processed logs" in pull
-    assert "for dir in processed exports logs" in sync
+    assert "set -- processed logs" in pull and 'for dir in "$@"' in pull
+    assert "set -- processed exports logs" in sync and 'for dir in "$@"' in sync
     entry = (INFRA / "run_actions.sh").read_text()
     assert "initial_download.done" in entry and "run_tramos.sh" in entry
     assert "weekly_update.sh" in entry
@@ -355,7 +355,87 @@ def test_verify_workflow_is_read_only():
 
 
 def test_workflow_summaries_read_local_copy():
-    for wf in ("ingesta.yml", "verificar-r2.yml"):
-        text = (REPO_ROOT / ".github" / "workflows" / wf).read_text()
-        assert "summary --r2" not in text  # httpfs sobre miles de Parquet no terminó en 30 min
-    assert "infra/pull_r2.sh" in (REPO_ROOT / ".github/workflows/verificar-r2.yml").read_text()
+    ingesta = (REPO_ROOT / ".github/workflows/ingesta.yml").read_text()
+    assert "summary --r2" not in ingesta  # la ingesta nunca depende de httpfs
+    verify = (REPO_ROOT / ".github/workflows/verificar-r2.yml").read_text()
+    assert "infra/pull_r2.sh" in verify
+    # La lectura directa por httpfs (prueba del bloque 0.1) va acotada y no tumba el job.
+    step = verify[verify.index("summary --r2") - 600 : verify.index("summary --r2")]
+    assert "timeout-minutes:" in step and "continue-on-error: true" in step
+
+
+def test_sync_compacts_before_upload_and_export_never_blocks_sync():
+    sync = (INFRA / "sync_r2.sh").read_text()
+    assert sync.index("src.ingest.store compact") < sync.index("rclone sync")
+    for name in ("weekly_update.sh", "run_tramos.sh"):
+        text = (INFRA / name).read_text()
+        assert "py -m src.export >/dev/null || export_rc=$?" in text
+        export_at = text.index("src.export")
+        assert "sync_r2" in text[export_at:]
+
+
+def test_actions_not_on_node20():
+    # Versiones con runs.using: node24 (verificado en sus action.yml, 2026-11-03).
+    allowed = {"actions/checkout@v6", "astral-sh/setup-uv@v7", "actions/upload-artifact@v6"}
+    for wf in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        for line in wf.read_text().splitlines():
+            if "uses:" in line:
+                assert line.split("uses:")[1].strip() in allowed, f"{wf.name}: {line.strip()}"
+
+
+def test_initial_download_marker_reaches_r2():
+    # En Actions la máquina es nueva en cada corrida: el marcador solo existe si se sincronizó.
+    text = (INFRA / "run_tramos.sh").read_text()
+    marker = text.index('touch "$STATE/initial_download.done"')
+    assert "sync_r2" in text[marker:], "el último sync debe ir después del marcador"
+    # Y la entrada de Actions decide con ese marcador entre inicial y semanal.
+    actions = (INFRA / "run_actions.sh").read_text()
+    assert "initial_download.done" in actions and "infra/weekly_update.sh" in actions
+
+
+def test_install_rclone_no_sigpipe():
+    # `rclone version | head -n 1` con pipefail falla al azar con 141 (SIGPIPE).
+    text = (INFRA / "install_rclone.sh").read_text()
+    assert "| head" not in text
+
+
+TEXT_PATHS = (
+    "processed/text_docs",
+    "processed/term_freq",
+    "processed/lineage/text_ingest",
+    "processed/ingest_state/text",
+)
+
+
+def _text_workflow():
+    import yaml
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ingesta-texto.yml").read_text())
+    wf["on"] = wf.pop(True, wf.get("on"))
+    return wf
+
+
+def test_text_workflow_shares_lock_and_secrets():
+    wf = _text_workflow()
+    assert wf["concurrency"] == _workflow()["concurrency"]  # nunca dos sync a R2 a la vez
+    assert wf["permissions"] == {"contents": "read"}
+    job = wf["jobs"]["texto"]
+    assert job["timeout-minutes"] < 360
+    for name in ("SEC_USER_AGENT", "CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID"):
+        assert job["env"][name] == "${{ secrets." + name + " }}"
+    assert "FRED_API_KEY" not in job["env"]
+    runs = [s.get("run", "") for s in job["steps"]]
+    pull = next(i for i, r in enumerate(runs) if "pull_r2.sh" in r)
+    work = next(i for i, r in enumerate(runs) if "run_texto.sh" in r)
+    assert pull < work
+    assert all(p in runs[pull] for p in TEXT_PATHS)  # solo trae las tablas de texto
+
+
+def test_text_tramos_sync_only_text_paths():
+    text = (INFRA / "run_texto.sh").read_text()
+    loop = text[text.index("tramos() {") : text.index("\n}", text.index("tramos() {"))]
+    assert "sync_r2" in loop and "--max-periods" in loop
+    assert all(p in text for p in TEXT_PATHS)
+    assert 'infra/sync_r2.sh "${TEXT_PATHS[@]}"' in text  # nunca el processed/ completo
+    pull = (INFRA / "pull_r2.sh").read_text()
+    assert "rc -eq 3" in pull  # tabla aún inexistente en R2: no falla la primera corrida

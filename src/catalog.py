@@ -19,6 +19,10 @@ from src.schemas import (
     SERIES,
     SERIES_META,
     SIGNALS,
+    TERM_FREQ,
+    TEXT_DOCS,
+    TEXT_INGEST,
+    VINTAGE_LINEAGE,
     TableSpec,
 )
 
@@ -27,6 +31,11 @@ VIEWS: dict[str, tuple[str, TableSpec]] = {
     "series": ("series", SERIES),
     "series_meta": ("series_meta", SERIES_META),
     "eligibility": ("lineage/eligibility", ELIGIBILITY),
+    "vintage_lineage": ("lineage/vintages", VINTAGE_LINEAGE),
+    # Texto (ADR 0005): particiones por periodo, <dir>/<fuente>/<periodo>/.
+    "text_docs": ("text_docs", TEXT_DOCS),
+    "term_freq": ("term_freq", TERM_FREQ),
+    "text_ingest": ("lineage/text_ingest", TEXT_INGEST),
 }
 # Salidas de los detectores (Fase 2). Solo en la conexión local: en Actions se consultan sobre la
 # copia traída de R2, y sobre R2 una vista sin archivos fallaría antes de la primera corrida.
@@ -36,6 +45,8 @@ DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
     "detector_tests": ("processed/lineage/detector_tests", DETECTOR_TESTS),
     "signals": ("signals", SIGNALS),
 }
+# Nombre del subdirectorio de partición: bucket de dos dígitos (series) o periodo (texto).
+PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*"}
 # Credenciales de R2 en .env (nombres estándar de S3, que también leen rclone y DuckDB).
 # Nunca van en config.yaml.
 R2_ENV = ("CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
@@ -48,7 +59,8 @@ def connect(processed_dir: Path | str, database: str = ":memory:") -> duckdb.Duc
     views = {view: (Path(processed_dir) / sub, spec) for view, (sub, spec) in VIEWS.items()}
     views |= {view: (data_dir / sub, spec) for view, (sub, spec) in DETECT_VIEWS.items()}
     for view, (root, spec) in views.items():
-        files = sorted(root.glob("*/??/*.parquet"))
+        part = PARTITION_GLOB.get(view, "??")
+        files = sorted(root.glob(f"*/{part}/*.parquet"))
         if files:
             listing = ", ".join(_quote(str(f)) for f in files)
             con.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet([{listing}])")
@@ -85,6 +97,10 @@ def r2_statements(storage: Mapping[str, Any], env: Mapping[str, str]) -> list[st
         f"ACCOUNT_ID {_quote(account_id(env['CLOUDFLARE_ACCOUNT_ID']))})",
     ]
     for view, (subdir, _) in VIEWS.items():
+        if view in PARTITION_GLOB:
+            # Las tablas de texto pueden no existir aún en R2 y DuckDB falla al crear una vista
+            # sobre un glob vacío; se consultan sobre la copia local (infra/pull_r2.sh).
+            continue
         glob = _quote(f"{base}/{subdir}/*/*/*.parquet")
         stmts.append(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({glob})")
     return stmts
@@ -118,6 +134,12 @@ def summary(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         "GROUP BY 1 ORDER BY 2 DESC"
     ).fetchall()
     run_id = con.execute("SELECT max_by(run_id, decided_at) FROM eligibility").fetchone()[0]
+    # Motivo vigente de cada serie de la muestra: el de su último intento.
+    vintage_status = con.execute(
+        "SELECT status, count(*), list(series_id ORDER BY series_id) FILTER (status <> 'ok') "
+        "FROM (SELECT series_id, max_by(status, decided_at) AS status FROM vintage_lineage "
+        "GROUP BY series_id) GROUP BY 1 ORDER BY 1"
+    ).fetchall()
     return {
         "series": {
             "rows": rows,
@@ -128,6 +150,10 @@ def summary(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         },
         "series_meta": con.execute("SELECT count(*) FROM series_meta").fetchone()[0],
         "eligibility": {"run_id": run_id, "groups": dict(groups)},
+        "vintage_lineage": {
+            status: {"series": n, **({"ids": ids} if status != "ok" else {})}
+            for status, n, ids in vintage_status
+        },
     }
 
 

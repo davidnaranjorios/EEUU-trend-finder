@@ -46,16 +46,20 @@ jobs:
           for v in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
             [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
           done
+      # Solo lo que leen los detectores (no el texto) y lo que escriben.
       - name: Traer datos desde R2
-        run: infra/pull_r2.sh
+        run: infra/pull_r2.sh processed/series processed/lineage signals logs
       - name: Detectores
         run: |
           args=()
           [ -n "$MAX_SERIES" ] && args+=(--max-series "$MAX_SERIES")
           nproc
           uv run python -m src.detect run "${args[@]}" | tee data/logs/detectores.md
+      # Solo las tablas de esta corrida: no toca series ni el texto.
       - name: Sincronizar a R2
-        run: infra/sync_r2.sh
+        run: |
+          infra/sync_r2.sh processed/lineage/detector_tests processed/lineage/detector_runs \
+            signals logs
       - name: Resumen
         if: always()
         run: |
