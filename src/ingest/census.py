@@ -63,6 +63,9 @@ from src.ingest.common import SourcePaths, Unit
 from src.ingest.http import ApiClient, ApiError, RateLimiter
 
 SOURCE = "census"
+# Agencia que publica los datos, con el nombre que usa FRED en `release/sources`: el mismo dato
+# bajado de FRED y de aquí cuenta como una sola fuente en la triangulación (ADR 0009).
+AGENCY = "U.S. Census Bureau"
 BASE_URL = "https://api.census.gov"
 CATALOG_ENDPOINT = "/data.json"
 KEY_ENV = "CENSUS_API_KEY"

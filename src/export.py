@@ -11,7 +11,8 @@ Salida en `data/exports/` (se sincroniza a R2 con el resto de data/):
 Tope de tamaño (`exports.max_file_kb`, `exports.max_total_mb`): se calcula todo en memoria y,
 si algo lo pasa, falla sin escribir nada (`ExportTooLarge`).
 Las series con copyright de terceros no se exportan (términos de FRED): solo se cuentan.
-El grafo de cruces serie-término (`crossings_graph.json`) se añade en la Fase 5.
+Los cruces serie-término y el explorador de las 4 fuentes los publica el sitio de la Fase 5
+(`src/report/explorer.py`, ADR 0009).
 
 Uso: `uv run python -m src.export`.
 """

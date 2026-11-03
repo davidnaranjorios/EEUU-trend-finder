@@ -13,11 +13,16 @@ from typing import Any
 import duckdb
 
 from src.schemas import (
+    CLUSTERS,
     DETECTOR_RUNS,
     DETECTOR_TESTS,
     ELIGIBILITY,
+    RANK_CANDIDATES,
+    RANK_EVIDENCE,
+    RANK_RUNS,
     SERIES,
     SERIES_META,
+    SERIES_TERM_LINKS,
     SIGNALS,
     TERM_FREQ,
     TEXT_DOCS,
@@ -44,6 +49,12 @@ DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
     "detector_runs": ("processed/lineage/detector_runs", DETECTOR_RUNS),
     "detector_tests": ("processed/lineage/detector_tests", DETECTOR_TESTS),
     "signals": ("signals", SIGNALS),
+    # Ranking (Fase 5, ADR 0009): partición única "rank".
+    "clusters": ("processed/rank/clusters", CLUSTERS),
+    "series_term_links": ("processed/rank/series_term_links", SERIES_TERM_LINKS),
+    "rank_candidates": ("processed/rank/rank_candidates", RANK_CANDIDATES),
+    "rank_evidence": ("processed/rank/rank_evidence", RANK_EVIDENCE),
+    "rank_runs": ("processed/rank/rank_runs", RANK_RUNS),
 }
 # Nombre del subdirectorio de partición: bucket de dos dígitos (series) o periodo (texto).
 PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*"}

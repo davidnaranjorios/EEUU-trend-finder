@@ -380,7 +380,15 @@ def test_sync_compacts_before_upload_and_export_never_blocks_sync():
 
 def test_actions_not_on_node20():
     # Versiones con runs.using: node24 (verificado en sus action.yml, 2026-11-03).
-    allowed = {"actions/checkout@v6", "astral-sh/setup-uv@v7", "actions/upload-artifact@v6"}
+    # upload-pages-artifact@v5 es compuesta y usa upload-artifact v7 (node24).
+    allowed = {
+        "actions/checkout@v6",
+        "astral-sh/setup-uv@v7",
+        "actions/upload-artifact@v6",
+        "actions/cache@v6",
+        "actions/upload-pages-artifact@v5",
+        "actions/deploy-pages@v5",
+    }
     for wf in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
         for line in wf.read_text().splitlines():
             if "uses:" in line:
@@ -443,3 +451,58 @@ def test_text_tramos_sync_only_text_paths():
     assert 'infra/sync_r2.sh "${TEXT_PATHS[@]}"' in text  # nunca el processed/ completo
     pull = (INFRA / "pull_r2.sh").read_text()
     assert "rc -eq 3" in pull  # tabla aún inexistente en R2: no falla la primera corrida
+
+
+def test_only_ingesta_group_syncs_shared_logs():
+    """logs/ (runs.jsonl) es compartido: solo los workflows del grupo "ingesta", que nunca
+    corren a la vez, lo sincronizan entero. Los demás sincronizan solo su subcarpeta."""
+    for wf in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        import yaml
+
+        data = yaml.safe_load(wf.read_text())
+        group = (data.get("concurrency") or {}).get("group")
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                for line in run.replace("\\\n", " ").splitlines():
+                    if "sync_r2.sh" not in line:
+                        continue
+                    args = line.split("sync_r2.sh", 1)[1].split()
+                    whole_logs = not args or "logs" in args  # sin argumentos = todo
+                    if whole_logs:
+                        assert group == "ingesta", f"{wf.name}: sincroniza logs/ entero"
+
+
+def test_sync_of_logs_never_touches_reporte_subdir(tmp_path):
+    """La sync de logs/ entero (grupo ingesta) excluye logs/reporte/ (workflow Reporte, otro
+    grupo de concurrencia): ni lo sube ni lo borra en R2, también en la verificación."""
+    shutil.copytree(INFRA, tmp_path / "infra")
+    (tmp_path / "data" / "processed" / "t").mkdir(parents=True)
+    (tmp_path / "data" / "processed" / "t" / "x.parquet").write_bytes(b"x")
+    (tmp_path / "data" / "logs" / "reporte").mkdir(parents=True)
+    (tmp_path / "data" / "rank").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.txt"
+    for name in ("rclone", "uv"):
+        (bin_dir / name).write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n')
+        (bin_dir / name).chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "R2_BUCKET": "b",
+        "CLOUDFLARE_ACCOUNT_ID": ACC,
+        "AWS_ACCESS_KEY_ID": KEY,
+        "AWS_SECRET_ACCESS_KEY": SECRET,
+    }
+    res = subprocess.run(
+        ["bash", str(tmp_path / "infra" / "sync_r2.sh"), "logs", "rank"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    lines = [ln for ln in calls.read_text().splitlines() if ln.startswith("rclone ")]
+    logs = [ln for ln in lines if "data/logs " in ln]
+    other = [ln for ln in lines if "data/rank " in ln]
+    assert len(logs) == 2 and all("--exclude reporte/**" in ln for ln in logs)  # sync y check
+    assert other and not any("reporte/**" in ln for ln in other)

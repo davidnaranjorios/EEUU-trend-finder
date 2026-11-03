@@ -1,0 +1,112 @@
+# Ranking y reporte semanal (Fase 5, ADR 0009).
+#
+# Trae de R2 lo que leen el ranking y el reporte, corre `python -m src.rank run` (clusters,
+# cruces término–serie con embeddings locales, triangulación y score) y `python -m src.report
+# build` (sitio estático con la barrera de copyright). Sube a R2 solo sus propias tablas
+# (processed/rank, processed/_internal/embeddings) y el historial (reports/), y guarda el sitio
+# como artefacto. La publicación es un paso aparte, según la variable PUBLISH_TARGET:
+#   - sin definir o "github_pages" (por defecto; repo público con Pages activado, fuente
+#     "GitHub Actions"): job `pages`;
+#   - "cloudflare_pages": infra/publish_site.sh (secrets CLOUDFLARE_API_TOKEN y
+#     CLOUDFLARE_ACCOUNT_ID; variable CF_PAGES_PROJECT);
+#   - "none": solo artefacto.
+# Grupo de concurrencia propio: no escribe rutas de la ingesta ni de los detectores.
+name: Reporte
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publicar (usa la variable PUBLISH_TARGET)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: reporte
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reporte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked --group embed
+      - name: Instalar rclone
+        run: sudo infra/install_rclone.sh
+      - name: Verificar secrets
+        run: |
+          for v in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
+          done
+      - name: Modelo de embeddings (caché)
+        uses: actions/cache@v6
+        with:
+          path: data/cache/models
+          key: embeddings-${{ hashFiles('config.yaml') }}
+          restore-keys: embeddings-
+      - name: Traer datos desde R2
+        run: |
+          infra/pull_r2.sh processed/series processed/series_meta processed/lineage \
+            processed/term_freq processed/_internal/fred_series_attrs \
+            processed/_internal/embeddings processed/rank signals logs reports
+      # Su registro va a logs/reporte/ (config report.runs_file): logs/ entero lo sincroniza solo
+      # el grupo "ingesta"; desde aquí pisaría runs.jsonl de una corrida en paralelo.
+      - name: Ranking
+        run: |
+          mkdir -p data/logs/reporte
+          uv run python -m src.rank run | tee data/logs/reporte/rank.json
+      - name: Reporte
+        run: uv run python -m src.report build | tee data/logs/reporte/report.json
+      - name: Sincronizar a R2
+        run: |
+          infra/sync_r2.sh processed/rank processed/_internal/embeddings reports logs/reporte
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo '## Ranking'; echo '```'; cat data/logs/reporte/rank.json 2>/dev/null || true; echo '```'
+            echo '## Reporte'; echo '```'; cat data/logs/reporte/report.json 2>/dev/null || true; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sitio (artefacto)
+        uses: actions/upload-artifact@v6
+        with:
+          name: sitio-${{ github.run_id }}
+          path: data/site/
+          retention-days: 30
+      - name: Publicar en Cloudflare Pages
+        if: inputs.publish && vars.PUBLISH_TARGET == 'cloudflare_pages'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
+        run: infra/publish_site.sh cloudflare_pages data/site
+      - name: Preparar GitHub Pages
+        if: inputs.publish && (vars.PUBLISH_TARGET || 'github_pages') == 'github_pages'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: data/site/
+
+  pages:
+    needs: reporte
+    if: inputs.publish && (vars.PUBLISH_TARGET || 'github_pages') == 'github_pages'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

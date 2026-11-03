@@ -40,6 +40,9 @@ from src.ingest.http import ApiClient
 from src.ingest.store import read_table
 
 SOURCE = "bls"
+# Agencia que publica los datos, con el nombre que usa FRED en `release/sources`: el mismo dato
+# bajado de FRED y de aquí cuenta como una sola fuente en la triangulación (ADR 0009).
+AGENCY = "U.S. Bureau of Labor Statistics"
 DEFAULT_BASE_URL = "https://download.bls.gov/pub/time.series/"
 # Tablas de códigos más grandes que esto no se cargan en memoria (se registra en el log).
 MAX_MAP_BYTES = 20_000_000

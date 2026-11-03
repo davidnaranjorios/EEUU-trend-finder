@@ -66,6 +66,9 @@ from src.ingest.common import SourcePaths, Unit
 from src.ingest.http import ApiClient, ApiError
 
 SOURCE = "bea"
+# Agencia que publica los datos, con el nombre que usa FRED en `release/sources`: el mismo dato
+# bajado de FRED y de aquí cuenta como una sola fuente en la triangulación (ADR 0009).
+AGENCY = "U.S. Bureau of Economic Analysis"
 BASE_URL = "https://apps.bea.gov/api"
 ENDPOINT = "data"
 KEY_ENV = "BEA_API_KEY"

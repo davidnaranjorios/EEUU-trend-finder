@@ -28,6 +28,10 @@ def test_config_loads_with_defaults():
         (("exports", "max_file_kb"), 0),
         (("exports", "max_total_mb"), -1),
         (("exports", "n_buckets"), 101),
+        (("rank", "min_sources"), 1),  # triangulación: nunca una sola fuente
+        (("rank", "weights"), {"strength": -1.0}),
+        (("rank", "embeddings", "backend"), "remoto"),
+        (("detect", "sources"), []),
     ],
 )
 def test_invalid_config_rejected(path, value):
