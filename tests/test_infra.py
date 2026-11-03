@@ -89,11 +89,15 @@ def test_systemd_units_parse(path):
         capture_output=True,
         text=True,
     )
-    # Fuera del VPS las rutas /home/trend/... no existen: es el único error aceptable.
+    # Fuera del VPS las rutas /home/trend/... no existen: es el único error aceptable. Los
+    # avisos sobre unidades del propio sistema (/usr/lib/systemd/..., p. ej. CPUAccounting= en
+    # el runner de GitHub) no son de nuestras unidades y se ignoran.
     errors = [
         line
         for line in (out.stdout + out.stderr).splitlines()
-        if line.strip() and "No such file or directory" not in line
+        if line.strip()
+        and "No such file or directory" not in line
+        and not line.startswith(("/usr/lib/systemd/", "/lib/systemd/", "/etc/systemd/"))
     ]
     assert errors == []
 
