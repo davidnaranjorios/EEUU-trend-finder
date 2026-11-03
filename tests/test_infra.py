@@ -391,3 +391,9 @@ def test_initial_download_marker_reaches_r2():
     # Y la entrada de Actions decide con ese marcador entre inicial y semanal.
     actions = (INFRA / "run_actions.sh").read_text()
     assert "initial_download.done" in actions and "infra/weekly_update.sh" in actions
+
+
+def test_install_rclone_no_sigpipe():
+    # `rclone version | head -n 1` con pipefail falla al azar con 141 (SIGPIPE).
+    text = (INFRA / "install_rclone.sh").read_text()
+    assert "| head" not in text
