@@ -7,7 +7,8 @@ Uso:
 
 Flujo (ADR 0007):
 1. Carga los valores vigentes (`vintage_date IS NULL`) de las series de la última corrida del
-   embudo en los grupos `download.groups`, con al menos `eligibility.min_obs` observaciones.
+   embudo de cada fuente de `detect.sources` en los grupos `download.groups`, con al menos
+   `eligibility.min_obs` observaciones.
 2. Prepara el crecimiento (src.stats.transform) y prueba cada serie con `slope` y `regime`
    (src.detect.family), con índices bootstrap compartidos por subfamilia.
 3. Escribe una fila por prueba en `detector_tests` (linaje, con p calibrado).
@@ -52,11 +53,13 @@ from src.stats.transform import (
 )
 
 N_BUCKETS = 16
+FULL_RUN_SOURCES = ("fred",)
 SEASONAL_UNADJUSTED_PREFIX = "NSA"
 
 
 @dataclass
 class Series:
+    source: str
     series_id: str
     frequency: str
     grid: str
@@ -95,15 +98,45 @@ def table_root(cfg: dict[str, Any], name: str) -> Path:
 # --- carga ---------------------------------------------------------------------------------------
 
 
+def detect_sources(cfg: dict[str, Any]) -> list[str]:
+    """Fuentes numéricas que entran a la familia (una familia por detector, todas juntas)."""
+    return list(cfg["detect"]["sources"])
+
+
 def load_series(
     con: duckdb.DuckDBPyConnection,
     cfg: dict[str, Any],
-    ids: list[str] | None = None,
+    ids: list[tuple[str, str]] | None = None,
 ) -> list[Series]:
-    """Series vigentes de la última corrida del embudo, en su grilla (D y W pasan a mensual)."""
-    source = cfg["detect"]["source"]
+    """Series vigentes de las fuentes de `detect.sources`, en su grilla (D y W a mensual).
+
+    `ids`, si se da, son pares (fuente, serie).
+    """
+    out: list[Series] = []
+    for source in detect_sources(cfg):
+        wanted = None if ids is None else [sid for src, sid in ids if src == source]
+        if wanted is not None and not wanted:
+            continue
+        out += _load_source(con, cfg, source, wanted)
+    return out
+
+
+def _load_source(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    source: str,
+    ids: list[str] | None,
+) -> list[Series]:
+    """Series de una fuente: última decisión del embudo por serie, grupos `download.groups`."""
     min_obs = cfg["eligibility"]["min_obs"]
-    params: list[Any] = [source, source, cfg["download"]["groups"], source]
+    # FRED reclasifica todo el catálogo en cada corrida del embudo: vale su última corrida. Las
+    # fuentes de la Fase 4 reprocesan solo las unidades que cambiaron: última decisión por serie.
+    latest = (
+        "run_id = max_by(run_id, decided_at) OVER ()"
+        if source in FULL_RUN_SOURCES
+        else "row_number() OVER (PARTITION BY series_id ORDER BY decided_at DESC, run_id DESC) = 1"
+    )
+    params: list[Any] = [source, cfg["download"]["groups"], source]
     id_filter = ""
     if ids is not None:
         id_filter = "AND list_contains(?, s.series_id)"
@@ -111,11 +144,10 @@ def load_series(
     rel = con.execute(
         f"""
         WITH last AS (
-          SELECT max_by(run_id, decided_at) AS r FROM eligibility WHERE source = ?
+          SELECT series_id, group_name, copyrighted FROM eligibility WHERE source = ?
+          QUALIFY {latest}
         ), ok AS (
-          SELECT series_id, any_value(copyrighted) AS copyrighted FROM eligibility
-          WHERE source = ? AND run_id = (SELECT r FROM last) AND list_contains(?, group_name)
-          GROUP BY series_id
+          SELECT series_id, copyrighted FROM last WHERE list_contains(?, group_name)
         )
         SELECT s.series_id,
                any_value(s.frequency) AS frequency,
@@ -153,7 +185,7 @@ def load_series(
             continue
         lo, hi = offsets[i], offsets[i + 1]
         level, first = to_grid(gi_flat[lo:hi], val_flat[lo:hi])
-        out.append(Series(sid, freq, GRID_OF[freq], sa, bool(cr), level, first))
+        out.append(Series(source, sid, freq, GRID_OF[freq], sa, bool(cr), level, first))
     return out
 
 
@@ -227,7 +259,10 @@ def build_test_rows(
         group = [p for p in prepped if p.series.grid == grid]
         selected = None
         if shard is not None:
-            selected = [bucket_of(p.series.series_id, shard[1]) == shard[0] for p in group]
+            selected = [
+                bucket_of(f"{p.series.source}|{p.series.series_id}", shard[1]) == shard[0]
+                for p in group
+            ]
         params = family_params(cfg, grid)
         results, blocks = run_family(detector, [p.item for p in group], params, selected)
         blocks_summary[grid] = {
@@ -244,7 +279,7 @@ def build_test_rows(
                 {
                     "run_id": run_id,
                     "detector": detector,
-                    "source": cfg["detect"]["source"],
+                    "source": p.series.source,
                     "object_id": p.series.series_id,
                     "frequency": p.series.frequency,
                     "grid": grid,
@@ -271,6 +306,19 @@ def write(spec: Any, rows: list[dict[str, Any]], root: Path, source: str, bucket
     return upsert(table, spec, root, source=source, n_buckets=N_BUCKETS, bucket_col=bucket_col)
 
 
+def write_by_source(spec: Any, rows: list[dict[str, Any]], root: Path, bucket_col: str) -> None:
+    """Escribe filas con columna `source` en la partición de cada fuente."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        groups[r["source"]].append(r)
+    for source, part in sorted(groups.items()):
+        write(spec, part, root, source, bucket_col)
+
+
+# Partición de `detector_runs` de la familia numérica: reúne todas las fuentes de detect.sources.
+RUNS_PARTITION = "numeric"
+
+
 def run_detectors(
     cfg: dict[str, Any],
     run_id: str,
@@ -286,18 +334,13 @@ def run_detectors(
         series = series[:max_series]
     stats: dict[str, Any] = {
         "series_loaded": len(series),
+        "by_source": dict(Counter(s.source for s in series)),
         "by_frequency": dict(Counter(s.frequency for s in series)),
     }
     for detector in cfg["detect"]["detectors"]:
         prepped = prep_for(detector, series, cfg)
         rows, blocks = build_test_rows(detector, prepped, cfg, run_id, shard)
-        write(
-            DETECTOR_TESTS,
-            rows,
-            table_root(cfg, "detector_tests"),
-            cfg["detect"]["source"],
-            "object_id",
-        )
+        write_by_source(DETECTOR_TESTS, rows, table_root(cfg, "detector_tests"), "object_id")
         stats[detector] = {"prepared": len(prepped), "tested": len(rows), "blocks": blocks}
         if log is not None:
             log.info(
@@ -317,15 +360,18 @@ def finalize(
     cfg: dict[str, Any], run_id: str, started_at: datetime, log: Any = None
 ) -> dict[str, Any]:
     """Cierra las familias de `run_id`: BH/BY, PELT para fechar, signals, runs y reporte."""
-    source = cfg["detect"]["source"]
     q = float(cfg["fdr"]["q"])
-    tests = read_table(
-        DETECTOR_TESTS,
-        table_root(cfg, "detector_tests"),
-        source=source,
-        where="run_id = ?",
-        params=[run_id],
-    ).to_pylist()
+    tests = [
+        r
+        for source in detect_sources(cfg)
+        for r in read_table(
+            DETECTOR_TESTS,
+            table_root(cfg, "detector_tests"),
+            source=source,
+            where="run_id = ?",
+            params=[run_id],
+        ).to_pylist()
+    ]
     if not tests:
         raise RuntimeError(f"no hay pruebas para run_id={run_id}")
     by_det: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -339,6 +385,7 @@ def finalize(
         "run_id": run_id,
         "run_date": run_date.isoformat(),
         "q": q,
+        "sources": detect_sources(cfg),
         "detectors": {},
     }
     for detector, rows in sorted(by_det.items()):
@@ -352,8 +399,8 @@ def finalize(
         for r in survivors:
             signals.append(
                 {
-                    "signal_id": signal_id(run_id, detector, source, r["object_id"]),
-                    "source": source,
+                    "signal_id": signal_id(run_id, detector, r["source"], r["object_id"]),
+                    "source": r["source"],
                     "object_id": r["object_id"],
                     "detector": detector,
                     "window_start": r["window_start"],
@@ -389,9 +436,9 @@ def finalize(
             }
         )
         report["detectors"][detector] = summarize(rows, q)
-    write(DETECTOR_TESTS, tests, table_root(cfg, "detector_tests"), source, "object_id")
-    write(SIGNALS, signals, table_root(cfg, "signals"), source, "object_id")
-    write(DETECTOR_RUNS, runs, table_root(cfg, "detector_runs"), source, "run_id")
+    write_by_source(DETECTOR_TESTS, tests, table_root(cfg, "detector_tests"), "object_id")
+    write_by_source(SIGNALS, signals, table_root(cfg, "signals"), "object_id")
+    write(DETECTOR_RUNS, runs, table_root(cfg, "detector_runs"), RUNS_PARTITION, "run_id")
     save_report(cfg, report)
     if log is not None:
         log.info("familias cerradas", extra={"fields": {"run_id": run_id, "signals": len(signals)}})
@@ -401,12 +448,12 @@ def finalize(
 def _date_regimes(cfg: dict[str, Any], survivors: list[dict[str, Any]]) -> None:
     """PELT sobre el crecimiento de cada sobreviviente: inicio del último régimen y su efecto."""
     con = connect(_resolve(cfg["paths"]["processed_dir"]))
-    series = load_series(con, cfg, ids=[r["object_id"] for r in survivors])
+    series = load_series(con, cfg, ids=[(r["source"], r["object_id"]) for r in survivors])
     con.close()
-    prepped = {p.series.series_id: p for p in prep_for("regime", series, cfg)}
+    prepped = {(p.series.source, p.series.series_id): p for p in prep_for("regime", series, cfg)}
     pelt = cfg["detect"]["pelt"]
     for r in survivors:
-        p = prepped.get(r["object_id"])
+        p = prepped.get((r["source"], r["object_id"]))
         if p is None:
             continue
         g, last, n = p.item.growth, p.prep.last_index, p.item.growth.size
@@ -424,17 +471,19 @@ def _date_regimes(cfg: dict[str, Any], survivors: list[dict[str, Any]]) -> None:
 def summarize(rows: list[dict[str, Any]], q: float) -> dict[str, Any]:
     """Conteos de la familia: pruebas, BH, BY, por frecuencia nativa y método de p."""
     by_freq: dict[str, dict[str, int]] = defaultdict(lambda: {"tests": 0, "bh": 0, "by": 0})
+    by_src: dict[str, dict[str, int]] = defaultdict(lambda: {"tests": 0, "bh": 0, "by": 0})
     for r in rows:
-        f = by_freq[r["frequency"]]
-        f["tests"] += 1
-        f["bh"] += int(r["q_value"] <= q)
-        f["by"] += int(r["q_by"] <= q)
+        for f in (by_freq[r["frequency"]], by_src[r["source"]]):
+            f["tests"] += 1
+            f["bh"] += int(r["q_value"] <= q)
+            f["by"] += int(r["q_by"] <= q)
     bh = [r for r in rows if r["q_value"] <= q]
     return {
         "n_tests": len(rows),
         "n_bh": len(bh),
         "n_by": sum(r["q_by"] <= q for r in rows),
         "by_frequency": dict(sorted(by_freq.items())),
+        "by_source": dict(sorted(by_src.items())),
         "p_method": dict(Counter(r["p_method"] for r in rows)),
         "bh_copyrighted": sum(r["copyrighted"] for r in bh),
         "bh_increase": sum(r["effect_size"] > 0 for r in bh),
@@ -467,6 +516,16 @@ def to_markdown(report: dict[str, Any]) -> str:
     ]
     for det, s in report["detectors"].items():
         for f, c in s["by_frequency"].items():
+            lines.append(f"| {det} | {f} | {c['tests']} | {c['bh']} | {c['by']} |")
+    lines += [
+        "",
+        "## Por fuente",
+        "",
+        "| Detector | Fuente | Pruebas | BH | BY |",
+        "|---|---|---|---|---|",
+    ]
+    for det, s in report["detectors"].items():
+        for f, c in s.get("by_source", {}).items():
             lines.append(f"| {det} | {f} | {c['tests']} | {c['bh']} | {c['by']} |")
     return "\n".join(lines) + "\n"
 
@@ -520,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--shard requiere --run-id (el mismo en todos los shards)")
 
     log = get_logger("detect", cfg["logging"]["level"])
-    with run([cfg["detect"]["source"]], _resolve(cfg["logging"]["runs_file"])) as record:
+    with run(detect_sources(cfg), _resolve(cfg["logging"]["runs_file"])) as record:
         if getattr(args, "run_id", None):
             record.run_id = args.run_id
         details: dict[str, Any] = {"command": f"detect {args.cmd}"}
@@ -529,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                 details["stats"] = run_detectors(
                     cfg, record.run_id, args.shard, args.max_series, log
                 )
-            record.n_series[cfg["detect"]["source"]] = details["stats"]["series_loaded"]
+            record.n_series.update(details["stats"]["by_source"])
         if args.cmd == "fdr" or (args.cmd == "run" and args.shard is None):
             with record.stage("fdr"):
                 details["report"] = finalize(cfg, record.run_id, record.started_at, log)

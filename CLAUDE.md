@@ -51,8 +51,8 @@ src/
   ingest/      # un módulo por fuente, todos producen el esquema común
   detect/      # detectores numéricos y de texto
   stats/       # FDR, desestacionalización, utilidades
-  rank/        # triangulación, deduplicación y scoring
-  report/      # generación del reporte HTML
+  rank/        # agencias, clusters, cruces término–serie, triangulación y scoring
+  report/      # sitio estático: ranking, dashboard, explorador y barrera de copyright
   catalog.py   # vistas DuckDB sobre data/processed (local o R2)
   eligibility.py # embudo de elegibilidad con linaje por serie
   export.py    # archivos pequeños para la futura web estática
@@ -215,6 +215,16 @@ corrida semanal en `infra/sources_update.sh`. Decisiones y linaje agregado por u
 (`tests/test_sources_contract.py`).
 
 ### Fase 5 — Triangulación, deduplicación y ranking
+Hecho: detectores numéricos sobre las 4 fuentes en una familia, identidad de fuente por agencia
+(`src/rank/agencies.py`: el mismo dato en FRED y BLS es una sola fuente), clusters (correlación
+de crecimientos + embeddings de títulos), cruces término–serie con embeddings locales
+(fastembed + bge-small-en-v1.5, umbral nulo por término desde `term_freq`), triangulación,
+score con pesos en `config.yaml` y sitio estático con ranking, dashboard y explorador, con
+barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009.
+Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
+build`; en Actions, `.github/workflows/reporte.yml` (destino de publicación en la variable
+`PUBLISH_TARGET`: none, cloudflare_pages o github_pages). Tablas en `processed/rank/`:
+`clusters`, `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`.
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia
 (series, gráficos, términos, q-values), ningún candidato tiene una sola fuente y ninguna serie
 con `copyrighted = true` aparece en el reporte publicado (tests).

@@ -241,6 +241,77 @@ CLUSTERS = TableSpec(
     key=("run_id", "cluster_id", "source", "object_id"),
 )
 
+# --- Ranking (Fase 5, ADR 0009) -------------------------------------------------------------------
+
+# Un candidato por cluster de series (kind = series) o de términos (kind = text) de la corrida.
+# status: candidato (≥ rank.min_sources fuentes independientes), una_fuente o fuera_del_tope.
+# published: candidato cuya evidencia pública (sin copyright) también llega al mínimo.
+RANK_STATUSES = ("candidato", "una_fuente", "fuera_del_tope")
+RANK_CANDIDATES = TableSpec(
+    name="rank_candidates",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("candidate_id", pa.string(), False),
+        ("kind", pa.string(), False),
+        ("status", pa.string(), False),
+        ("rank", pa.int64(), True),
+        ("score", pa.float64(), True),
+        ("n_sources", pa.int64(), False),
+        ("n_sources_public", pa.int64(), False),
+        ("sources_json", pa.string(), False),  # grupos de agencias independientes
+        ("components_json", pa.string(), True),
+        ("n_members", pa.int64(), False),
+        ("n_terms", pa.int64(), False),
+        ("published", pa.bool_(), False),
+    ),
+    key=("run_id", "candidate_id"),
+)
+
+# Evidencia de cada candidato: series con señal (item_kind = series) y términos enlazados
+# (item_kind = term). `public` = false para series con copyright (no se publican).
+RANK_EVIDENCE = TableSpec(
+    name="rank_evidence",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("candidate_id", pa.string(), False),
+        ("item_kind", pa.string(), False),
+        ("source", pa.string(), False),
+        ("object_id", pa.string(), False),
+        ("detectors", pa.string(), False),
+        ("q_value", pa.float64(), False),
+        ("effect_size", pa.float64(), False),
+        ("agencies_json", pa.string(), False),
+        ("public", pa.bool_(), False),
+        ("window_start", pa.date32(), True),
+        ("window_end", pa.date32(), True),
+        ("link_score", pa.float64(), True),
+        ("linked_series", pa.string(), True),
+        ("n_entities", pa.int64(), True),
+    ),
+    key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
+)
+
+RANK_RUNS = TableSpec(
+    name="rank_runs",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("started_at", pa.timestamp("s", tz="UTC"), False),
+        ("finished_at", pa.timestamp("s", tz="UTC"), False),
+        ("numeric_run_id", pa.string(), True),
+        ("text_run_ids_json", pa.string(), False),
+        ("n_signal_series", pa.int64(), False),
+        ("n_signal_terms", pa.int64(), False),
+        ("n_clusters", pa.int64(), False),
+        ("n_term_clusters", pa.int64(), False),
+        ("n_links", pa.int64(), False),
+        ("n_candidates", pa.int64(), False),
+        ("n_single_source", pa.int64(), False),
+        ("n_published", pa.int64(), False),
+        ("params_json", pa.string(), False),
+    ),
+    key=("run_id",),
+)
+
 ALL_SPECS = {
     spec.name: spec
     for spec in (
@@ -256,6 +327,9 @@ ALL_SPECS = {
         SERIES_TERM_LINKS,
         CLUSTERS,
         TEXT_INGEST,
+        RANK_CANDIDATES,
+        RANK_EVIDENCE,
+        RANK_RUNS,
     )
 }
 
@@ -300,6 +374,18 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"term_freq: {bad[0]} filas con doc_count/total_docs inconsistentes")
+    if spec is RANK_CANDIDATES:
+        allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE status NOT IN ({allowed}) "
+            "OR (status <> 'una_fuente' AND n_sources < 2) "
+            "OR (published AND (status <> 'candidato' OR n_sources_public < 2)) "
+            "OR n_sources_public > n_sources"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(
+                f"rank_candidates: {bad[0]} filas violan la triangulación (≥ 2 fuentes)"
+            )
     if spec is SIGNALS:
         bad = con.execute(
             "SELECT count(*) FROM t WHERE p_value NOT BETWEEN 0 AND 1 "

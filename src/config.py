@@ -72,6 +72,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_sources(_section(cfg, "sources"))
     _validate_exports(_section(cfg, "exports"))
     _validate_text(cfg)
+    _validate_rank(_section(cfg, "rank"))
     storage = _section(cfg, "storage")
     for key in ("bucket", "prefix"):
         if not isinstance(storage.get(key), str) or not storage[key]:
@@ -108,6 +109,14 @@ GRIDS = ("M", "Q", "A")
 
 
 def _validate_detect(d: dict[str, Any]) -> None:
+    sources = d.get("sources")
+    if (
+        not isinstance(sources, list)
+        or not sources
+        or not all(isinstance(x, str) and x for x in sources)
+        or len(set(sources)) != len(sources)
+    ):
+        raise ConfigError("detect.sources debe ser una lista no vacía de fuentes distintas")
     dets = d.get("detectors")
     if not isinstance(dets, list) or not dets or not set(dets) <= set(DETECTORS):
         raise ConfigError(f"detect.detectors debe ser una lista no vacía de {DETECTORS}")
@@ -281,3 +290,31 @@ def _check_per_frequency(value: Any, name: str) -> None:
     for freq, n in value.items():
         if not isinstance(n, int) or n < 1:
             raise ConfigError(f"{name}.{freq} debe ser un entero positivo")
+
+
+EMBEDDING_BACKENDS = ("fastembed", "hashing")
+
+
+def _validate_rank(r: dict[str, Any]) -> None:
+    """Principio 4: nunca menos de dos fuentes independientes; pesos completos y no negativos."""
+    ms = r.get("min_sources")
+    if not isinstance(ms, int) or ms < 2:
+        raise ConfigError("rank.min_sources debe ser un entero >= 2 (triangulación)")
+    if not isinstance(r.get("max_candidates"), int) or r["max_candidates"] < 1:
+        raise ConfigError("rank.max_candidates debe ser un entero positivo")
+    w = r.get("weights") or {}
+    # Que estén todos los componentes lo verifica src.rank.triangulate.score.
+    if not w or any(not isinstance(v, int | float) or v < 0 for v in w.values()):
+        raise ConfigError("rank.weights: un peso >= 0 por componente del score")
+    if sum(w.values()) <= 0:
+        raise ConfigError("rank.weights: al menos un peso positivo")
+    if (r.get("embeddings") or {}).get("backend") not in EMBEDDING_BACKENDS:
+        raise ConfigError(f"rank.embeddings.backend debe ser uno de {EMBEDDING_BACKENDS}")
+    c = r.get("cluster") or {}
+    for key in ("alpha", "threshold", "duplicate_rho", "duplicate_cos"):
+        if not isinstance(c.get(key), int | float) or not 0 <= c[key] <= 1:
+            raise ConfigError(f"rank.cluster.{key} debe estar en [0, 1]")
+    lk = r.get("links") or {}
+    q = lk.get("null_quantile")
+    if not isinstance(q, int | float) or not 0 < q < 1:
+        raise ConfigError("rank.links.null_quantile debe estar en (0, 1)")

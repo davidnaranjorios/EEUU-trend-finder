@@ -71,7 +71,8 @@ persistence:
 
 # Detectores numéricos de la Fase 2 (ADR 0007). Solo parámetros: ningún tema ni serie.
 detect:
-  source: fred
+  # Fuentes numéricas de la familia: una familia FDR por detector y corrida, todas juntas (ADR 0009).
+  sources: [fred, bls, bea, census]
   detectors: [slope, regime]
   # Ventana del cambio de pendiente, en periodos de la grilla (D y W se agregan a mensual):
   # 5 años recientes frente a 5 previos; anual 7 + 7 (decisión del 2026-11-03).
@@ -207,6 +208,54 @@ federal_register:
   min_chars: 300
   closed_grace_days: 3
   reprocess_below_schema: 2       # re-procesa los meses sin n_entities (agencias, ADR 0008)
+
+# Ranking (Fase 5, ADR 0009): clusters, cruces término–serie, triangulación y score. Solo
+# parámetros: ningún tema, término ni serie.
+rank:
+  min_sources: 2                  # fuentes independientes mínimas (principio 4; nunca < 2)
+  max_candidates: 50              # tope por tipo de candidato y corrida
+  embeddings:
+    backend: fastembed            # fastembed (uv sync --group embed) | hashing (tests, sin red)
+    model: BAAI/bge-small-en-v1.5 # MIT; vía fastembed (Apache-2.0), ONNX local
+    batch_size: 256
+    threads: 0                    # 0 = todos los núcleos
+    cache_dir: data/cache/models  # modelo descargado (caché de Actions, no va a R2)
+  cluster:
+    alpha: 0.5                    # s = α·max(ρ,0) + (1−α)·cos_título
+    threshold: 0.8                # corte del enlace promedio (similitud)
+    duplicate_rho: 0.98           # copia del mismo dato entre fuentes: ρ y título casi iguales
+    duplicate_cos: 0.9
+    min_overlap: {M: 36, Q: 12, A: 8}  # periodos comunes mínimos para usar ρ
+    max_series: 6000              # más series con señal: las de menor q se agrupan, el resto solas
+  links:
+    # Umbral por término, desde los datos: cuantil de la mejor coincidencia (máximo coseno contra
+    # todas las series) de una muestra de términos comunes de term_freq sin señal.
+    null_quantile: 0.95
+    null_sample: 2000
+    top_k: 20                     # series por término, como máximo
+    require_overlap: true         # la ventana del término alcanza la de la señal numérica
+    seed: 20261103
+  text_only:
+    enabled: true                 # términos parecidos emergentes en ≥ 2 fuentes de texto
+    min_cos: 0.9                  # piso del umbral término–término (además del nulo)
+  # Pesos del score (componentes normalizados por rango dentro de la corrida).
+  weights:
+    strength: 3.0                 # −log10 q (mediana por fuente independiente)
+    n_sources: 2.0
+    effect: 1.0
+    agreement: 1.0                # slope y regime a la vez
+    breadth: 1.0                  # entidades distintas que usan el término
+    size: 0.5                     # miembros del cluster (log, rendimiento decreciente)
+
+# Reporte HTML semanal y dashboard (src/report). El destino de publicación es un paso aparte.
+report:
+  site_dir: data/site
+  reports_dir: data/reports       # historial semanal (se sincroniza a R2 como reports/)
+  chart_years: 20
+  explorer:
+    n_buckets: 128
+    max_file_kb: 2048
+    max_total_mb: 80
 
 logging:
   level: INFO

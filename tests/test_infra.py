@@ -380,7 +380,15 @@ def test_sync_compacts_before_upload_and_export_never_blocks_sync():
 
 def test_actions_not_on_node20():
     # Versiones con runs.using: node24 (verificado en sus action.yml, 2026-11-03).
-    allowed = {"actions/checkout@v6", "astral-sh/setup-uv@v7", "actions/upload-artifact@v6"}
+    # upload-pages-artifact@v5 es compuesta y usa upload-artifact v7 (node24).
+    allowed = {
+        "actions/checkout@v6",
+        "astral-sh/setup-uv@v7",
+        "actions/upload-artifact@v6",
+        "actions/cache@v6",
+        "actions/upload-pages-artifact@v5",
+        "actions/deploy-pages@v5",
+    }
     for wf in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
         for line in wf.read_text().splitlines():
             if "uses:" in line:

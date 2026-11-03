@@ -38,6 +38,7 @@ def _write_fixture(cfg) -> list[str]:
     rows, elig, trend_ids = [], [], []
     for k in range(N_NULL + N_TREND):
         sid = f"syn{k:03d}"
+        src = "fred" if k % 2 == 0 else "bls"  # dos fuentes en la misma familia
         g = 0.002 + 0.01 * rng.standard_normal(N_MONTHS)
         if k < N_TREND:
             g[-60:] += 0.03  # aceleración sostenida de 5 años
@@ -45,7 +46,7 @@ def _write_fixture(cfg) -> list[str]:
         level = 100 * np.exp(np.cumsum(g))
         rows += [
             {
-                "source": "fred",
+                "source": src,
                 "series_id": sid,
                 "date": _month(i),
                 "value": float(v),
@@ -58,8 +59,8 @@ def _write_fixture(cfg) -> list[str]:
         ]
         elig.append(
             {
-                "run_id": "elig1",
-                "source": "fred",
+                "run_id": "elig1" if src == "fred" else f"elig-{sid}",
+                "source": src,
                 "series_id": sid,
                 "group_name": "nacional",
                 "rule": "clasificada",
@@ -71,20 +72,23 @@ def _write_fixture(cfg) -> list[str]:
             }
         )
     processed = table_root(cfg, "detector_tests").parent.parent
-    upsert(
-        pa.Table.from_pylist(rows, schema=SERIES.schema),
-        SERIES,
-        processed / "series",
-        source="fred",
-        n_buckets=4,
-    )
-    upsert(
-        pa.Table.from_pylist(elig, schema=ELIGIBILITY.schema),
-        ELIGIBILITY,
-        processed / "lineage" / "eligibility",
-        source="fred",
-        n_buckets=4,
-    )
+    for src in ("fred", "bls"):
+        upsert(
+            pa.Table.from_pylist([r for r in rows if r["source"] == src], schema=SERIES.schema),
+            SERIES,
+            processed / "series",
+            source=src,
+            n_buckets=4,
+        )
+        upsert(
+            pa.Table.from_pylist(
+                [r for r in elig if r["source"] == src], schema=ELIGIBILITY.schema
+            ),
+            ELIGIBILITY,
+            processed / "lineage" / "eligibility",
+            source=src,
+            n_buckets=4,
+        )
     return trend_ids
 
 
@@ -108,6 +112,7 @@ def test_run_reports_bh_and_by_counts(setup):
     started = datetime.now(UTC)
     stats = run_detectors(cfg, "runA")
     assert stats["series_loaded"] == N_NULL + N_TREND
+    assert set(stats["by_source"]) == {"fred", "bls"}
     report = finalize(cfg, "runA", started)
 
     con, counts = _counts(cfg)
@@ -122,7 +127,7 @@ def test_run_reports_bh_and_by_counts(setup):
         assert report["detectors"][det]["n_bh"] == n_bh
         assert report["detectors"][det]["n_by"] == n_by
     md = to_markdown(report)
-    assert "| BH | BY |" in md and "Por frecuencia" in md
+    assert "| BH | BY |" in md and "Por frecuencia" in md and "Por fuente" in md
 
     # Las tendencias inyectadas salen como señal y cada señal registra n_tests.
     sig = con.execute("SELECT detector, object_id, n_tests, q_value FROM signals").fetchall()
@@ -165,7 +170,7 @@ def test_slope_skips_annual_series_with_short_baseline():
 
     def annual(n):
         level = 100 * np.exp(np.cumsum(0.01 * rng.standard_normal(n)))
-        return Series(f"a{n}", "A", "A", "NA", False, level, 1980)
+        return Series("fred", f"a{n}", "A", "A", "NA", False, level, 1980)
 
     short, long_ = annual(16), annual(60)
     slope = {p.series.series_id for p in prep_for("slope", [short, long_], cfg)}
