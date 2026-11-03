@@ -197,7 +197,9 @@ Referencia de diseño para EDGAR: el modelo dinámico de riesgos emergentes de H
 (2019).
 Uso: `uv run python -m src.ingest.text edgar | federal_register [--max-periods N]
 [--periods P,...] [--sample N --processed-dir D] | summary`; en Actions, `infra/run_texto.sh`
-vía `.github/workflows/ingesta-texto.yml` (secret `SEC_USER_AGENT`). Diseño: ADR 0005. Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
+vía `.github/workflows/ingesta-texto.yml` (secret `SEC_USER_AGENT`). Diseño: ADR 0005.
+Detector de términos emergentes: `uv run python -m src.detect.text --source edgar |
+federal_register` (ADR 0008; bootstrap y FDR de la Fase 2). Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
 previa revisión de código y licencia.
 **Terminado cuando:** genero la tabla de frecuencias por periodo y el detector marca un término
 sintético inyectado con crecimiento artificial (test).
