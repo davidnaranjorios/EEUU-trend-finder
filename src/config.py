@@ -188,7 +188,29 @@ def _validate_fred(fred: dict[str, Any]) -> None:
             raise ConfigError(f"fred.{key} debe ser positivo")
 
 
+def _validate_text_detect(td: dict[str, Any]) -> None:
+    grid = td.get("grid")
+    if not isinstance(grid, dict) or not grid or not set(grid.values()) <= set(GRIDS):
+        raise ConfigError(f"text_detect.grid: una grilla de {GRIDS} por fuente")
+    for key in ("window", "recent"):
+        win = td.get(key)
+        if not isinstance(win, dict) or set(win) != set(GRIDS):
+            raise ConfigError(f"text_detect.{key} debe definir las grillas {GRIDS}")
+        if any(not isinstance(v, int) or v < 1 for v in win.values()):
+            raise ConfigError(f"text_detect.{key}: enteros positivos")
+    for key in ("min_mean_share", "max_median_share"):
+        v = td.get(key)
+        if not isinstance(v, int | float) or not 0 < v < 1:
+            raise ConfigError(f"text_detect.{key} debe estar en (0, 1)")
+    if not isinstance(td.get("phi_margin"), int | float) or td["phi_margin"] < 0:
+        raise ConfigError("text_detect.phi_margin debe ser >= 0")
+    for key in ("block_sample", "workers"):
+        if not isinstance(td.get(key), int) or td[key] < 1:
+            raise ConfigError(f"text_detect.{key} debe ser un entero positivo")
+
+
 def _validate_text(cfg: dict[str, Any]) -> None:
+    _validate_text_detect(_section(cfg, "text_detect"))
     text = _section(cfg, "text")
     if text.get("ngram_max") not in (1, 2, 3):
         raise ConfigError("text.ngram_max debe ser 1, 2 o 3")
