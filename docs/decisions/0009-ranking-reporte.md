@@ -2,8 +2,9 @@
 
 - Fecha: 2026-11-03
 - Estado: aceptada. David aprobó el plan el 2026-11-03 con las opciones recomendadas A–F (abajo).
-  Corrección del mismo día: el repo es **privado** y GitHub Pages en privado exige un plan de
-  pago, así que el destino de publicación quedó desacoplado (sección 8).
+  El mismo día el destino de publicación quedó desacoplado (sección 8), mientras se resolvía si el
+  repo seguía privado. Después David lo hizo público y activó Pages (fuente "GitHub Actions"):
+  el destino por defecto es GitHub Pages.
 
 ## Decisiones de David
 
@@ -32,8 +33,8 @@ Licencias verificadas el 2026-11-03: la licencia de `fastembed` 0.9.1 en PyPI
     la última decisión por serie.
 - El shard se reparte por `fuente|serie`.
 - Costo estimado con las mediciones del ADR 0007: unas 410 mil series (FRED 53 k, BLS 300 k,
-  BEA 51 k, Census 5 k) dan 1,5–2,5 h con 4 procesos. Con el repo privado eso consume minutos
-  del plan Free de Actions; si no alcanza, se reparte con `--shard`.
+  BEA 51 k, Census 5 k) dan 1,5–2,5 h con 4 procesos; si no cabe en un job, se reparte con
+  `--shard`.
 
 ## 2. Fuente independiente (`src/rank/agencies.py`)
 
@@ -150,12 +151,12 @@ Cada evidencia lleva un conjunto de agencias:
 
 - `python -m src.report build` solo construye `data/site/`. El workflow `reporte.yml` lo guarda
   como artefacto y publica según la variable de repositorio `PUBLISH_TARGET`:
-  - `none` o vacío (por defecto): solo artefacto;
+  - sin definir o `github_pages` (por defecto): el job `pages` (`upload-pages-artifact` +
+    `deploy-pages`). El repo es público y Pages está activado con la fuente "GitHub Actions";
+  - `none`: solo artefacto;
   - `cloudflare_pages`: `infra/publish_site.sh` con wrangler fijado (4.151.0). Necesita el
     secret `CLOUDFLARE_API_TOKEN` (permiso Cloudflare Pages: Edit), el secret existente
     `CLOUDFLARE_ACCOUNT_ID` y la variable `CF_PAGES_PROJECT`;
-  - `github_pages`: el job `pages` (`upload-pages-artifact` + `deploy-pages`). Exige Pages
-    activado con la fuente "GitHub Actions" y, con el repo privado, un plan de pago.
 - Límites de Cloudflare Pages: 20.000 archivos y 25 MiB por archivo. El sitio de prueba tiene
   132 archivos, y el explorador real tendría 128 de ≤ 2 MB.
 
@@ -165,6 +166,5 @@ Cada evidencia lleva un conjunto de agencias:
   1. detectores con las 4 fuentes (Detectores, grupo `ingesta`);
   2. después, Reporte.
 - Los umbrales de cluster y cruces se revisan con esos datos.
-- Minutos de Actions con el repo privado (Free: 2.000 al mes): los detectores pasan de ~1 h a
-  unas 2 h por corrida; Reporte toma ~30–40 min la primera vez (embeddings) y unos 15 min
-  después.
+- Tiempo de Actions (repo público, minutos sin tope): los detectores pasan de ~1 h a unas 2 h por
+  corrida; Reporte toma ~30–40 min la primera vez (embeddings) y unos 15 min después.

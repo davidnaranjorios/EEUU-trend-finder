@@ -222,8 +222,8 @@ de crecimientos + embeddings de títulos), cruces término–serie con embedding
 score con pesos en `config.yaml` y sitio estático con ranking, dashboard y explorador, con
 barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009.
 Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
-build`; en Actions, `.github/workflows/reporte.yml` (destino de publicación en la variable
-`PUBLISH_TARGET`: none, cloudflare_pages o github_pages). Tablas en `processed/rank/`:
+build`; en Actions, `.github/workflows/reporte.yml` (publica en GitHub Pages; otro destino con la
+variable `PUBLISH_TARGET`: cloudflare_pages o none). Tablas en `processed/rank/`:
 `clusters`, `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`.
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia
 (series, gráficos, términos, q-values), ningún candidato tiene una sola fuente y ninguna serie

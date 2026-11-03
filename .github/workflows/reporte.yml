@@ -5,10 +5,11 @@
 # build` (sitio estático con la barrera de copyright). Sube a R2 solo sus propias tablas
 # (processed/rank, processed/_internal/embeddings) y el historial (reports/), y guarda el sitio
 # como artefacto. La publicación es un paso aparte, según la variable PUBLISH_TARGET:
-#   - "" o "none": solo artefacto (por defecto);
+#   - sin definir o "github_pages" (por defecto; repo público con Pages activado, fuente
+#     "GitHub Actions"): job `pages`;
 #   - "cloudflare_pages": infra/publish_site.sh (secrets CLOUDFLARE_API_TOKEN y
 #     CLOUDFLARE_ACCOUNT_ID; variable CF_PAGES_PROJECT);
-#   - "github_pages": job `pages` (requiere Pages activado con fuente "GitHub Actions").
+#   - "none": solo artefacto.
 # Grupo de concurrencia propio: no escribe rutas de la ingesta ni de los detectores.
 name: Reporte
 
@@ -87,14 +88,14 @@ jobs:
           CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
         run: infra/publish_site.sh cloudflare_pages data/site
       - name: Preparar GitHub Pages
-        if: inputs.publish && vars.PUBLISH_TARGET == 'github_pages'
+        if: inputs.publish && (vars.PUBLISH_TARGET || 'github_pages') == 'github_pages'
         uses: actions/upload-pages-artifact@v5
         with:
           path: data/site/
 
   pages:
     needs: reporte
-    if: inputs.publish && vars.PUBLISH_TARGET == 'github_pages'
+    if: inputs.publish && (vars.PUBLISH_TARGET || 'github_pages') == 'github_pages'
     runs-on: ubuntu-latest
     permissions:
       pages: write
