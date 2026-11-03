@@ -168,6 +168,7 @@ def test_edgar_period_schema_lineage_and_counts(cfg, tmp_path):
     freq = {(r["section"], r["term"]): r for r in t["term_freq"]}
     inj = freq[("item_1a", "zeta omega kappa")]
     assert (inj["doc_count"], inj["total_docs"]) == (2, 2)  # 1A: docs 1 y 2 (3 corto, 6 dup.)
+    assert inj["n_entities"] == 2  # CIK 101 y 102
     assert freq[("item_7", "zeta omega kappa")]["total_docs"] == 3  # 7: docs 1, 2 y 3
     assert all(r["period"] == "2024Q1" and r["doc_count"] >= 2 for r in t["term_freq"])
     assert "xyz" not in {r["term"] for r in t["term_freq"]}  # texto oculto excluido
@@ -346,6 +347,9 @@ def test_federal_register_month(cfg, tmp_path):
         freq[("notice", "zeta omega")]["doc_count"],
         freq[("notice", "zeta omega")]["total_docs"],
     ) == (2, 3)
+    # Los dos avisos con el término son de la misma agencia: amplitud 1.
+    assert freq[("notice", "zeta omega")]["n_entities"] == 1
+    assert all(1 <= r["n_entities"] <= r["doc_count"] for r in t["term_freq"])
     terms = {r["term"] for r in t["term_freq"]}
     assert not any("billing" in term or "filed" in term for term in terms)  # marcas de imprenta
     assert "sit amet" in terms  # el énfasis en línea (<E>) no parte el n-grama
@@ -387,3 +391,56 @@ def test_catalog_views_over_text_tables(cfg, tmp_path):
     assert con.execute("SELECT count(*) FROM text_docs").fetchone()[0] == 5
     assert con.execute("SELECT count(*) FROM text_ingest").fetchone()[0] == 7
     assert con.execute("SELECT count(*) FROM series").fetchone()[0] == 0  # vistas vacías ok
+
+
+def test_migrate_adds_null_n_entities_without_download(tmp_path):
+    """Particiones anteriores al esquema 2: la migración agrega n_entities = NULL; idempotente."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from src.ingest.text import migrate
+
+    processed = tmp_path / "processed"
+    part = processed / "term_freq" / "edgar" / "2010Q1"
+    part.mkdir(parents=True)
+    old = pa.table(
+        {
+            "source": ["edgar"],
+            "section": ["item_1a"],
+            "period": ["2010Q1"],
+            "term": ["zeta"],
+            "doc_count": pa.array([7], pa.int64()),
+            "total_docs": pa.array([9], pa.int64()),
+        }
+    )
+    pq.write_table(old, part / "part-old.parquet")
+    assert migrate(processed) == {"particiones": 1, "migradas": 1}
+    rows = read_all(processed, "edgar")["term_freq"]
+    assert rows == [
+        {
+            "source": "edgar",
+            "section": "item_1a",
+            "period": "2010Q1",
+            "term": "zeta",
+            "doc_count": 7,
+            "total_docs": 9,
+            "n_entities": None,
+        }
+    ]
+    assert migrate(processed) == {"particiones": 1, "migradas": 0}
+    assert len(list(part.glob("*.parquet"))) == 1
+
+
+def test_old_schema_periods_are_reprocessed_only_where_configured(cfg, tmp_path):
+    from datetime import UTC, datetime
+
+    state = TextState(tmp_path, "federal_register")
+    state.mark("2024-01", closed=True, run_id="r", stats={"docs": 1, "rows": {}})
+    state.periods["2024-01"].pop("schema")  # como lo dejó la versión 1
+    now = datetime.now(UTC)
+    assert state.needs_run("2024-01", 20, now, min_schema=2)  # FR: se re-procesa
+    assert not state.needs_run("2024-01", 20, now, min_schema=1)  # EDGAR: no
+    assert cfg["federal_register"]["reprocess_below_schema"] == 2
+    assert cfg["edgar"]["reprocess_below_schema"] == 1
+    state.mark("2024-01", closed=True, run_id="r2", stats={"docs": 1, "rows": {}})
+    assert not state.needs_run("2024-01", 20, now, min_schema=2)

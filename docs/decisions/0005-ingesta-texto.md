@@ -79,6 +79,8 @@ govinfo no publica un límite de solicitudes; se usan 2 req/s y reintentos con b
   Item 7 y los tipos del Federal Register quedan separados sin convertirse en "fuentes"
   distintas: para la triangulación la fuente es `source` (`edgar`, `federal_register`).
 - `text_docs`: sin cambios; una fila por documento y sección `ok`.
+- `term_freq.n_entities` (esquema 2, agregado el 2026-11-03): entidades distintas por término y
+  periodo. Diseño, migración y reproceso en el ADR 0008, sección 6.
 - Linaje nuevo `lineage/text_ingest`, clave `(run_id, source, doc_id, section)`, con
   `status ∈ {ok, sin_seccion, muy_corta, duplicado, excluido}`, `detail` y `n_chars`.
   `section = "*"` marca decisiones sobre el documento entero. Ningún documento se descarta

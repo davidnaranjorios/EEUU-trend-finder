@@ -164,6 +164,24 @@ text:
   seed: 20261103                  # muestras de medición (--sample)
   open_refresh_hours: 20          # un periodo abierto se reprocesa como mucho una vez por corrida
 
+# Detector de términos emergentes (Fase 3, parte B; ADR 0008). Solo parámetros, sin palabras.
+text_detect:
+  grid: {edgar: A, federal_register: Q}   # EDGAR anual por año de presentación; FR trimestral
+  window: {M: 60, Q: 20, A: 7}            # ventana previa W (línea de comparación)
+  recent: {M: 24, Q: 8, A: 4}             # ventana reciente R, fuera de la línea base del nulo
+  min_mean_share: 0.002           # prevalencia media mínima sobre toda la historia
+  max_median_share: 0.5           # unigramas con proporción mediana >= esto: palabras funcionales
+  # φ del post-blackening + 2 errores estándar. Medido (ADR 0008): con la grilla anual de EDGAR
+  # (~20 años de línea base) y AR(1) φ=0,7, margen 1 daba tamaño 1,9 % al 1 % y FDR 0,07; con
+  # margen 2, 0,9 % y 0,02 (φ=0,9: 1,6 % y 0,06).
+  phi_margin: 2.0
+  # Amplitud: entidades distintas (agencias en FR, empresas en EDGAR) que usan el término en la
+  # ventana reciente. Filtro neutral (no mira el estadístico). EDGAR: 0 = desactivado, porque
+  # cada documento es de una empresa y n_entities ≈ doc_count.
+  min_entities: {edgar: 0, federal_register: 2}
+  block_sample: 5000              # términos para la mediana de la longitud de bloque automática
+  workers: 4
+
 edgar:
   base_url: https://www.sec.gov
   data_url: https://data.sec.gov
@@ -175,6 +193,7 @@ edgar:
   timeout_s: 120
   min_chars: 2000                 # secciones más cortas (p. ej. "no aplica") -> muy_corta
   closed_grace_days: 7            # un trimestre se congela 7 días después de terminar
+  reprocess_below_schema: 1       # n_entities ≈ doc_count (un 10-K por empresa): no se re-baja
   submissions_api_max_ciks: 500   # más CIK que esto: se usa submissions.zip (una descarga)
   submissions_zip_max_age_hours: 20
 
@@ -187,6 +206,7 @@ federal_register:
   timeout_s: 120
   min_chars: 300
   closed_grace_days: 3
+  reprocess_below_schema: 2       # re-procesa los meses sin n_entities (agencias, ADR 0008)
 
 logging:
   level: INFO
