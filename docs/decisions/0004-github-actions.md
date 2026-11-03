@@ -64,6 +64,12 @@ R2), mantener un servidor y pagar ~€42/mes.
   `actions/upload-artifact@v6`: las tres declaran `runs.using: node24` en su `action.yml`.
   Antes eran checkout@v4, setup-uv@v6 y upload-artifact@v4, que corrían en Node 20 y daban el
   aviso de deprecación. Un test impide volver a versiones no listadas.
+- **Marcador de la descarga inicial.** `run_tramos.sh` creaba `initial_download.done` después
+  del último sync, así que nunca llegó a R2. Cada corrida de Actions volvía a ser "descarga
+  inicial": saltaba el embudo (ya existía `initial_funnel.done`) y no corría
+  `weekly_update.sh`. Lo delató `eligibility.run_id`, que seguía siendo el de la carga
+  inicial tras la corrida del 2026-11-03. Ahora el marcador se crea antes del último sync
+  (test).
 
 ## Límites y riesgos
 
