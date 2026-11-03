@@ -89,35 +89,11 @@ def classify_rows(
     active: list[dict[str, Any]] = []
 
     for r in catalog:
-        freq = r["frequency"]
-        base = {
-            "series_id": r["series_id"],
-            "frequency": freq,  # NULL si no está soportada; el código va en `detail`
-            "copyrighted": bool(r["copyrighted"]),
-            "geo_level": None,
-            "detail": None,
-        }
-        start, end = r["observation_start"], r["observation_end"]
-        if r["discontinued"]:
-            out[r["series_id"]] = {**base, "group_name": "excluida", "rule": "descontinuada"}
-        elif freq is None:
-            out[r["series_id"]] = {
-                **base,
-                "group_name": "excluida",
-                "rule": "frecuencia_no_soportada",
-                "detail": r["frequency_raw"],
-            }
-        elif start is None or end is None:
-            out[r["series_id"]] = {**base, "group_name": "excluida", "rule": "sin_fechas"}
-        elif (today - end).days > max_stale[freq]:
-            out[r["series_id"]] = {
-                **base,
-                "group_name": "excluida",
-                "rule": "inactiva",
-                "detail": f"ultimo_dato={end.isoformat()}",
-            }
+        decision = row_rule(r, max_stale, today)
+        if decision is not None:
+            out[r["series_id"]] = decision
         else:
-            active.append({**r, "_freq": freq, "_base": base})
+            active.append({**r, "_freq": r["frequency"], "_base": _base(r)})
 
     # Regla 4: una versión por variable (mismo título normalizado).
     rank = _variant_rank(el["variants"], min_days)
@@ -151,6 +127,45 @@ def classify_rows(
             decision.update(group_name=geo_level, rule="geografia")
         out[r["series_id"]] = decision
     return [out[sid] for sid in sorted(out)]
+
+
+def _base(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "series_id": r["series_id"],
+        "frequency": r["frequency"],  # NULL si no está soportada; el código va en `detail`
+        "copyrighted": bool(r["copyrighted"]),
+        "geo_level": None,
+        "detail": None,
+    }
+
+
+def row_rule(r: dict[str, Any], max_stale: dict[str, int], today: date) -> dict[str, Any] | None:
+    """Reglas 1–3 (descontinuada, frecuencia, sin fechas, inactiva): solo miran la fila.
+
+    Devuelve la decisión de exclusión, o None si la serie sigue en el embudo.
+    """
+    freq = r["frequency"]
+    base = _base(r)
+    end = r["observation_end"]
+    if r["discontinued"]:
+        return {**base, "group_name": "excluida", "rule": "descontinuada"}
+    if freq is None:
+        return {
+            **base,
+            "group_name": "excluida",
+            "rule": "frecuencia_no_soportada",
+            "detail": r["frequency_raw"],
+        }
+    if r["observation_start"] is None or end is None:
+        return {**base, "group_name": "excluida", "rule": "sin_fechas"}
+    if (today - end).days > max_stale[freq]:
+        return {
+            **base,
+            "group_name": "excluida",
+            "rule": "inactiva",
+            "detail": f"ultimo_dato={end.isoformat()}",
+        }
+    return None
 
 
 def normalize_title(title: str | None) -> str:

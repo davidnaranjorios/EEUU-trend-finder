@@ -22,9 +22,11 @@ import argparse
 import json
 import logging
 import sys
+import tempfile
 import time
+import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -32,9 +34,10 @@ from typing import Any, Protocol
 
 import duckdb
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.config import REPO_ROOT, load_config
-from src.ingest.store import UpsertResult, read_table, upsert
+from src.ingest.store import UpsertResult, bucket_of, read_table, upsert
 from src.log import get_logger, run
 from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
 
@@ -208,8 +211,6 @@ class SourceIngestor:
         Con `full` (o si toca el refresco periódico) reprocesa todas las unidades: la regla de
         inactividad depende de la fecha de hoy, no solo del archivo.
         """
-        from src.eligibility import classify_rows  # import tardío: eligibility importa fred
-
         if full is None:
             full = self.is_stale()
         units = self.adapter.list_units()
@@ -227,25 +228,103 @@ class SourceIngestor:
             ):
                 stats["units_unchanged"] += 1
                 continue
-            rows = [
-                {**r, "source": self.source, "unit": unit.unit_id}
-                for r in self.adapter.catalog_rows(unit)
-            ]
-            decisions = classify_rows(rows, self.cfg, today)
-            lineage = aggregate_lineage(decisions, unit.unit_id, self.scfg)
-            kept = {d["series_id"] for d in decisions if d["rule"] not in ROW_RULES}
-            self._write_catalog([r for r in rows if r["series_id"] in kept])
-            self._write_lineage(lineage, run_id, decided_at)
-            self._set_state(unit.unit_id, "catalog", unit.catalog_version, len(rows), len(lineage))
+            stats += self._crawl_unit(unit, run_id, decided_at, today)
             stats["units_processed"] += 1
-            stats["series"] += len(rows)
-            stats["lineage_rows"] += len(lineage)
-            for d in decisions:
-                stats[f"grupo_{d['group_name']}"] += 1
         self._save_cursor("last_crawl_ok")
         out = dict(stats)
         self.log.info("crawl terminado", extra={"fields": {"source": self.source, **out}})
         return out
+
+    def _crawl_unit(
+        self, unit: Unit, run_id: str, decided_at: datetime, today: date
+    ) -> Counter[str]:
+        """Clasifica una unidad con memoria acotada.
+
+        Las reglas de fila se aplican en streaming; las series que siguen en el embudo se
+        reparten por título normalizado (la regla de variantes solo compara títulos iguales) y,
+        si la unidad es grande, se derraman a disco por fragmentos.
+        """
+        from src.eligibility import classify_rows, normalize_title, row_rule
+
+        max_stale = self.cfg["eligibility"]["max_staleness_days"]
+        threshold = self.scfg.get("lineage_aggregate_min_series")
+        spill_rows = self.scfg.get("spill_rows", SPILL_ROWS)
+        stats: Counter[str] = Counter()
+        self.paths.raw.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.paths.raw, prefix=".crawl-") as tmp:
+            excluded = _Spill(Path(tmp) / "excluded", _DECISION_SCHEMA, spill_rows)
+            active = _Spill(
+                Path(tmp) / "active",
+                SOURCE_CATALOG.schema,
+                spill_rows,
+                shard_key=lambda r: normalize_title(r["title"]),
+            )
+            rules: Counter[str] = Counter()
+            max_detail: dict[str, str] = {}
+            for raw in self.adapter.catalog_rows(unit):
+                r = {**raw, "source": self.source, "unit": unit.unit_id}
+                d = row_rule(r, max_stale, today)
+                if d is None:
+                    active.add(r)
+                    continue
+                excluded.add(d)
+                rules[d["rule"]] += 1
+                if d["detail"] and d["detail"] > max_detail.get(d["rule"], ""):
+                    max_detail[d["rule"]] = d["detail"]
+            n = excluded.n + active.n
+            stats["series"] += n
+            for rule, k in rules.items():
+                stats[f"regla_{rule}"] += k
+            if active.n == 0 and len(rules) == 1 and threshold is not None and n >= threshold:
+                # Toda la unidad cae por la misma regla de fila: una fila agregada (ADR 0005).
+                rule = next(iter(rules))
+                freq = next(excluded.rows())["frequency"]
+                lineage = [
+                    {
+                        "series_id": f"{unit.unit_id}{UNIT_WILDCARD}",
+                        "group_name": "excluida",
+                        "rule": rule,
+                        "detail": (
+                            f"n_series={n};max={max_detail.get(rule, '')};"
+                            f"version={unit.catalog_version or ''}"
+                        ),
+                        "geo_level": None,
+                        "frequency": freq,
+                        "copyrighted": False,
+                    }
+                ]
+                self._write_lineage(lineage, run_id, decided_at)
+                stats["lineage_rows"] += 1
+                stats["units_aggregated"] += 1
+            else:
+                # Se escribe en lotes grandes (write_batch_rows): pocos archivos por bucket.
+                size = self.scfg["write_batch_rows"]
+                lineage_buf: list[dict[str, Any]] = []
+                catalog_buf: list[dict[str, Any]] = []
+
+                def flush(force: bool = False) -> None:
+                    if lineage_buf and (force or len(lineage_buf) >= size):
+                        self._write_lineage(lineage_buf, run_id, decided_at)
+                        stats["lineage_rows"] += len(lineage_buf)
+                        lineage_buf.clear()
+                    if catalog_buf and (force or len(catalog_buf) >= size):
+                        self._write_catalog(catalog_buf)
+                        catalog_buf.clear()
+
+                for batch in excluded.batches():
+                    lineage_buf.extend(batch)
+                    flush()
+                for shard in active.batches():
+                    decisions = classify_rows(shard, self.cfg, today)
+                    lineage_buf.extend(decisions)
+                    catalog_buf.extend(shard)
+                    for d in decisions:
+                        stats[f"grupo_{d['group_name']}"] += 1
+                    flush()
+                flush(force=True)
+            stats["grupo_excluida"] += excluded.n
+        self._set_state(unit.unit_id, "catalog", unit.catalog_version, n, stats["lineage_rows"])
+        return stats
 
     def is_stale(self) -> bool:
         last = _parse_dt(self._load_cursors().get("last_crawl_ok"))
@@ -334,34 +413,81 @@ class SourceIngestor:
 
     def targets(self) -> dict[str, str]:
         """series_id -> unidad de las series de los grupos de `download.groups`."""
-        groups = list(self.cfg["download"]["groups"])
-        decisions = latest_decisions(self.paths, self.source)
-        ids = [d["series_id"] for d in decisions if d["group_name"] in groups]
-        if not ids:
+        con = self._lineage_con()
+        if con is None:
             return {}
-        cat = read_table(
-            SOURCE_CATALOG,
-            self.paths.catalog,
-            source=self.source,
-            where="list_contains(?, series_id)",
-            params=[ids],
-        )
-        return dict(
-            zip(cat.column("series_id").to_pylist(), cat.column("unit").to_pylist(), strict=True)
-        )
+        try:
+            rows = con.execute(
+                "SELECT l.series_id, c.unit FROM latest l JOIN catalog c USING (series_id) "
+                "WHERE l.group_name IN (SELECT unnest(?))",
+                [list(self.cfg["download"]["groups"])],
+            ).fetchall()
+        finally:
+            con.close()
+        return dict(rows)
 
     def estimate(self) -> dict[str, Any]:
-        """Embudo de la fuente: series por regla y grupo, y tamaño estimado por grupo."""
-        decisions = latest_decisions(self.paths, self.source)
-        cat = {
-            r["series_id"]: r
-            for r in read_table(SOURCE_CATALOG, self.paths.catalog, source=self.source)
-            .select(["series_id", "frequency", "observation_start", "observation_end", "unit"])
-            .to_pylist()
+        """Embudo de la fuente: series por regla y grupo (las filas agregadas cuentan por su
+        n_series) y tamaño estimado de los grupos que entran al análisis."""
+        con = self._lineage_con()
+        if con is None:
+            return {"total": 0, "excluidas_por_regla": {}, "grupos": {}, "tamano_por_grupo": {}}
+        n_expr = (
+            f"CASE WHEN ends_with(series_id, '{UNIT_WILDCARD}') THEN "
+            "coalesce(TRY_CAST(regexp_extract(detail, 'n_series=([0-9]+)', 1) AS BIGINT), 1) "
+            "ELSE 1 END"
+        )
+        days = " ".join(f"WHEN '{f}' THEN {d}" for f, d in PERIOD_DAYS.items())
+        try:
+            groups = con.execute(
+                f"SELECT group_name, sum({n_expr}) FROM latest GROUP BY 1 ORDER BY 2 DESC"
+            ).fetchall()
+            rules = con.execute(
+                f"SELECT rule, sum({n_expr}) FROM latest WHERE group_name = 'excluida' "
+                "GROUP BY 1 ORDER BY 2 DESC"
+            ).fetchall()
+            sizes = con.execute(
+                "SELECT l.group_name, count(*), count(DISTINCT c.unit), "
+                "sum(CAST(floor(date_diff('day', c.observation_start, c.observation_end) / "
+                f"(CASE c.frequency {days} END)) AS BIGINT) + 1) "
+                "FROM latest l JOIN catalog c USING (series_id) "
+                "WHERE l.group_name <> 'excluida' GROUP BY 1 ORDER BY 2 DESC"
+            ).fetchall()
+        finally:
+            con.close()
+        return {
+            "total": int(sum(n for _, n in groups)),
+            "excluidas_por_regla": {r: int(n) for r, n in rules},
+            "grupos": {g: int(n) for g, n in groups},
+            "tamano_por_grupo": {
+                g: {
+                    "series": int(n),
+                    "unidades": int(u),
+                    "obs_estimadas": int(obs or 0),
+                    "parquet_mb": round((obs or 0) * PARQUET_BYTES_PER_ROW / 1e6, 1),
+                }
+                for g, n, u, obs in sizes
+            },
         }
-        return funnel(decisions, cat)
 
-    # --- E/S -----------------------------------------------------------------------------------
+    def _lineage_con(self) -> duckdb.DuckDBPyConnection | None:
+        """Conexión con vistas `latest` (última decisión por serie) y `catalog`."""
+        lineage = sorted((self.paths.eligibility / self.source).glob("??/*.parquet"))
+        if not lineage:
+            return None
+        catalog = sorted((self.paths.catalog / self.source).glob("??/*.parquet"))
+        con = duckdb.connect()
+        con.execute(
+            f"CREATE VIEW latest AS SELECT * FROM read_parquet({_sql_list(lineage)}) "
+            "QUALIFY row_number() OVER "
+            "(PARTITION BY series_id ORDER BY decided_at DESC, run_id DESC) = 1"
+        )
+        if catalog:
+            con.execute(f"CREATE VIEW catalog AS SELECT * FROM read_parquet({_sql_list(catalog)})")
+        else:
+            con.register("_empty_catalog", SOURCE_CATALOG.schema.empty_table())
+            con.execute("CREATE VIEW catalog AS SELECT * FROM _empty_catalog")
+        return con
 
     def _write_catalog(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -445,43 +571,128 @@ class SourceIngestor:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+# --- derrame a disco ---------------------------------------------------------------------------
+
+SPILL_ROWS = 200_000
+SPILL_SHARDS = 64
+_DECISION_SCHEMA = pa.schema(
+    [
+        pa.field("series_id", pa.string(), nullable=False),
+        pa.field("group_name", pa.string(), nullable=False),
+        pa.field("rule", pa.string(), nullable=False),
+        pa.field("detail", pa.string()),
+        pa.field("geo_level", pa.string()),
+        pa.field("frequency", pa.string()),
+        pa.field("copyrighted", pa.bool_(), nullable=False),
+    ]
+)
+
+
+class _Spill:
+    """Filas en memoria hasta `limit`; después, en Parquet por fragmentos.
+
+    Con `shard_key`, las filas con la misma clave caen siempre en el mismo fragmento, y
+    `batches()` devuelve un fragmento completo cada vez (o todo junto si nunca se derramó).
+    """
+
+    def __init__(
+        self,
+        directory: Path,
+        schema: pa.Schema,
+        limit: int,
+        shard_key: Callable[[dict[str, Any]], str] | None = None,
+    ) -> None:
+        self.dir = directory
+        self.schema = schema
+        self.limit = limit
+        self.shard_key = shard_key
+        self.n = 0
+        self._mem: list[dict[str, Any]] = []
+        self._shards: dict[int, list[dict[str, Any]]] = {}
+        self._spilled = False
+
+    def add(self, row: dict[str, Any]) -> None:
+        self.n += 1
+        if not self._spilled:
+            self._mem.append(row)
+            if len(self._mem) >= self.limit:
+                self._spilled = True
+                for r in self._mem:
+                    self._add_shard(r)
+                self._mem = []
+            return
+        self._add_shard(row)
+
+    def _add_shard(self, row: dict[str, Any]) -> None:
+        k = bucket_of(self.shard_key(row), SPILL_SHARDS) if self.shard_key else 0
+        buf = self._shards.setdefault(k, [])
+        buf.append(row)
+        if len(buf) >= max(1, self.limit // 4):
+            self._flush(k)
+
+    def _flush(self, k: int) -> None:
+        buf = self._shards.get(k)
+        if not buf:
+            return
+        d = self.dir / f"{k:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        cols = {name: [r.get(name) for r in buf] for name in self.schema.names}
+        pq.write_table(pa.table(cols, schema=self.schema), d / f"{uuid.uuid4().hex}.parquet")
+        self._shards[k] = []
+
+    def rows(self) -> Iterator[dict[str, Any]]:
+        for batch in self.batches():
+            yield from batch
+
+    def batches(self) -> Iterator[list[dict[str, Any]]]:
+        if not self._spilled:
+            if self._mem:
+                yield self._mem
+            return
+        for k in list(self._shards):
+            self._flush(k)
+        for d in sorted(self.dir.iterdir()):
+            files = sorted(d.glob("*.parquet"))
+            if self.shard_key is None:
+                for f in files:
+                    yield pq.read_table(f).to_pylist()
+            else:
+                yield pa.concat_tables([pq.read_table(f) for f in files]).to_pylist()
+
+
 # --- funciones puras ----------------------------------------------------------------------------
 
-# Reglas que se deciden mirando una sola fila del catálogo (sin compararla con otras series).
-ROW_RULES = ("descontinuada", "frecuencia_no_soportada", "sin_fechas", "inactiva")
 
-
-def aggregate_lineage(
-    decisions: list[dict[str, Any]], unit_id: str, scfg: dict[str, Any]
+def expand_aggregated(
+    adapter: SourceAdapter,
+    unit: Unit,
+    decision: dict[str, Any],
+    cfg: dict[str, Any],
+    today: date,
 ) -> list[dict[str, Any]]:
-    """Linaje de una unidad: una fila por serie, o una fila agregada si toda la unidad cae por
-    la misma regla de fila (p. ej. una encuesta entera sin datos recientes) y supera
-    `lineage_aggregate_min_series`. La fila agregada lleva `series_id = <unidad>/*` y el número
-    de series en `detail`; las series se reconstruyen desde la unidad versionada.
+    """Decisiones por serie que resume una fila agregada, reconstruidas desde la unidad.
+
+    Solo es válido si la unidad sigue en la versión registrada (ETag...): si cambió, falla en
+    vez de devolver decisiones de otro archivo. `today` es la fecha de la decisión original.
     """
-    threshold = scfg.get("lineage_aggregate_min_series")
-    rules = {d["rule"] for d in decisions}
-    if (
-        threshold is None
-        or len(decisions) < threshold
-        or len(rules) != 1
-        or next(iter(rules)) not in ROW_RULES
-    ):
-        return decisions
-    rule = next(iter(rules))
-    details = sorted(d["detail"] for d in decisions if d["detail"])
-    freqs = Counter(d["frequency"] for d in decisions)
-    return [
-        {
-            "series_id": f"{unit_id}{UNIT_WILDCARD}",
-            "group_name": "excluida",
-            "rule": rule,
-            "detail": f"n_series={len(decisions)};max={details[-1] if details else ''}",
-            "geo_level": None,
-            "frequency": freqs.most_common(1)[0][0],
-            "copyrighted": any(d["copyrighted"] for d in decisions),
-        }
-    ]
+    from src.eligibility import row_rule
+
+    fields = dict(p.split("=", 1) for p in (decision["detail"] or "").split(";") if "=" in p)
+    if fields.get("version", "") != (unit.catalog_version or ""):
+        raise ValueError(
+            f"{unit.unit_id}: versión {unit.catalog_version!r} distinta de la registrada "
+            f"{fields.get('version')!r}"
+        )
+    max_stale = cfg["eligibility"]["max_staleness_days"]
+    out = []
+    for r in adapter.catalog_rows(unit):
+        d = row_rule(r, max_stale, today)
+        if d is None or d["rule"] != decision["rule"]:
+            raise ValueError(f"{unit.unit_id}: {r['series_id']} no cae en {decision['rule']}")
+        out.append(d)
+    if len(out) != lineage_series_count(decision):
+        raise ValueError(f"{unit.unit_id}: {len(out)} series, la fila dice otra cosa")
+    return sorted(out, key=lambda d: d["series_id"])
 
 
 def lineage_series_count(decision: dict[str, Any]) -> int:
@@ -517,51 +728,6 @@ def latest_decisions(paths: SourcePaths, source: str) -> list[dict[str, Any]]:
     return t.to_pylist()
 
 
-def funnel(decisions: Iterable[dict[str, Any]], catalog: dict[str, dict[str, Any]]) -> dict:
-    """Conteos por regla y grupo (contando las filas agregadas por su n_series) y tamaño."""
-    by_rule: Counter[str] = Counter()
-    by_group: Counter[str] = Counter()
-    sizes: dict[str, Counter[str]] = {}
-    for d in decisions:
-        n = lineage_series_count(d)
-        by_group[d["group_name"]] += n
-        if d["group_name"] == "excluida":
-            by_rule[d["rule"]] += n
-            continue
-        s = sizes.setdefault(d["group_name"], Counter())
-        s["series"] += n
-        r = catalog.get(d["series_id"])
-        if r:
-            s["obs_estimadas"] += est_obs(r)
-    units_by_group: dict[str, set[str]] = {}
-    for d in decisions:
-        r = catalog.get(d["series_id"])
-        if r and d["group_name"] != "excluida":
-            units_by_group.setdefault(d["group_name"], set()).add(r["unit"])
-    tam = {
-        g: {
-            "series": s["series"],
-            "unidades": len(units_by_group.get(g, ())),
-            "obs_estimadas": s["obs_estimadas"],
-            "parquet_mb": round(s["obs_estimadas"] * PARQUET_BYTES_PER_ROW / 1e6, 1),
-        }
-        for g, s in sizes.items()
-    }
-    return {
-        "total": sum(by_group.values()),
-        "excluidas_por_regla": dict(by_rule.most_common()),
-        "grupos": dict(by_group.most_common()),
-        "tamano_por_grupo": tam,
-    }
-
-
-def est_obs(r: dict[str, Any]) -> int:
-    if not r.get("observation_start") or not r.get("observation_end") or not r.get("frequency"):
-        return 0
-    days = (r["observation_end"] - r["observation_start"]).days
-    return int(days / PERIOD_DAYS[r["frequency"]]) + 1
-
-
 def to_series_meta(catalog: pa.Table) -> pa.Table:
     cols = {
         name: catalog.column(name)
@@ -571,6 +737,10 @@ def to_series_meta(catalog: pa.Table) -> pa.Table:
     cols["start_date"] = catalog.column("observation_start")
     cols["end_date"] = catalog.column("observation_end")
     return pa.table({n: cols[n] for n in SERIES_META.schema.names}, schema=SERIES_META.schema)
+
+
+def _sql_list(files: list[Path]) -> str:
+    return "[" + ", ".join("'" + str(f).replace("'", "''") + "'" for f in files) + "]"
 
 
 def _parse_dt(value: str | None) -> datetime | None:
