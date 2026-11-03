@@ -124,10 +124,10 @@ def load_matrix(
 ) -> TermMatrix:
     """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla.
 
-    Con `min_entities` > 0 se excluyen los términos cuya amplitud (máximo de `n_entities` en
-    los subperiodos de los últimos `recent` periodos de la grilla) es menor: un término que solo
-    usa una agencia (p. ej. el nombre de quien firma sus avisos) no es un fenómeno amplio. Los
-    términos sin medida (NULL, particiones anteriores al esquema 2) no se excluyen.
+    Con `min_entities` > 0 se excluyen los términos cuya amplitud (mediana de `n_entities` en
+    los subperiodos medidos de los últimos `recent` periodos de la grilla) es menor: un término
+    que solo usa una agencia (p. ej. el nombre de quien firma sus avisos) no es un fenómeno
+    amplio. Los términos sin medida (NULL, particiones anteriores al esquema 2) no se excluyen.
     """
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
@@ -194,7 +194,7 @@ def load_matrix(
         con.execute(
             """
             CREATE TEMP TABLE breadth AS
-            SELECT k.section, k.term, max(tf.n_entities) AS amp
+            SELECT k.section, k.term, median(tf.n_entities) AS amp
             FROM keep k LEFT JOIN tf ON tf.section = k.section AND tf.term = k.term
               AND tf.period IN (SELECT unnest(?))
             GROUP BY 1, 2

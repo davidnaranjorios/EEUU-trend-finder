@@ -47,10 +47,11 @@ from src.log import get_logger, run
 from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
 
 EXIT_PENDING = 10
-# Versión del esquema de las particiones que escribe la ingesta. 2: term_freq.n_entities
-# (ADR 0008). Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se
-# vuelve a procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
-SCHEMA_VERSION = 2
+# Versión del esquema de las particiones que escribe la ingesta (ADR 0008):
+#   2: term_freq.n_entities;  3: entidad del Federal Register normalizada.
+# Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se vuelve a
+# procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
+SCHEMA_VERSION = 3
 DOC_LEVEL = "*"  # `section` de las decisiones sobre el documento entero
 TABLE_DIRS = {
     TEXT_DOCS.name: "text_docs",

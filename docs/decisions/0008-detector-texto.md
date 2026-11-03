@@ -80,10 +80,10 @@ El bootstrap y la FDR son los de la fase 2 (ADR 0007); no se duplican.
   (agencia en el Federal Register, CIK en EDGAR) usan el término. Un documento sin entidad
   (p. ej. presidencial) cuenta como una entidad. Siempre 1 ≤ `n_entities` ≤ `doc_count`
   (validado).
-- **Filtro neutral en el detector:** se excluye un término si el máximo de `n_entities` en los
-  subperiodos de la ventana reciente R es menor que `text_detect.min_entities[fuente]`. No mira
+- **Filtro neutral en el detector:** se excluye un término si la **mediana** de `n_entities` en
+  los subperiodos medidos de la ventana reciente R es menor que `text_detect.min_entities[fuente]`. No mira
   T, así que no sesga la FDR. Los excluidos quedan en `params_json` (`excluidos_amplitud`), y
-  los términos sin medida no se excluyen (`sin_medida_amplitud`). Valores: Federal Register 2;
+  los términos sin medida no se excluyen (`sin_medida_amplitud`). Valores: Federal Register 3;
   EDGAR 0 (desactivado), porque cada 10-K es de una empresa y `n_entities ≈ doc_count`.
 - **Migración sin descarga:** `n_entities` es nullable. `python -m src.ingest.text migrate`
   (lo corre `infra/run_texto.sh` antes de los tramos) reescribe las particiones viejas con la
@@ -94,6 +94,13 @@ El bootstrap y la FDR son los de la fase 2 (ADR 0007); no se duplican.
   bucle normal de tramos.
   - Federal Register: 2. Re-baja 2000–2026 una vez, ~330 zips y ~1,5 h en Actions.
   - EDGAR: 1. No re-baja nada; sus trimestres ya cargados quedan con NULL.
+
+- **Corrección tras medir (2026-11-03):** la primera versión usaba el máximo. Bastaba un mes
+  con 2 entidades para pasar: "christopher abbott" tiene `n_entities` = 1 en todos los meses de
+  2026 y aun así pasaba. Además, la agencia del Federal Register venía con variantes de formato
+  (339 nombres, 313 tras normalizar). Ahora se usa la mediana y la entidad se normaliza
+  (espacios colapsados y mayúsculas; esquema 3, y FR re-procesa con
+  `reprocess_below_schema: 3`).
 
 ## Verificación con datos reales (2026-11-03)
 
@@ -123,6 +130,24 @@ Se quitan con datos, no con listas:
 - **opcionalmente**, con una medida de amplitud: en cuántas entidades (agencias o empresas)
   aparece el término. Hoy `term_freq` no la tiene; agregarla cambiaría el esquema, así que queda
   propuesta para decidir.
+
+### Medición del filtro de amplitud (FR 2016–2026, 43 trimestres, 2026-11-03)
+
+Re-ingesta local con `n_entities`, con la entidad todavía sin normalizar, de modo que las
+variantes de nombre inflan un poco los conteos y el filtro real será algo más estricto:
+
+| Filtro | Pruebas | Excluidas por amplitud | BH | BY |
+|---|---|---|---|---|
+| sin filtro | 64.508 | 0 | 303 | 63 |
+| máximo ≥ 2 (primera versión) | 52.540 | 11.968 | 213 | 44 |
+| mediana ≥ 2 | 46.783 | 17.725 | 128 | 30 |
+| **mediana ≥ 3 (elegido)** | **41.764** | **22.744** | **102** | **21** |
+
+- **Mediana ≥ 3:** el top queda dominado por cambios de contenido ("deregulation", "unleashing
+  prosperity", "rescission"), y salen los nombres de firmantes que con ≥ 2 seguían ("abbott",
+  "mcdonough", "stephanie j").
+- **Términos sin medida:** 4.916, que no se excluyen. Son términos censurados en toda la ventana
+  reciente.
 
 ## Uso
 
