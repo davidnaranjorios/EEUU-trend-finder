@@ -43,7 +43,9 @@ fi
 sync_r2
 tramos download --max-releases "$RELEASES_PER_TRAMO"
 tramos vintages --max-series "$SERIES_PER_TRAMO"
-py -m src.export >/dev/null
+export_rc=0
+py -m src.export >/dev/null || export_rc=$?
 sync_r2
+[[ $export_rc -eq 0 ]] || { echo "export falló (rc=$export_rc)" >&2; exit "$export_rc"; }
 touch "$STATE/initial_download.done"
 echo "descarga inicial completa"

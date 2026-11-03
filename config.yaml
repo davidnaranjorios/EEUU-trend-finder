@@ -47,6 +47,14 @@ download:
   groups: [nacional]
   v2_page_limit: 500000                 # máximo oficial de release/observations
 
+# Exportes para la futura web estática (src/export.py). Fichas solo de estos grupos; los demás se
+# cuentan en funnel.json. Si un archivo o el total pasa el tope, el export falla (no publica).
+exports:
+  groups: [nacional]
+  n_buckets: 64
+  max_file_kb: 512
+  max_total_mb: 20
+
 # Parquet definitivo en Cloudflare R2. Credenciales solo en .env (AWS_*, CLOUDFLARE_ACCOUNT_ID).
 storage:
   bucket: trend-finder

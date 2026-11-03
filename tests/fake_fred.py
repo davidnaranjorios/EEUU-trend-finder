@@ -66,7 +66,10 @@ class FakeFred:
         self.obs: dict[str, list[dict[str, str]]] = {}
         self.updates: list[str] = []
         self.max_vintages = 2000
+        # Como la API real con DBAA: cuenta más fechas de vintage que series/vintagedates.
+        self.vintage_count_extra = 0
         self.missing: set[str] = set()
+        self.not_in_alfred: set[str] = set()
         self.fail_queue: list[int] = []
         self.always_fail: int | None = None
         self.requests: list[tuple[str, dict[str, str]]] = []
@@ -160,6 +163,14 @@ class FakeFred:
         return _page(p, [self.infos[s] for s in self.updates], "seriess")
 
     def _series_vintagedates(self, p: dict[str, str]) -> httpx.Response:
+        if p["series_id"] in self.not_in_alfred:
+            return httpx.Response(
+                400,
+                json={
+                    "error_message": "Bad Request.  The series does not exist in ALFRED but may "
+                    "exist in FRED.  Try setting realtime_start and realtime_end to today's date."
+                },
+            )
         dates = sorted({r["realtime_start"] for r in self.obs[p["series_id"]]})
         if p.get("sort_order") == "desc":
             dates.reverse()
@@ -241,11 +252,15 @@ class FakeFred:
         rs, re_ = p.get("realtime_start", self.today), p.get("realtime_end", self.today)
         n_vintages = len(
             {r["realtime_start"] for r in self.obs[sid] if rs <= r["realtime_start"] <= re_}
-        )
+        ) + (self.vintage_count_extra if rs != re_ else 0)
         if n_vintages > self.max_vintages:
             return httpx.Response(
                 400,
-                json={"error_message": "This exceeds the maximum number of vintage dates (2000)."},
+                json={
+                    "error_message": f"There are {n_vintages} vintage dates in the specified "
+                    "real-time period. This exceeds the maximum number of vintage dates allowed "
+                    "for this file type (2000)."
+                },
             )
         rows = []
         for r in self.obs[sid]:

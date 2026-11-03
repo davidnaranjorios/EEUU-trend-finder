@@ -125,6 +125,23 @@ ELIGIBILITY = TableSpec(
     key=("run_id", "source", "series_id"),
 )
 
+# Resultado de pedir el historial ALFRED de cada serie de la muestra de vintages (ADR 0002).
+# Una fila por serie intentada en cada corrida; el motivo vigente es el de la última corrida.
+VINTAGE_STATUSES = ("ok", "no_existe_en_alfred", "error_api")
+VINTAGE_LINEAGE = TableSpec(
+    name="vintage_lineage",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("series_id", pa.string(), False),
+        ("status", pa.string(), False),
+        ("n_rows", pa.int64(), False),
+        ("detail", pa.string(), True),
+        ("decided_at", pa.timestamp("s", tz="UTC"), False),
+    ),
+    key=("run_id", "source", "series_id"),
+)
+
 DETECTOR_RUNS = TableSpec(
     name="detector_runs",
     schema=_schema(
@@ -177,6 +194,7 @@ ALL_SPECS = {
         TERM_FREQ,
         SIGNALS,
         ELIGIBILITY,
+        VINTAGE_LINEAGE,
         DETECTOR_RUNS,
         SERIES_TERM_LINKS,
         CLUSTERS,
@@ -242,6 +260,11 @@ def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
             "group_name NOT IN (SELECT unnest(?)) OR rule = ''",
             [list(ELIGIBILITY_GROUPS)],
             "grupo fuera de dominio o regla vacía",
+        ),
+        VINTAGE_LINEAGE.name: (
+            "status NOT IN (SELECT unnest(?)) OR n_rows < 0 OR (status = 'ok') <> (detail IS NULL)",
+            [list(VINTAGE_STATUSES)],
+            "status fuera de dominio, n_rows negativo o motivo faltante",
         ),
         DETECTOR_RUNS.name: (
             "n_tests < 0 OR n_bh < 0 OR n_by < 0 OR n_bh > n_tests OR n_by > n_tests "

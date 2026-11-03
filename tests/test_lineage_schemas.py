@@ -10,6 +10,7 @@ from src.schemas import (
     DETECTOR_RUNS,
     ELIGIBILITY,
     SERIES_TERM_LINKS,
+    VINTAGE_LINEAGE,
     SchemaError,
     validate,
 )
@@ -49,6 +50,15 @@ VALID = {
         "score": 0.8,
         "method": "embeddings",
     },
+    VINTAGE_LINEAGE.name: {
+        "run_id": "r1",
+        "source": "fred",
+        "series_id": "S1",
+        "status": "no_existe_en_alfred",
+        "n_rows": 0,
+        "detail": "series/vintagedates: HTTP 400: The series does not exist in ALFRED",
+        "decided_at": T,
+    },
     CLUSTERS.name: {
         "run_id": "r1",
         "cluster_id": "c1",
@@ -58,12 +68,18 @@ VALID = {
         "similarity": 1.0,
     },
 }
-SPECS = {s.name: s for s in (ELIGIBILITY, DETECTOR_RUNS, SERIES_TERM_LINKS, CLUSTERS)}
+SPECS = {
+    s.name: s for s in (ELIGIBILITY, VINTAGE_LINEAGE, DETECTOR_RUNS, SERIES_TERM_LINKS, CLUSTERS)
+}
 
 INVALID = [
     (ELIGIBILITY.name, {"group_name": "favoritas"}),
     (ELIGIBILITY.name, {"rule": ""}),
     (ELIGIBILITY.name, {"series_id": None}),
+    (VINTAGE_LINEAGE.name, {"status": "otro"}),
+    (VINTAGE_LINEAGE.name, {"detail": None}),  # sin datos y sin motivo
+    (VINTAGE_LINEAGE.name, {"status": "ok", "detail": "x"}),
+    (VINTAGE_LINEAGE.name, {"n_rows": -1}),
     (DETECTOR_RUNS.name, {"n_bh": 101}),
     (DETECTOR_RUNS.name, {"q": 1.0}),
     (SERIES_TERM_LINKS.name, {"score": 1.5}),

@@ -106,7 +106,9 @@ title, category_path, start_date, end_date, last_updated, discontinued, copyrigh
 de FRED): se descargan y analizan, pero **no se publican en el reporte** sin ese permiso.
 
 Almacenamiento: `<tabla>/<fuente>/<NN>/part-*.parquet` con `NN = sha1(series_id) % n_buckets`;
-escritura idempotente en `src/ingest/store.py`; vistas DuckDB en `src/catalog.py`.
+escritura idempotente y compactación (≤ 1 archivo por bucket) en `src/ingest/store.py`; vistas
+DuckDB en `src/catalog.py`. Linaje: `eligibility` (por qué cada serie entra o no) y
+`vintage_lineage` (por qué una serie de la muestra no tiene vintages).
 
 **Texto** (`data/processed/text/`), clave `(source, doc_id, section)`: `source, doc_id, date,
 entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo, clave
@@ -165,7 +167,9 @@ un cliente propio, y documentar la decisión. Hecho: cliente propio, ver
 `docs/decisions/0001-cliente-fred.md`.
 Uso: `uv run python -m src.ingest.fred crawl | crawl-meta | observations [--category ID] |
 download | vintages [--ids-file F] | update | pick-category`, `uv run python -m src.eligibility
-run | funnel` y `uv run python -m src.export`. Almacenamiento y vintages: ADR 0002;
+run | funnel`, `uv run python -m src.export` (con tope de tamaño, `exports` en config.yaml) y
+`uv run python -m src.ingest.store compact` (un Parquet por bucket; lo corre `sync_r2.sh` antes
+de subir). Almacenamiento y vintages: ADR 0002;
 infraestructura (GitHub Actions + R2): ADR 0004 y `docs/infra/github-actions.md`
 (alternativa con VPS: ADR 0003).
 **Terminado cuando:** puedo consultar en DuckDB todas las series de una categoría y una segunda

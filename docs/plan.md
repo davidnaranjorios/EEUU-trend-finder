@@ -237,7 +237,7 @@ comparado con el umbral fijado de antemano.
 
 | Bloque | Estado | PR |
 |---|---|---|
-| 0: pendientes menores | pendiente | |
+| 0: pendientes menores | en revisión (0.4 y 0.6 manuales, tras el merge) | bloque-0-pendientes |
 | 1: Fase 2 | pendiente | |
 | 2: Fase 3 | pendiente | |
 | 3: Fase 4 | pendiente | |

@@ -24,6 +24,10 @@ def test_config_loads_with_defaults():
         (("fdr", "calibration", "method"), "permutation"),  # permutación simple prohibida
         (("fdr", "calibration", "block_length"), 1),
         (("eligibility", "min_obs"), {"M": 10}),
+        (("exports", "groups"), ["favoritas"]),
+        (("exports", "max_file_kb"), 0),
+        (("exports", "max_total_mb"), -1),
+        (("exports", "n_buckets"), 101),
     ],
 )
 def test_invalid_config_rejected(path, value):

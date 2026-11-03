@@ -35,6 +35,36 @@ R2), mantener un servidor y pagar ~€42/mes.
 - Los logs (`data/logs/runs.jsonl`) también van a R2. Además, cada corrida sube `data/logs/`
   como artefacto por 30 días y escribe un resumen en la página de la corrida.
 
+## Actualización 2026-11-03 (bloque 0 de docs/plan.md)
+
+- **Compactación.** La corrida inicial dejó 14.491 Parquet (498,5 MB) en `processed/`. La razón:
+  `store.upsert` escribe un `part-*.parquet` por llamada y por bucket tocado, y nunca los junta.
+  La descarga v2 hace un upsert por página (357 páginas, cada una toca hasta 64 buckets); los
+  vintages, uno por lote de 200 series, y el estado, otro. Leer esos archivos uno a uno por
+  httpfs no terminó en 30 min. `python -m src.ingest.store compact` junta cada bucket en un solo
+  archivo con el mismo swap atómico de `upsert` (recuperable) y comprueba que el número de filas
+  no cambie; los buckets que ya tienen un archivo no se tocan. `infra/sync_r2.sh` compacta antes
+  de cada subida. Queda ≤ 1 archivo por bucket (≈ tablas × 64), y un test verifica que una
+  segunda corrida no aumenta el número de archivos. "Verificar R2" vuelve a medir la lectura
+  directa por httpfs, cronometrada y con límite de 15 min.
+- **Costo de la compactación en R2.** Cada semana se reescriben los buckets que cambiaron
+  (~0,5 GB) y lo reemplazado va a `_trash/`. Una regla de ciclo de vida de R2 borra `_trash/`
+  a los **30 días** (decisión 6 de docs/plan.md; guía en `docs/infra/github-actions.md`, paso
+  5). En régimen: ~0,5 GB de datos + ~2–2,5 GB de `_trash/`, dentro de los 10 GB gratuitos.
+- **Exportes con tope.** Pasaban de 66 archivos y 101,4 MB: fichas de 245k series de cuatro
+  grupos, con las claves repetidas en cada ficha. Ahora:
+  - solo hay fichas del grupo `exports.groups` (nacional, decisión del 2026-11-03);
+  - el formato es columnar y las categorías van por índice a `categories.json`;
+  - hay un tope de `exports.max_file_kb` (512) por archivo y `exports.max_total_mb` (20) en
+    total; si se pasa, el export falla sin escribir.
+
+  La corrida igual sincroniza los datos y termina en error, para que un exporte no bloquee
+  la ingesta.
+- **Acciones en Node 24.** `actions/checkout@v6`, `astral-sh/setup-uv@v7` y
+  `actions/upload-artifact@v6`: las tres declaran `runs.using: node24` en su `action.yml`.
+  Antes eran checkout@v4, setup-uv@v6 y upload-artifact@v4, que corrían en Node 20 y daban el
+  aviso de deprecación. Un test impide volver a versiones no listadas.
+
 ## Límites y riesgos
 
 - **6 h por job:** si una corrida se corta, la siguiente continúa desde el último tramo

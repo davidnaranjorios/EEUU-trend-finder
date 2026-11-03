@@ -16,5 +16,9 @@ py -m src.eligibility run >/dev/null
 # Series que entraron al universo con el embudo nuevo, y vintages de la muestra.
 py -m src.ingest.fred observations || [[ $? -eq 10 ]]
 py -m src.ingest.fred vintages || [[ $? -eq 10 ]]
-py -m src.export >/dev/null
+# Un exporte que pasa el tope no debe impedir que los datos lleguen a R2: se sincroniza igual
+# y la corrida termina en error.
+export_rc=0
+py -m src.export >/dev/null || export_rc=$?
 infra/sync_r2.sh
+[[ $export_rc -eq 0 ]] || { echo "export falló (rc=$export_rc)" >&2; exit "$export_rc"; }
