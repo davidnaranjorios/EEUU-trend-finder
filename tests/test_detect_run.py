@@ -154,3 +154,23 @@ def test_rerun_is_idempotent_and_shards_match(setup):
     ).fetchone()[0]
     n_c = con.execute("SELECT count(*) FROM detector_tests WHERE run_id = 'runC'").fetchone()[0]
     assert diff == 0 and n_c == 2 * (N_NULL + N_TREND)
+
+
+def test_slope_skips_annual_series_with_short_baseline():
+    """Anual con 15 años: la línea base de slope tendría 8 periodos (< slope_min_baseline)."""
+    from src.detect.run import Series, prep_for
+
+    cfg = load_config()
+    rng = np.random.default_rng(0)
+
+    def annual(n):
+        level = 100 * np.exp(np.cumsum(0.01 * rng.standard_normal(n)))
+        return Series(f"a{n}", "A", "A", "NA", False, level, 1980)
+
+    short, long_ = annual(16), annual(60)
+    slope = {p.series.series_id for p in prep_for("slope", [short, long_], cfg)}
+    regime = {p.series.series_id for p in prep_for("regime", [short, long_], cfg)}
+    assert slope == {"a60"}
+    assert regime == {"a16", "a60"}
+    long_prep = next(p for p in prep_for("slope", [long_], cfg))
+    assert long_prep.item.growth.size == 7 + 33  # W + línea base mínima

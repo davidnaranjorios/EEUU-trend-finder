@@ -178,7 +178,7 @@ DETECTOR_TESTS = TableSpec(
         ("effect_size", pa.float64(), False),
         ("persistent", pa.bool_(), False),
         ("p_value", pa.float64(), False),
-        ("p_method", pa.string(), False),  # empirical o gpd
+        ("p_method", pa.string(), False),  # empirical o gpd; *_esc si se usaron más réplicas
         ("q_value", pa.float64(), True),  # BH
         ("q_by", pa.float64(), True),  # BY, solo comparación
         ("n_tests", pa.int64(), True),
@@ -341,7 +341,8 @@ def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
         SIGNALS.name: ("n_tests < 1 OR run_id = ''", [], "n_tests < 1 o run_id vacío"),
         DETECTOR_TESTS.name: (
             "p_value NOT BETWEEN 0 AND 1 OR q_value NOT BETWEEN 0 AND 1 "
-            "OR q_by NOT BETWEEN 0 AND 1 OR p_method NOT IN ('empirical', 'gpd') "
+            "OR q_by NOT BETWEEN 0 AND 1 "
+            "OR p_method NOT IN ('empirical', 'gpd', 'empirical_esc', 'gpd_esc') "
             "OR window_start > window_end OR n_tests < 1",
             [],
             "p/q fuera de [0,1], método o ventana inválidos",

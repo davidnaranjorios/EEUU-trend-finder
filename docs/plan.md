@@ -238,7 +238,7 @@ comparado con el umbral fijado de antemano.
 | Bloque | Estado | PR |
 |---|---|---|
 | 0: pendientes menores | hecho salvo 0.4 (regla de `_trash/` en Cloudflare) y 0.6 (repetir la semanal tras #12) | #10, #12 |
-| 1: Fase 2 | pendiente | |
+| 1: Fase 2 | código y tests listos; falta la corrida real en R2 (workflow Detectores tras el merge) | PR fase-2-detector |
 | 2: Fase 3 | pendiente | |
 | 3: Fase 4 | pendiente | |
 | 4: Fase 5 | pendiente | |

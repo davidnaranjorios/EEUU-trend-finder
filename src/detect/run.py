@@ -5,7 +5,7 @@ Uso:
   uv run python -m src.detect fdr --run-id ID     # cierra una corrida hecha por shards
   uv run python -m src.detect report [--run-id ID]
 
-Flujo (ADR 0005):
+Flujo (ADR 0007):
 1. Carga los valores vigentes (`vintage_date IS NULL`) de las series de la última corrida del
    embudo en los grupos `download.groups`, con al menos `eligibility.min_obs` observaciones.
 2. Prepara el crecimiento (src.stats.transform) y prueba cada serie con `slope` y `regime`
@@ -158,7 +158,12 @@ def load_series(
 
 
 def prep_for(detector: str, series: list[Series], cfg: dict[str, Any]) -> list[Prepped]:
-    """Crecimiento preparado por detector: los últimos `lookback_years` (o lo que haya)."""
+    """Crecimiento preparado por detector: los últimos `lookback_years` (o lo que haya).
+
+    En `slope` la línea base del nulo (historia previa a la ventana reciente) debe tener al
+    menos `max(W, slope_min_baseline)` periodos; si los 15 años no alcanzan (anuales), se toma
+    más historia. Con menos, el nulo no está calibrado (ADR 0007, tamaño medido en anuales).
+    """
     d = cfg["detect"]
     out = []
     for s in series:
@@ -167,8 +172,13 @@ def prep_for(detector: str, series: list[Series], cfg: dict[str, Any]) -> list[P
             s.frequency, cfg["persistence"]["min_consecutive_periods"][s.frequency]
         )
         window = d["slope_window"][s.grid]
-        minimum = 2 * window if detector == "slope" else 2 * k + 1
-        n = min(s.level.size - 1, d["lookback_years"] * per_year)
+        lookback = d["lookback_years"] * per_year
+        if detector == "slope":
+            minimum = window + max(window, d["slope_min_baseline"])
+            lookback = max(lookback, minimum)
+        else:
+            minimum = 2 * k + 1
+        n = min(s.level.size - 1, lookback)
         if n < minimum:
             continue
         prep = prepare(
@@ -196,6 +206,7 @@ def family_params(cfg: dict[str, Any], grid: str) -> FamilyParams:
         tail=TailConfig(**d["tail"]),
         workers=d["workers"],
         phi_margin=d["phi_margin"],
+        regime_escalate=d["regime_escalate"],
     )
 
 
@@ -437,13 +448,15 @@ def to_markdown(report: dict[str, Any]) -> str:
         "",
         f"Fecha: {report['run_date']} · q = {report['q']} · BH decide; BY es solo comparación.",
         "",
-        "| Detector | Pruebas | BH | BY | Suben | Bajan | Con copyright (BH) | p por GPD |",
+        "| Detector | Pruebas | BH | BY | Suben | Bajan | Con copyright (BH) | Método del p |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for det, s in report["detectors"].items():
         lines.append(
             f"| {det} | {s['n_tests']} | {s['n_bh']} | {s['n_by']} | {s['bh_increase']} | "
-            f"{s['bh_decrease']} | {s['bh_copyrighted']} | {s['p_method'].get('gpd', 0)} |"
+            f"{s['bh_decrease']} | {s['bh_copyrighted']} | "
+            + ", ".join(f"{k} {v}" for k, v in sorted(s["p_method"].items()))
+            + " |"
         )
     lines += [
         "",

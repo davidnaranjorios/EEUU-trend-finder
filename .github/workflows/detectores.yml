@@ -1,4 +1,4 @@
-# Detectores numéricos de la Fase 2 (ADR 0005) sobre los datos vigentes en R2.
+# Detectores numéricos de la Fase 2 (ADR 0007) sobre los datos vigentes en R2.
 #
 # Un solo job con 4 procesos (decisión B del 2026-11-03): trae processed/ y signals/ desde R2,
 # corre `python -m src.detect run` (pruebas + BH/BY + PELT para fechar) y sincroniza
@@ -34,8 +34,8 @@ jobs:
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       MAX_SERIES: ${{ inputs.max_series }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
       - run: uv sync --locked
@@ -71,7 +71,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Logs y reporte
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: detectores-${{ github.run_id }}
           path: |

@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from src.detect.numeric import DetectorResult, null_sample, regime_test, slope_test
+from src.detect.numeric import (
+    DetectorResult,
+    Escalation,
+    null_sample,
+    regime_test,
+    slope_test,
+)
 from src.stats.bootstrap import AR_BURN_IN, family_block_length, stationary_indices
 from src.stats.fdr import TailConfig
 
@@ -30,6 +36,7 @@ class FamilyParams:
     seed: int = 0
     window: int = 60  # solo slope
     phi_margin: float = 1.0  # margen conservador de φ en el post-blackening
+    regime_escalate: int = 0  # réplicas para las pruebas de regime en el piso (0 = no)
     tail: TailConfig = field(default_factory=TailConfig)
     workers: int = 1
 
@@ -96,6 +103,7 @@ def _run_chunk(
     chunk: list[Item],
     idx: np.ndarray,
     params: FamilyParams,
+    escalation: Escalation | None = None,
 ) -> list[DetectorResult]:
     if detector == "slope":
         return [
@@ -111,7 +119,9 @@ def _run_chunk(
             for it in chunk
         ]
     return [
-        regime_test(it.growth, it.scale, idx, it.persistence, params.tail, params.phi_margin)
+        regime_test(
+            it.growth, it.scale, idx, it.persistence, params.tail, params.phi_margin, escalation
+        )
         for it in chunk
     ]
 
@@ -148,24 +158,31 @@ def run_family(
             seed_key(params.seed, detector, grid, n),
             n_out=n_out + AR_BURN_IN,
         )
+        escalation = None
+        if detector == "regime" and params.regime_escalate > 0:
+            escalation = Escalation(
+                params.regime_escalate,
+                blocks[key],
+                tuple(seed_key(params.seed, detector, grid, n)),
+            )
         # Trozos chicos para repartir carga entre procesos; acotados para limitar memoria.
         step = min(64, max(1, len(pos) // (4 * max(params.workers, 1))))
         for i in range(0, len(pos), step):
             part = pos[i : i + step]
-            tasks.append((part, [items[p] for p in part], idx))
+            tasks.append((part, [items[p] for p in part], idx, escalation))
 
     workers = min(params.workers, os.cpu_count() or 1)
     if workers > 1 and len(tasks) > 1:
         ex = _pool(workers)
         futures = [
-            (part, ex.submit(_run_chunk, detector, chunk, idx, params))
-            for part, chunk, idx in tasks
+            (part, ex.submit(_run_chunk, detector, chunk, idx, params, esc))
+            for part, chunk, idx, esc in tasks
         ]
         for part, fut in futures:
             for p, res in zip(part, fut.result(), strict=True):
                 out[p] = res
     else:
-        for part, chunk, idx in tasks:
-            for p, res in zip(part, _run_chunk(detector, chunk, idx, params), strict=True):
+        for part, chunk, idx, esc in tasks:
+            for p, res in zip(part, _run_chunk(detector, chunk, idx, params, esc), strict=True):
                 out[p] = res
     return out, blocks

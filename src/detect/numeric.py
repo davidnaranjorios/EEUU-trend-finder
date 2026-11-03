@@ -14,7 +14,7 @@ Dos detectores, cada uno una familia FDR por corrida:
   max_t |S_t| / (sd · sqrt(N)) con t restringido a [k, N-k] (segmentos de al menos `k`
   periodos). PELT (`ruptures`) no prueba nada: solo fecha el último quiebre de las series que
   sobreviven a BH (ver `locate_break`), porque correrlo en cada réplica cuesta ~10⁴ veces más
-  (medido en docs/decisions/0005-detector-numerico.md).
+  (medido en docs/decisions/0007-detector-numerico.md).
 
 El nulo de ambos es "crecimiento estacionario con media constante". Las réplicas salen de un
 stationary bootstrap con post-blackening (`src.stats.bootstrap.ar_null`) sobre la línea base en
@@ -30,12 +30,13 @@ quita variación de baja frecuencia y acorta los bloques.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 import ruptures as rpt
 
-from src.stats.bootstrap import ar_null, fit_ar1
-from src.stats.fdr import TailConfig, bootstrap_p
+from src.stats.bootstrap import AR_BURN_IN, ar_null, fit_ar1, stationary_indices
+from src.stats.fdr import TailConfig, bootstrap_p, empirical_p
 
 DETECTORS = ("slope", "regime")
 
@@ -135,6 +136,28 @@ def cusum_stat(g: np.ndarray, persistence: int) -> tuple[np.ndarray, np.ndarray]
     return s.max(axis=-1) / (sd * np.sqrt(n)), s.argmax(axis=-1) + persistence
 
 
+ESCALATION_CHUNK = 10_000
+
+
+@dataclass(frozen=True)
+class Escalation:
+    """Réplicas extra para las pruebas que quedan en el piso (decisión A, validada con opción 2).
+
+    El CUSUM es barato (~0,002 s por 999 réplicas), así que en vez de extrapolar desde 999 se
+    recalcula con `n_resamples` réplicas, también con índices compartidos por la subfamilia
+    (misma semilla), y la cola GPD se aplica sobre ese nulo grande si aún hace falta.
+    """
+
+    n_resamples: int
+    block_length: float
+    seed_key: tuple[int, ...]
+
+
+@lru_cache(maxsize=12)
+def _escalation_indices(n: int, block: float, seed: tuple[int, ...], chunk: int) -> np.ndarray:
+    return stationary_indices(n, ESCALATION_CHUNK, block, (*seed, 99, chunk), n_out=n + AR_BURN_IN)
+
+
 def regime_test(
     g: np.ndarray,
     scale: float,
@@ -142,6 +165,7 @@ def regime_test(
     persistence: int,
     tail: TailConfig,
     phi_margin: float,
+    escalation: Escalation | None = None,
 ) -> DetectorResult:
     """Prueba de quiebre de régimen (CUSUM) con los índices compartidos `idx` (B, N + burn-in)."""
     n = g.shape[-1]
@@ -151,8 +175,28 @@ def regime_test(
     # φ desde las diferencias: el quiebre que está en la muestra no se confunde con persistencia.
     # (Ajustar sobre la serie centrada por tramos en el argmax subestimaba φ: FDR 0,25 con
     # AR(1) φ=0,7.)
-    t_null, _ = cusum_stat(ar_null(g, idx, fit_ar1(g, phi_margin)), persistence)
-    p, method = bootstrap_p(float(t_obs), t_null, tail)
+    phi = fit_ar1(g, phi_margin)
+    t_null, _ = cusum_stat(ar_null(g, idx, phi), persistence)
+    _, exceed = empirical_p(float(t_obs), t_null)
+    if escalation is not None and exceed < tail.min_exceedances:
+        chunks = -(-escalation.n_resamples // ESCALATION_CHUNK)
+        t_null = np.concatenate(
+            [
+                cusum_stat(
+                    ar_null(
+                        g,
+                        _escalation_indices(n, escalation.block_length, escalation.seed_key, k),
+                        phi,
+                    ),
+                    persistence,
+                )[0]
+                for k in range(chunks)
+            ]
+        )[: escalation.n_resamples]
+        p, method = bootstrap_p(float(t_obs), t_null, tail)
+        method += "_esc"
+    else:
+        p, method = bootstrap_p(float(t_obs), t_null, tail)
     b = int(pos)
     effect = (g[b:].mean() - g[:b].mean()) / scale
     return DetectorResult(

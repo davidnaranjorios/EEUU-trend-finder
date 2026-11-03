@@ -115,9 +115,11 @@ def _validate_detect(d: dict[str, Any]) -> None:
         raise ConfigError(f"detect.slope_window debe definir las grillas {GRIDS}")
     if any(not isinstance(v, int) or v < 3 for v in win.values()):
         raise ConfigError("detect.slope_window: enteros >= 3")
-    for key in ("lookback_years", "workers"):
+    for key in ("lookback_years", "workers", "slope_min_baseline"):
         if not isinstance(d.get(key), int) or d[key] < 1:
             raise ConfigError(f"detect.{key} debe ser un entero positivo")
+    if not isinstance(d.get("regime_escalate"), int) or d["regime_escalate"] < 0:
+        raise ConfigError("detect.regime_escalate debe ser un entero >= 0")
     if not isinstance(d.get("phi_margin"), int | float) or d["phi_margin"] < 0:
         raise ConfigError("detect.phi_margin debe ser >= 0")
     if not isinstance(d.get("winsor_mad"), int | float) or d["winsor_mad"] <= 0:

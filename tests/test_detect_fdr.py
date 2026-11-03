@@ -29,7 +29,7 @@ WINDOW = 60  # ventana de slope en producción (5 + 5 años)
 PERSIST = 6  # persistence.min_consecutive_periods.M
 # Mismas réplicas que en producción (999): con menos, la cola GPD no se activa y el piso del p
 # impide descubrir nada. 4 procesos, como el runner de GitHub Actions.
-PARAMS = FamilyParams(n_resamples=999, seed=7, window=WINDOW, workers=4)
+PARAMS = FamilyParams(n_resamples=999, seed=7, window=WINDOW, workers=4, regime_escalate=99_999)
 
 
 def noise(kind: str, n_series: int, n: int, rng: np.random.Generator) -> np.ndarray:
@@ -123,6 +123,31 @@ def test_global_null_rarely_discovers(detector, kind):
     any_found = [discoveries(detector, noise(kind, 40, N_GROWTH, rng)).any() for _ in range(reps)]
     rate = float(np.mean(any_found))
     assert rate <= Q + 2 * math.sqrt(Q * (1 - Q) / reps), f"{rate:.3f} de réplicas con señal"
+
+
+@pytest.mark.parametrize(
+    ("grid", "window", "persist", "n"),
+    [("Q", 20, 3, 60), ("A", 7, 2, 40)],
+    ids=["trimestral", "anual"],
+)
+@pytest.mark.parametrize("detector", ["slope", "regime"])
+def test_size_in_quarterly_and_annual_grids(grid, window, persist, n, detector):
+    """Tamaño con AR(1) φ=0,7 en las grillas Q y A, con sus ventanas de producción.
+
+    Anual con 40 periodos: la línea base de slope (33) es el mínimo de config.yaml.
+    """
+    rng = np.random.default_rng(zlib.crc32(f"size-{grid}-{detector}".encode()))
+    items = []
+    for g in noise("ar1", 400, n, rng):
+        level = np.concatenate([[0.0], np.cumsum(g)])
+        prep = prepare(level, 0, n, grid, seasonal_adjust=False, winsor_mad=4.0, max_gap_share=0.1)
+        items.append(Item(prep.growth, prep.scale, persist, grid))
+    params = FamilyParams(n_resamples=999, seed=7, window=window, workers=4, regime_escalate=99_999)
+    results, _ = run_family(detector, items, params)
+    p = np.array([r.p_value for r in results])
+    for level in (0.05, 0.01):
+        bound = level + 2 * math.sqrt(level * (1 - level) / p.size)
+        assert np.mean(p < level) <= bound, f"P(p<{level}) = {np.mean(p < level):.3f}"
 
 
 # --- 2. Tendencia inyectada --------------------------------------------------------------------
