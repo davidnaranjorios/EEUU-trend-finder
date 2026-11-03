@@ -149,8 +149,10 @@ def test_crawl_counts_and_aggregated_lineage(tmp_path):
 def test_size_cap_skips_unit_and_records_reason(tmp_path):
     adapter, ing, paths = _ing(tmp_path, max_series_per_unit=1)
     out = ing.crawl(full=True, run_id="r1")
-    assert out["series"] == 6  # solo el dataset ancho (sin datos recientes: sin sondeo)
+    assert out.get("series", 0) == 0
     skipped = adapter._load_skipped()
+    # Sin datos recientes no hay sondeo: el tope se aplica tras la bajada completa.
+    assert skipped["timeseries/demo/ancho"]["motivo"] == "excede_series:6"
     assert skipped["timeseries/demo/largo"]["motivo"].startswith("excede_series:")
     assert not skipped["timeseries/demo/largo"]["transient"]
     # Las unidades con fallo transitorio se reintentan (versión None); las de tope no.

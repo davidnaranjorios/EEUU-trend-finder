@@ -700,6 +700,9 @@ class CensusAdapter:
                 return self._skip("sin_variable_de_valor", counts=counts)
             counts += res.counts
             series.update(res.series)
+            # El sondeo no ve datasets sin datos recientes: el tope se vuelve a mirar aquí.
+            if len(series) > self.scfg["max_series_per_unit"]:
+                return self._skip(f"excede_series:{len(series)}", counts=counts)
         counts["filas"] += n_rows
         counts["solicitudes"] += len(chunks) + 1
         self.stats += counts
