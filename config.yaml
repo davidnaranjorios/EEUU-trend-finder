@@ -178,7 +178,7 @@ text_detect:
   # Amplitud: entidades distintas (agencias en FR, empresas en EDGAR) que usan el término en la
   # ventana reciente. Filtro neutral (no mira el estadístico). EDGAR: 0 = desactivado, porque
   # cada documento es de una empresa y n_entities ≈ doc_count.
-  min_entities: {edgar: 0, federal_register: 2}
+  min_entities: {edgar: 0, federal_register: 3}   # medido en FR 2016–2026 (ADR 0008)
   block_sample: 5000              # términos para la mediana de la longitud de bloque automática
   workers: 4
 
@@ -206,7 +206,7 @@ federal_register:
   timeout_s: 120
   min_chars: 300
   closed_grace_days: 3
-  reprocess_below_schema: 2       # re-procesa los meses sin n_entities (agencias, ADR 0008)
+  reprocess_below_schema: 3       # re-procesa los meses sin n_entities normalizado (ADR 0008)
 
 logging:
   level: INFO

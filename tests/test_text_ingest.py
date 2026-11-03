@@ -300,7 +300,7 @@ def fr_fake() -> FakeGovinfo:
     a = [
         ("RULE", "2024-00001", "AGENCY ONE", filler(6, 1) + " zeta omega."),
         ("NOTICE", "2024-00002", "AGENCY TWO", filler(6, 2) + " zeta omega."),
-        ("NOTICE", "2024-00003", "AGENCY TWO", filler(6, 4) + " zeta omega."),
+        ("NOTICE", "2024-00003", "Agency  two", filler(6, 4) + " zeta omega."),
         ("NOTICE", "", "AGENCY TWO", filler(6, 5)),  # sin número FR Doc.
     ]
     b = [
@@ -341,6 +341,7 @@ def test_federal_register_month(cfg, tmp_path):
     assert status["2024-01-02#3"] == ("notice", "ok", "sin_numero_frdoc")
     docs = {r["doc_id"]: r for r in t["text_docs"]}
     assert docs["2024-00002"]["entity"] == "AGENCY TWO"
+    assert docs["2024-00003"]["entity"] == "AGENCY TWO"  # "Agency  two" normalizada
     assert docs["2024-00005"]["date"] == date(2024, 1, 3)
     freq = {(r["section"], r["term"]): r for r in t["term_freq"]}
     assert (
@@ -438,9 +439,9 @@ def test_old_schema_periods_are_reprocessed_only_where_configured(cfg, tmp_path)
     state.mark("2024-01", closed=True, run_id="r", stats={"docs": 1, "rows": {}})
     state.periods["2024-01"].pop("schema")  # como lo dejó la versión 1
     now = datetime.now(UTC)
-    assert state.needs_run("2024-01", 20, now, min_schema=2)  # FR: se re-procesa
+    assert state.needs_run("2024-01", 20, now, min_schema=3)  # FR: se re-procesa
     assert not state.needs_run("2024-01", 20, now, min_schema=1)  # EDGAR: no
-    assert cfg["federal_register"]["reprocess_below_schema"] == 2
+    assert cfg["federal_register"]["reprocess_below_schema"] == 3
     assert cfg["edgar"]["reprocess_below_schema"] == 1
     state.mark("2024-01", closed=True, run_id="r2", stats={"docs": 1, "rows": {}})
-    assert not state.needs_run("2024-01", 20, now, min_schema=2)
+    assert not state.needs_run("2024-01", 20, now, min_schema=3)

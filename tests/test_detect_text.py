@@ -50,12 +50,15 @@ def to_counts(rng, logits: np.ndarray, totals: np.ndarray) -> np.ndarray:
     return rng.binomial(totals.astype(int), p)
 
 
-def write_term_freq(processed, source, section, shares_by_term, min_doc_count, rng, entities=None):
+def write_term_freq(
+    processed, source, section, shares_by_term, min_doc_count, rng, entities=None, spikes=None
+):
     """term_freq trimestral sintético: share anual por término, binomial por trimestre.
 
     `entities` (término -> n): amplitud fija por término; por defecto, una entidad por documento.
     """
     entities = entities or {}
+    spikes = spikes or {}
     for yi, year in enumerate(YEARS):
         for q, n in enumerate(Q_DOCS, start=1):
             rows = []
@@ -70,7 +73,9 @@ def write_term_freq(processed, source, section, shares_by_term, min_doc_count, r
                             "term": term,
                             "doc_count": c,
                             "total_docs": n,
-                            "n_entities": min(entities.get(term, c), c),
+                            "n_entities": min(
+                                spikes.get(term, {}).get((year, q), entities.get(term, c)), c
+                            ),
                         }
                     )
             store.replace_partition(
@@ -161,6 +166,8 @@ def test_breadth_filter_excludes_single_entity_terms(cfg, tmp_path):
         5,
         rng,
         entities={"estrecho nuevo": 1},
+        # Un trimestre suelto con 3 entidades no lo vuelve amplio (mediana, no máximo).
+        spikes={"estrecho nuevo": {(YEARS[-1], 2): 3}},
     )
     cfg["text_detect"]["min_entities"] = {"edgar": 2}
     report = detect_source(cfg, "edgar", "run-amp", __import__("datetime").datetime.now())

@@ -66,7 +66,11 @@ def analyze_issue(
         m = FRDOC_RE.search(frdoc)
         doc_id = m.group(1) if m else f"{issue_date.isoformat()}#{i}"
         agency = el.find(".//AGENCY")
-        entity = " ".join(agency.itertext()).strip() if agency is not None else None
+        # Normalizado (espacios colapsados, mayúsculas): el XML trae la misma agencia con
+        # variantes de formato, que inflarían n_entities (medido: 339 nombres -> 313).
+        entity = (
+            " ".join(" ".join(agency.itertext()).split()).upper() if agency is not None else None
+        )
         doc = DocResult(doc_id, issue_date, entity or None)
         tmp = Path(tmp_dir) / section / f"{doc_id}.txt.gz"
         doc.sections.append(
