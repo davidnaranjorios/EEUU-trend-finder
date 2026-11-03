@@ -465,6 +465,29 @@ def test_revision_appends_vintage(make, fake):
     assert as_of == (259.5,)
 
 
+def test_update_tolerates_duplicate_series_in_updates(make, fake):
+    # series/updates pagina por last_updated: una serie actualizada a mitad del recorrido puede
+    # salir en dos páginas. Antes eso rompía la validación (claves duplicadas en fred_catalog).
+    prepare(make).update()
+    fake.updates = ["AAA", "AAA"]
+    make.now.t = T0 + timedelta(days=7)
+    stats = make().update()
+    assert stats["mode"] == "updates" and stats["updated_series"] == 1
+
+
+def test_dedupe_updates_keeps_newest():
+    from src.ingest.fred import dedupe_updates
+
+    infos = [
+        {"id": "A", "last_updated": "2026-10-01 07:00:00-05"},
+        {"id": "B", "last_updated": "2026-10-02 07:00:00-05"},
+        {"id": "A", "last_updated": "2026-10-03 07:00:00-05"},
+    ]
+    out = dedupe_updates(infos)
+    assert [i["id"] for i in out] == ["A", "B"]
+    assert out[0]["last_updated"].startswith("2026-10-03")
+
+
 def test_update_falls_back_to_crawl_after_gap(make, fake):
     prepare(make).update()
     make.now.t = T0 + timedelta(days=20)  # más que la ventana de series/updates

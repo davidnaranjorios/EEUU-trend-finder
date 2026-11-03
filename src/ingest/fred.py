@@ -168,6 +168,19 @@ class Paths:
         return self.processed / "ingest_state" / "fred_cursors.json"
 
 
+def dedupe_updates(infos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Una entrada por serie de `series/updates`, la de `last_updated` más reciente.
+
+    Mantiene el orden de la primera aparición de cada id.
+    """
+    best: dict[str, dict[str, Any]] = {}
+    for info in infos:
+        prev = best.get(info["id"])
+        if prev is None or str(info.get("last_updated", "")) > str(prev.get("last_updated", "")):
+            best[info["id"]] = info
+    return list(best.values())
+
+
 class FredIngestor:
     """Orquesta crawl, observations y update sobre un `ApiClient`."""
 
@@ -748,6 +761,9 @@ class FredIngestor:
                     self.fred["page_limit_series"],
                 )
             )
+            # series/updates pagina por last_updated: si FRED actualiza series mientras se
+            # recorre, una serie puede aparecer en dos páginas. Se conserva la versión más nueva.
+            infos = dedupe_updates(infos)
             ids = [i["id"] for i in infos]
             prev_rows = (
                 read_table(
