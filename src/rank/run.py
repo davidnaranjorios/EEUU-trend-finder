@@ -653,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = load_config()
     log = get_logger("rank", cfg["logging"]["level"])
-    with run(["rank"], _resolve(cfg["logging"]["runs_file"])) as record:
+    with run(["rank"], _resolve(cfg["report"]["runs_file"])) as record:
         with record.stage("rank"):
             summary = rank_run(
                 cfg,

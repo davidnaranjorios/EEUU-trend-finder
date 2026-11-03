@@ -251,6 +251,9 @@ rank:
 report:
   site_dir: data/site
   reports_dir: data/reports       # historial semanal (se sincroniza a R2 como reports/)
+  # Registro de corridas propio: el workflow Reporte no comparte grupo de concurrencia con la
+  # ingesta, así que nunca sincroniza logs/ entero (pisaría runs.jsonl).
+  runs_file: data/logs/reporte/runs.jsonl
   chart_years: 20
   explorer:
     n_buckets: 128

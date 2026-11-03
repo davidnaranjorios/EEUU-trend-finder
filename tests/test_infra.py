@@ -451,3 +451,23 @@ def test_text_tramos_sync_only_text_paths():
     assert 'infra/sync_r2.sh "${TEXT_PATHS[@]}"' in text  # nunca el processed/ completo
     pull = (INFRA / "pull_r2.sh").read_text()
     assert "rc -eq 3" in pull  # tabla aún inexistente en R2: no falla la primera corrida
+
+
+def test_only_ingesta_group_syncs_shared_logs():
+    """logs/ (runs.jsonl) es compartido: solo los workflows del grupo "ingesta", que nunca
+    corren a la vez, lo sincronizan entero. Los demás sincronizan solo su subcarpeta."""
+    for wf in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        import yaml
+
+        data = yaml.safe_load(wf.read_text())
+        group = (data.get("concurrency") or {}).get("group")
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                for line in run.replace("\\\n", " ").splitlines():
+                    if "sync_r2.sh" not in line:
+                        continue
+                    args = line.split("sync_r2.sh", 1)[1].split()
+                    whole_logs = not args or "logs" in args  # sin argumentos = todo
+                    if whole_logs:
+                        assert group == "ingesta", f"{wf.name}: sincroniza logs/ entero"

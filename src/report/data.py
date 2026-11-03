@@ -276,10 +276,12 @@ def _to_grid(period: str, grid: str) -> str:
 
 def system_status(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dict[str, Any]:
     """Últimas corridas: registro de ejecuciones, detectores y ranking."""
-    runs_file = _resolve(cfg["logging"]["runs_file"])
     last: dict[str, dict[str, Any]] = {}
-    if runs_file.exists():
-        for line in runs_file.read_text("utf-8").splitlines():
+    # Registro compartido (ingesta y detectores) y el propio del reporte (logs/reporte/).
+    files = [_resolve(cfg["logging"]["runs_file"]), _resolve(cfg["report"]["runs_file"])]
+    lines = [ln for f in files if f.exists() for ln in f.read_text("utf-8").splitlines()]
+    if lines:
+        for line in lines:
             try:
                 r = json.loads(line)
             except json.JSONDecodeError:

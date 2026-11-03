@@ -61,19 +61,23 @@ jobs:
           infra/pull_r2.sh processed/series processed/series_meta processed/lineage \
             processed/term_freq processed/_internal/fred_series_attrs \
             processed/_internal/embeddings processed/rank signals logs reports
+      # Su registro va a logs/reporte/ (config report.runs_file): logs/ entero lo sincroniza solo
+      # el grupo "ingesta"; desde aquí pisaría runs.jsonl de una corrida en paralelo.
       - name: Ranking
-        run: uv run python -m src.rank run | tee data/logs/rank.json
+        run: |
+          mkdir -p data/logs/reporte
+          uv run python -m src.rank run | tee data/logs/reporte/rank.json
       - name: Reporte
-        run: uv run python -m src.report build | tee data/logs/report.json
+        run: uv run python -m src.report build | tee data/logs/reporte/report.json
       - name: Sincronizar a R2
         run: |
-          infra/sync_r2.sh processed/rank processed/_internal/embeddings reports logs
+          infra/sync_r2.sh processed/rank processed/_internal/embeddings reports logs/reporte
       - name: Resumen
         if: always()
         run: |
           {
-            echo '## Ranking'; echo '```'; cat data/logs/rank.json 2>/dev/null || true; echo '```'
-            echo '## Reporte'; echo '```'; cat data/logs/report.json 2>/dev/null || true; echo '```'
+            echo '## Ranking'; echo '```'; cat data/logs/reporte/rank.json 2>/dev/null || true; echo '```'
+            echo '## Reporte'; echo '```'; cat data/logs/reporte/report.json 2>/dev/null || true; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Sitio (artefacto)
         uses: actions/upload-artifact@v6

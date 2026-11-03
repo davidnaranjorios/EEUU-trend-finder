@@ -160,6 +160,20 @@ Cada evidencia lleva un conjunto de agencias:
 - Límites de Cloudflare Pages: 20.000 archivos y 25 MiB por archivo. El sitio de prueba tiene
   132 archivos, y el explorador real tendría 128 de ≤ 2 MB.
 
+### Registro de corridas propio
+
+Reporte está en el grupo de concurrencia `reporte`, así que puede correr a la vez que Ingesta,
+Detectores o Ingesta texto (grupo `ingesta`). Esos tres sincronizan `logs/` entero: si Reporte
+también lo sincronizara, `rclone sync` podría pisar `runs.jsonl` y perder corridas.
+
+Por eso Reporte:
+- escribe su registro en `logs/reporte/runs.jsonl` (`report.runs_file`);
+- sincroniza solo `logs/reporte`;
+- el dashboard lee los dos registros.
+
+`tests/test_infra.py::test_only_ingesta_group_syncs_shared_logs` verifica que ningún workflow
+fuera del grupo `ingesta` sincronice `logs` entero.
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:

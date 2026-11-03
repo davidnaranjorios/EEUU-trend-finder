@@ -174,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = load_config()
     log = get_logger("report", cfg["logging"]["level"])
-    with run(["report"], _resolve(cfg["logging"]["runs_file"])) as record:
+    with run(["report"], _resolve(cfg["report"]["runs_file"])) as record:
         with record.stage("build"):
             out = build_site(cfg, rank_run_id=args.rank_run, site_dir=args.site_dir)
         record.details = {"command": "report build", **out}

@@ -72,6 +72,7 @@ def make_cfg(tmp_path: Path) -> dict:
     cfg["logging"]["runs_file"] = str(data / "logs" / "runs.jsonl")
     cfg["report"]["site_dir"] = str(data / "site")
     cfg["report"]["reports_dir"] = str(data / "reports")
+    cfg["report"]["runs_file"] = str(data / "logs" / "reporte" / "runs.jsonl")
     cfg["rank"]["embeddings"]["backend"] = "hashing"
     cfg["rank"]["links"]["null_sample"] = 300
     cfg["detect"]["workers"] = 1
