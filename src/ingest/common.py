@@ -1,6 +1,6 @@
 """Capa común de las fuentes de la Fase 4 (BLS, BEA, Census): contrato, catálogo y descarga.
 
-Cada fuente implementa un `SourceAdapter` (ver ADR 0005) que solo sabe hablar con su API y
+Cada fuente implementa un `SourceAdapter` (ver ADR 0007) que solo sabe hablar con su API y
 traducir sus metadatos a un catálogo neutral. Todo lo demás es común y vive aquí:
 
 - `crawl`: recorre las unidades de la fuente (encuesta, tabla, dataset), clasifica cada serie con
@@ -285,7 +285,7 @@ class SourceIngestor:
             for rule, k in rules.items():
                 stats[f"regla_{rule}"] += k
             if active.n == 0 and len(rules) == 1 and threshold is not None and n >= threshold:
-                # Toda la unidad cae por la misma regla de fila: una fila agregada (ADR 0005).
+                # Toda la unidad cae por la misma regla de fila: una fila agregada (ADR 0007).
                 rule = next(iter(rules))
                 freq = next(excluded.rows())["frequency"]
                 lineage = [

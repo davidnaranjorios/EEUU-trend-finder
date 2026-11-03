@@ -94,7 +94,7 @@ fred:
   updates_fallback_days: 13       # series/updates solo cubre las dos últimas semanas
   verification_seed: 20261020
 
-# Fuentes de la Fase 4 (ADR 0005). Solo parámetros de acceso y de escritura: las unidades
+# Fuentes de la Fase 4 (ADR 0007). Solo parámetros de acceso y de escritura: las unidades
 # (encuestas, tablas, datasets) salen del catálogo de cada fuente, nunca de esta lista.
 # Keys en el entorno: BLS_API_KEY, BEA_API_KEY, CENSUS_API_KEY; download.bls.gov exige un
 # User-Agent con contacto, que se lee de SEC_USER_AGENT (decisión del 2026-11-03).
