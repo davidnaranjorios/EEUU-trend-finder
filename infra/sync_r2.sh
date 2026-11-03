@@ -3,7 +3,10 @@
 # Con argumentos, solo esas rutas bajo data/ (p. ej. `sync_r2.sh processed/term_freq logs`):
 # así la ingesta de texto no toca las tablas de FRED (ADR 0005).
 #
-# Las borradas en el destino no se pierden: van a _trash/<fecha>/ dentro del bucket.
+# Antes de subir compacta los Parquet (un archivo por bucket, ADR 0004): así R2 no acumula
+# miles de archivos chicos que DuckDB/httpfs tendría que abrir uno por uno.
+# Las borradas en el destino no se pierden: van a _trash/<fecha>/ dentro del bucket, que una
+# regla de ciclo de vida de R2 borra a los 30 días (docs/infra/github-actions.md).
 # Al final verifica que todo lo local esté en R2 con el mismo checksum; si no, falla.
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +21,7 @@ if ! find "$PROCESSED" -name '*.parquet' -print -quit 2>/dev/null | grep -q .; t
   echo "sync_r2: $PROCESSED no tiene Parquet (¿volumen sin montar?): no se sincroniza" >&2
   exit 1
 fi
+uv run --quiet python -m src.ingest.store compact
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ $# -eq 0 ]]; then set -- processed exports logs; fi
 for dir in "$@"; do

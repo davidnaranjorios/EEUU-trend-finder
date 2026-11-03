@@ -355,10 +355,32 @@ def test_verify_workflow_is_read_only():
 
 
 def test_workflow_summaries_read_local_copy():
-    for wf in ("ingesta.yml", "verificar-r2.yml"):
-        text = (REPO_ROOT / ".github" / "workflows" / wf).read_text()
-        assert "summary --r2" not in text  # httpfs sobre miles de Parquet no terminó en 30 min
-    assert "infra/pull_r2.sh" in (REPO_ROOT / ".github/workflows/verificar-r2.yml").read_text()
+    ingesta = (REPO_ROOT / ".github/workflows/ingesta.yml").read_text()
+    assert "summary --r2" not in ingesta  # la ingesta nunca depende de httpfs
+    verify = (REPO_ROOT / ".github/workflows/verificar-r2.yml").read_text()
+    assert "infra/pull_r2.sh" in verify
+    # La lectura directa por httpfs (prueba del bloque 0.1) va acotada y no tumba el job.
+    step = verify[verify.index("summary --r2") - 600 : verify.index("summary --r2")]
+    assert "timeout-minutes:" in step and "continue-on-error: true" in step
+
+
+def test_sync_compacts_before_upload_and_export_never_blocks_sync():
+    sync = (INFRA / "sync_r2.sh").read_text()
+    assert sync.index("src.ingest.store compact") < sync.index("rclone sync")
+    for name in ("weekly_update.sh", "run_tramos.sh"):
+        text = (INFRA / name).read_text()
+        assert "py -m src.export >/dev/null || export_rc=$?" in text
+        export_at = text.index("src.export")
+        assert "sync_r2" in text[export_at:]
+
+
+def test_actions_not_on_node20():
+    # Versiones con runs.using: node24 (verificado en sus action.yml, 2026-11-03).
+    allowed = {"actions/checkout@v6", "astral-sh/setup-uv@v7", "actions/upload-artifact@v6"}
+    for wf in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        for line in wf.read_text().splitlines():
+            if "uses:" in line:
+                assert line.split("uses:")[1].strip() in allowed, f"{wf.name}: {line.strip()}"
 
 
 TEXT_PATHS = (

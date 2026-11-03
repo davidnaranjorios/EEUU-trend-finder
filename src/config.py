@@ -68,6 +68,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     v2_limit = cfg["download"].get("v2_page_limit")
     if not isinstance(v2_limit, int) or not 0 < v2_limit <= 500000:
         raise ConfigError("download.v2_page_limit debe estar en 1..500000")
+    _validate_exports(_section(cfg, "exports"))
     _validate_text(cfg)
     storage = _section(cfg, "storage")
     for key in ("bucket", "prefix"):
@@ -108,6 +109,16 @@ def _validate_vintages(v: dict[str, Any]) -> None:
     if not isinstance(cap, int) or not 0 < cap <= 2000:
         raise ConfigError("vintages.max_vintage_dates_per_request debe estar en 1..2000")
     _validate_groups(v.get("groups"), "vintages.groups")
+
+
+def _validate_exports(ex: dict[str, Any]) -> None:
+    _validate_groups(ex.get("groups"), "exports.groups")
+    n = ex.get("n_buckets")
+    if not isinstance(n, int) or not 0 < n <= 100:
+        raise ConfigError("exports.n_buckets debe ser un entero en 1..100")
+    for key in ("max_file_kb", "max_total_mb"):
+        if not isinstance(ex.get(key), int | float) or ex[key] <= 0:
+            raise ConfigError(f"exports.{key} debe ser positivo")
 
 
 def _validate_groups(groups: Any, name: str) -> None:

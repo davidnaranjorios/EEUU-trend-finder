@@ -16,6 +16,7 @@ import os
 import random
 import re
 import sys
+import uuid
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ from src.config import REPO_ROOT, load_config
 from src.ingest.http import ApiClient, ApiError, RateLimiter
 from src.ingest.store import UpsertResult, read_table, upsert
 from src.log import get_logger, run
-from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
+from src.schemas import ELIGIBILITY, SERIES, SERIES_META, VINTAGE_LINEAGE, TableSpec
 
 SOURCE = "fred"
 BASE_URL = "https://api.stlouisfed.org/fred/"
@@ -157,6 +158,10 @@ class Paths:
     @property
     def eligibility(self) -> Path:
         return self.processed / "lineage" / "eligibility"
+
+    @property
+    def vintage_lineage(self) -> Path:
+        return self.processed / "lineage" / "vintages"
 
     @property
     def cursors(self) -> Path:
@@ -431,13 +436,20 @@ class FredIngestor:
     # --- vintages (ALFRED, solo una muestra) ---------------------------------------------------
 
     def vintages(
-        self, ids: list[str] | None = None, max_series: int | None = None
+        self,
+        ids: list[str] | None = None,
+        max_series: int | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         """Historial completo de publicación (ALFRED) para la muestra estratificada + `ids`.
 
         La muestra se sortea una vez (semilla de config) y queda guardada en
         `fred_vintage_sample`; las corridas siguientes la reutilizan. `ids` permite añadir
         series desde fuera de src/ (p. ej., las que eval/ necesite) sin que src/ lea eval/.
+
+        Cada serie intentada deja su resultado en `lineage/vintages` (`run_id`): `ok`,
+        `no_existe_en_alfred` (FRED la tiene, ALFRED no; no se reintenta mientras no cambie
+        `last_updated`) o `error_api` (se reintenta en la próxima corrida).
         """
         sample = self._vintage_sample()
         wanted = sorted(set(sample) | set(ids or []))
@@ -457,7 +469,15 @@ class FredIngestor:
         todo = [r for r in targets if _needs_fetch(r, state.get(r["series_id"]))]
         if max_series is not None:
             todo = todo[:max_series]
-        tally = self._fetch_batches(todo, self.paths.vintage_state, self._fetch_vintages)
+        outcomes: dict[str, tuple[str, int, str | None]] = {}
+        tally = self._fetch_batches(
+            todo,
+            self.paths.vintage_state,
+            self._fetch_vintages,
+            outcomes=outcomes,
+            permanent=_alfred_missing,
+        )
+        self._write_vintage_lineage(outcomes, run_id or uuid.uuid4().hex)
         stats: dict[str, Any] = {
             "sample": len(sample),
             "extra_ids": len(set(ids or []) - set(sample)),
@@ -468,6 +488,32 @@ class FredIngestor:
         stats["pending"] = _pending(targets, state, tally)
         self.log.info("vintages terminadas", extra={"fields": stats})
         return stats
+
+    def _write_vintage_lineage(
+        self, outcomes: dict[str, tuple[str, int, str | None]], run_id: str
+    ) -> None:
+        if not outcomes:
+            return
+        now = self._now().replace(microsecond=0)
+        rows = [
+            {
+                "run_id": run_id,
+                "source": SOURCE,
+                "series_id": sid,
+                "status": status,
+                "n_rows": n_rows,
+                "detail": detail,
+                "decided_at": now,
+            }
+            for sid, (status, n_rows, detail) in sorted(outcomes.items())
+        ]
+        upsert(
+            pa.Table.from_pylist(rows, schema=VINTAGE_LINEAGE.schema),
+            VINTAGE_LINEAGE,
+            self.paths.vintage_lineage,
+            source=SOURCE,
+            n_buckets=self.fred["n_buckets"],
+        )
 
     def _vintage_sample(self) -> list[str]:
         stored = read_table(VINTAGE_SAMPLE, self.paths.vintage_sample, source=SOURCE)
@@ -504,29 +550,40 @@ class FredIngestor:
         return sorted(r["series_id"] for r in rows)
 
     def _fetch_vintages(self, r: dict[str, Any]) -> list[dict[str, Any]]:
-        """Todas las filas realtime, en tramos de a lo sumo N vintages por consulta."""
+        """Todas las filas realtime, en ventanas de a lo sumo N vintages por consulta.
+
+        FRED puede contar una fecha más de las que da `series/vintagedates` para la misma
+        ventana (DBAA y FIN14AAVOL: "There are 2001 vintage dates" en ventanas de 2.000). Si
+        rechaza una ventana por el tope, se parte en dos y se reintenta.
+        """
         sid = r["series_id"]
         dates = list(self._paged("series/vintagedates", {"series_id": sid}, "vintage_dates", 10000))
         cap = self.cfg["vintages"]["max_vintage_dates_per_request"]
-        if len(dates) <= cap:
-            windows = [(REALTIME_MIN, REALTIME_MAX)]
-        else:
-            chunks = [dates[i : i + cap] for i in range(0, len(dates), cap)]
-            windows = [
-                (c[0], chunks[i + 1][0] if i + 1 < len(chunks) else REALTIME_MAX)
-                for i, c in enumerate(chunks)
-            ]
-            windows = [(s, _minus_one_day(e) if e != REALTIME_MAX else e) for s, e in windows]
+        # Ventanas como rangos [i, j) de índices en `dates`.
+        pending = deque((i, min(i + cap, len(dates))) for i in range(0, max(len(dates), 1), cap))
         obs: list[dict[str, Any]] = []
-        for start, end in windows:
-            obs.extend(
-                self._paged(
-                    "series/observations",
-                    {"series_id": sid, "realtime_start": start, "realtime_end": end},
-                    "observations",
-                    self.fred["page_limit_observations"],
+        while pending:
+            i, j = pending.popleft()
+            start = REALTIME_MIN if i == 0 else dates[i]
+            end = REALTIME_MAX if j >= len(dates) else _minus_one_day(dates[j])
+            try:
+                obs.extend(
+                    self._paged(
+                        "series/observations",
+                        {"series_id": sid, "realtime_start": start, "realtime_end": end},
+                        "observations",
+                        self.fred["page_limit_observations"],
+                    )
                 )
-            )
+            except ApiError as exc:
+                if not (_over_vintage_cap(exc) and j - i > 1):
+                    raise
+                mid = (i + j) // 2
+                self.log.info(
+                    "ventana de vintages partida",
+                    extra={"fields": {"series_id": sid, "window": [start, end]}},
+                )
+                pending.extendleft([(mid, j), (i, mid)])
         return [
             _series_row(r, o["date"], o["value"], date.fromisoformat(o["realtime_start"]))
             for o in collapse_vintages(obs)
@@ -569,30 +626,54 @@ class FredIngestor:
         todo: list[dict[str, Any]],
         state_path: Path,
         fetch: Callable[[dict[str, Any]], list[dict[str, Any]]],
+        *,
+        outcomes: dict[str, tuple[str, int, str | None]] | None = None,
+        permanent: Callable[[ApiError], str | None] | None = None,
     ) -> Counter[str]:
-        tally: Counter[str] = Counter({"fetched": 0, "series_errors": 0})
+        """Baja `todo` por lotes. `permanent(exc)` da el motivo de un error que no se arregla
+        reintentando: la serie queda en el estado con 0 filas (no se vuelve a pedir mientras no
+        cambie `last_updated`) y cuenta en `no_data`. `outcomes` recibe (status, filas, motivo).
+        """
+        tally: Counter[str] = Counter({"fetched": 0, "series_errors": 0, "no_data": 0})
         batch_size = self.fred["obs_batch_size"]
         for i in range(0, len(todo), batch_size):
             rows: list[dict[str, Any]] = []
             fetched: list[dict[str, Any]] = []
             n_rows: dict[str, int] = {}
+            ok = 0
             for r in todo[i : i + batch_size]:
+                sid = r["series_id"]
                 try:
                     got = fetch(r)
                 except ApiError as exc:
                     if exc.status is None:  # reintentos agotados: abortar la corrida
                         raise
+                    reason = permanent(exc) if permanent else None
+                    if outcomes is not None:
+                        outcomes[sid] = (reason or "error_api", 0, str(exc))
+                    if reason:
+                        tally["no_data"] += 1
+                        fetched.append(r)
+                        n_rows[sid] = 0
+                        self.log.info(
+                            "serie sin datos en la API",
+                            extra={"fields": {"series_id": sid, "reason": reason}},
+                        )
+                        continue
                     tally["series_errors"] += 1
                     self.log.warning(
                         "serie omitida por error de la API",
-                        extra={"fields": {"series_id": r["series_id"], "error": str(exc)}},
+                        extra={"fields": {"series_id": sid, "error": str(exc)}},
                     )
                     continue
                 rows.extend(got)
                 fetched.append(r)
-                n_rows[r["series_id"]] = len(got)
+                n_rows[sid] = len(got)
+                ok += 1
+                if outcomes is not None:
+                    outcomes[sid] = ("ok", len(got), None)
             res = self._write_rows(rows, fetched, n_rows, state_path)
-            tally["fetched"] += len(fetched)
+            tally["fetched"] += ok
             tally["rows_inserted"] += res.inserted
             tally["rows_unchanged"] += res.unchanged
             tally["rows_replaced"] += res.replaced
@@ -893,7 +974,18 @@ def _pending(
     """Series que quedan por bajar. Las que fallaron por error de la API no cuentan: se
     reintentan en la próxima corrida, pero no deben mantener vivo un bucle de tramos."""
     needed = sum(_needs_fetch(r, state.get(r["series_id"])) for r in targets)
-    return needed - tally["fetched"] - tally["series_errors"]
+    return needed - tally["fetched"] - tally["series_errors"] - tally["no_data"]
+
+
+def _alfred_missing(exc: ApiError) -> str | None:
+    """Motivo permanente: la serie existe en FRED pero no en ALFRED (sin historial)."""
+    if exc.status == 400 and "does not exist in alfred" in str(exc).lower():
+        return "no_existe_en_alfred"
+    return None
+
+
+def _over_vintage_cap(exc: ApiError) -> bool:
+    return exc.status == 400 and "maximum number of vintage dates" in str(exc).lower()
 
 
 def _needs_fetch(r: dict[str, Any], st: dict[str, Any] | None) -> bool:
@@ -971,7 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif args.cmd == "download":
                     stats = ingestor.download(args.max_releases)
                 elif args.cmd == "vintages":
-                    stats = ingestor.vintages(ids, args.max_series)
+                    stats = ingestor.vintages(ids, args.max_series, record.run_id)
                 else:
                     stats = ingestor.update()
             record.n_series[SOURCE] = _n_series(stats)

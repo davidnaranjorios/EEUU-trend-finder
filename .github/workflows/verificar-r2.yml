@@ -11,15 +11,15 @@ permissions:
 jobs:
   verificar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
       - run: uv sync --locked
@@ -31,15 +31,32 @@ jobs:
           {
             echo "## R2: $BUCKET"
             echo '```'
-            for dir in processed exports logs; do
+            for dir in processed exports logs _trash; do
               echo "$dir: $(rclone size "r2:$BUCKET/$dir" --fast-list --json)"
             done
             rclone cat "r2:$BUCKET/exports/funnel.json" | head -c 4000
             echo
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
-      # Leer miles de Parquet uno a uno por httpfs tardó más de 30 min; bajar processed/ con
-      # rclone (~500 MB) toma segundos y además prueba el mismo camino que usa la ingesta.
+      # Lectura directa desde R2 con DuckDB/httpfs, cronometrada. Con los 14.491 archivos sin
+      # compactar no terminó en 30 min; compactados (un archivo por bucket) debe tardar minutos.
+      - name: Conteos leyendo directo de R2 (httpfs)
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          start=$(date +%s)
+          rc=0
+          out="$(uv run python -m src.catalog summary --r2 2>&1)" || rc=$?
+          secs=$(( $(date +%s) - start ))
+          {
+            echo "### Lectura directa desde R2: ${secs} s (rc=$rc)"
+            echo '```json'
+            echo "$out"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      # Además se baja processed/ con rclone y se cuenta en local: prueba el mismo camino que
+      # usa la ingesta y sirve de respaldo si la lectura por httpfs falla.
       - name: Traer processed desde R2
         run: infra/pull_r2.sh
       - name: Conteos con DuckDB
