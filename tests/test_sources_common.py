@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from datetime import UTC, date, datetime, timedelta
 
+import httpx
 import pytest
 
 from src.config import load_config
@@ -166,3 +167,63 @@ def test_old_classification_is_refreshed(tmp_path):
     later = NOW + timedelta(days=31)
     ing._now = lambda: later
     assert ing.crawl(run_id="r2")["units_processed"] == 3
+
+
+class _Flaky(SyntheticAdapter):
+    """Corta la conexión a mitad del catálogo y de los valores de U1 `cuts` veces."""
+
+    def __init__(self, cuts: int) -> None:
+        super().__init__()
+        self.cuts = {"catalog": cuts, "values": cuts}
+
+    def _cut(self, kind: str, unit: Unit) -> bool:
+        if unit.unit_id == "U1" and self.cuts[kind] > 0:
+            self.cuts[kind] -= 1
+            return True
+        return False
+
+    def catalog_rows(self, unit: Unit):
+        cut = self._cut("catalog", unit)
+        for i, r in enumerate(super().catalog_rows(unit)):
+            if cut and i == 1:
+                raise httpx.ReadError("Connection reset by peer")
+            yield r
+
+    def fetch_values(self, unit: Unit, series_ids: set[str]):
+        cut = self._cut("values", unit)
+        for i, r in enumerate(super().fetch_values(unit, series_ids)):
+            if cut and i == 10:
+                raise httpx.ReadError("Connection reset by peer")
+            yield r
+
+
+def _flaky_ing(tmp_path, adapter):
+    ing, paths = _ing(tmp_path, adapter, max_retries=2, lineage_aggregate_min_series=3)
+    ing._sleep = lambda s: None
+    return ing, paths
+
+
+def test_connection_cut_mid_file_repeats_the_unit(tmp_path):
+    """Un corte a mitad de archivo (pasó en vivo con BLS) repite la unidad: mismo resultado."""
+    ing, paths = _flaky_ing(tmp_path / "flaky", _Flaky(cuts=2))
+    ref, p_ref = _ing(tmp_path / "ref", lineage_aggregate_min_series=3)
+    a = ing.crawl(full=True, run_id="r")
+    b = ref.crawl(full=True, run_id="r")
+    assert a == b and "units_failed" not in a
+    key = lambda d: (d["series_id"], d["group_name"], d["rule"])  # noqa: E731
+    assert sorted(map(key, latest_decisions(paths, "synthetic"))) == sorted(
+        map(key, latest_decisions(p_ref, "synthetic"))
+    )
+    da, db = ing.download(), ref.download()
+    assert da["rows_inserted"] == db["rows_inserted"] and da["units_pending"] == 0
+
+
+def test_persistent_cut_leaves_unit_pending_and_source_continues(tmp_path):
+    ing, paths = _flaky_ing(tmp_path, _Flaky(cuts=99))
+    stats = ing.crawl(full=True, run_id="r")
+    assert stats["units_failed"] == 1 and stats["units_processed"] == 2
+    assert pending(stats)
+    # La unidad fallida no tiene estado: la próxima corrida la retoma.
+    ing.adapter.cuts = {"catalog": 0, "values": 0}
+    again = ing.crawl(run_id="r2")
+    assert again["units_processed"] == 1 and again["units_unchanged"] == 2

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import duckdb
+import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -191,6 +192,7 @@ class SourceIngestor:
         *,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
         logger: logging.Logger | None = None,
     ) -> None:
         self.adapter = adapter
@@ -201,6 +203,7 @@ class SourceIngestor:
         self.paths = paths
         self._now = now
         self._clock = clock
+        self._sleep = sleep
         self.log = logger or logging.getLogger(__name__)
 
     # --- crawl + embudo ----------------------------------------------------------------------
@@ -236,13 +239,39 @@ class SourceIngestor:
             if budget_s is not None and self._clock() - t0 > budget_s:
                 stats["units_pending"] += 1
                 continue
-            stats += self._crawl_unit(unit, run_id, decided_at, today)
+            got = self._retrying(
+                unit, lambda u=unit: self._crawl_unit(u, run_id, decided_at, today)
+            )
+            if got is None:
+                stats["units_failed"] += 1
+                continue
+            stats += got
             stats["units_processed"] += 1
-        if not stats["units_pending"]:
+        if not stats["units_pending"] and not stats["units_failed"]:
             self._save_cursor("last_crawl_ok")
         out = dict(stats)
         self.log.info("crawl terminado", extra={"fields": {"source": self.source, **out}})
         return out
+
+    def _retrying(self, unit: Unit, fn: Callable[[], Any]) -> Any:
+        """Corre `fn` reintentando si la conexión se corta a mitad de un archivo.
+
+        `http.stream` reintenta solo el inicio de la respuesta; un corte posterior repite la
+        unidad entera (las escrituras son upserts por clave, así que repetir es idempotente).
+        Si se agotan los reintentos devuelve None: la unidad queda pendiente y la fuente sigue.
+        """
+        tries = self.scfg["max_retries"]
+        for attempt in range(tries + 1):
+            try:
+                return fn()
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                fields = {"source": self.source, "unit": unit.unit_id, "error": type(exc).__name__}
+                if attempt == tries:
+                    self.log.warning("unidad fallida; queda pendiente", extra={"fields": fields})
+                    return None
+                self.log.warning("corte de conexión; se repite la unidad", extra={"fields": fields})
+                self._sleep(self.scfg["backoff_base_s"] * 2**attempt)
+        return None
 
     def _crawl_unit(
         self, unit: Unit, run_id: str, decided_at: datetime, today: date
@@ -370,7 +399,12 @@ class SourceIngestor:
             if (max_units is not None and stats["units_fetched"] >= max_units) or out_of_budget:
                 pending += 1
                 continue
-            res, n_rows = self._fetch_unit(unit, by_unit[unit_id])
+            got = self._retrying(unit, lambda u=unit: self._fetch_unit(u, by_unit[u.unit_id]))
+            if got is None:
+                stats["units_failed"] += 1
+                pending += 1
+                continue
+            res, n_rows = got
             total += res
             self._set_state(unit_id, "values", version, len(by_unit[unit_id]), n_rows)
             stats["units_fetched"] += 1
@@ -809,9 +843,9 @@ def main(
 
 
 def pending(stats: dict[str, Any]) -> bool:
-    """¿Quedó trabajo para la próxima corrida (crawl o descarga cortados por presupuesto)?"""
+    """¿Quedó trabajo para la próxima corrida (presupuesto agotado o unidades con cortes)?"""
     parts = [stats[k] for k in ("crawl", "download") if k in stats] or [stats]
-    return any(p.get("units_pending") for p in parts)
+    return any(p.get("units_pending") or p.get("units_failed") for p in parts)
 
 
 class _NullAdapter:
