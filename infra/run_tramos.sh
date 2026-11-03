@@ -43,7 +43,12 @@ fi
 sync_r2
 tramos download --max-releases "$RELEASES_PER_TRAMO"
 tramos vintages --max-series "$SERIES_PER_TRAMO"
-py -m src.export >/dev/null
-sync_r2
+export_rc=0
+py -m src.export >/dev/null || export_rc=$?
+# El marcador va ANTES del último sync: si se crea después, nunca llega a R2 y en GitHub
+# Actions (máquina nueva en cada corrida) toda corrida vuelve a ser "descarga inicial", que
+# salta el embudo y nunca corre la actualización semanal.
 touch "$STATE/initial_download.done"
+sync_r2
+[[ $export_rc -eq 0 ]] || { echo "export falló (rc=$export_rc)" >&2; exit "$export_rc"; }
 echo "descarga inicial completa"

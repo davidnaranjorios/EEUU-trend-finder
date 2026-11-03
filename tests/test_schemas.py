@@ -98,7 +98,14 @@ def test_text_docs_valid():
 
 
 def test_term_freq_inconsistent_counts_rejected():
-    row = {"source": "edgar", "period": "2020", "term": "x", "doc_count": 5, "total_docs": 3}
+    row = {
+        "source": "edgar",
+        "section": "item_1a",
+        "period": "2020",
+        "term": "x",
+        "doc_count": 5,
+        "total_docs": 3,
+    }
     with pytest.raises(SchemaError, match="inconsistentes"):
         validate(table(TERM_FREQ, [row]), TERM_FREQ)
 

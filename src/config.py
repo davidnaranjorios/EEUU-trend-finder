@@ -69,6 +69,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if not isinstance(v2_limit, int) or not 0 < v2_limit <= 500000:
         raise ConfigError("download.v2_page_limit debe estar en 1..500000")
     _validate_sources(_section(cfg, "sources"))
+    _validate_exports(_section(cfg, "exports"))
+    _validate_text(cfg)
     storage = _section(cfg, "storage")
     for key in ("bucket", "prefix"):
         if not isinstance(storage.get(key), str) or not storage[key]:
@@ -108,6 +110,16 @@ def _validate_vintages(v: dict[str, Any]) -> None:
     if not isinstance(cap, int) or not 0 < cap <= 2000:
         raise ConfigError("vintages.max_vintage_dates_per_request debe estar en 1..2000")
     _validate_groups(v.get("groups"), "vintages.groups")
+
+
+def _validate_exports(ex: dict[str, Any]) -> None:
+    _validate_groups(ex.get("groups"), "exports.groups")
+    n = ex.get("n_buckets")
+    if not isinstance(n, int) or not 0 < n <= 100:
+        raise ConfigError("exports.n_buckets debe ser un entero en 1..100")
+    for key in ("max_file_kb", "max_total_mb"):
+        if not isinstance(ex.get(key), int | float) or ex[key] <= 0:
+            raise ConfigError(f"exports.{key} debe ser positivo")
 
 
 def _validate_groups(groups: Any, name: str) -> None:
@@ -170,6 +182,38 @@ def _validate_fred(fred: dict[str, Any]) -> None:
     for key in ("backoff_base_s", "timeout_s"):
         if not isinstance(fred.get(key), int | float) or fred[key] <= 0:
             raise ConfigError(f"fred.{key} debe ser positivo")
+
+
+def _validate_text(cfg: dict[str, Any]) -> None:
+    text = _section(cfg, "text")
+    if text.get("ngram_max") not in (1, 2, 3):
+        raise ConfigError("text.ngram_max debe ser 1, 2 o 3")
+    for key in ("min_doc_count", "seed"):
+        if not isinstance(text.get(key), int) or text[key] < 1:
+            raise ConfigError(f"text.{key} debe ser un entero positivo")
+    if (
+        not isinstance(text.get("open_refresh_hours"), int | float)
+        or text["open_refresh_hours"] <= 0
+    ):
+        raise ConfigError("text.open_refresh_hours debe ser positivo")
+    if not isinstance(text.get("workers"), int) or text["workers"] < 0:
+        raise ConfigError("text.workers debe ser un entero >= 0 (0 = sin procesos)")
+    edgar = _section(cfg, "edgar")
+    rps = edgar.get("requests_per_second")
+    if not isinstance(rps, int | float) or not 0 < rps <= 10:
+        raise ConfigError("edgar.requests_per_second debe estar en (0, 10] (límite oficial)")
+    if not isinstance(edgar.get("forms"), list) or not edgar["forms"]:
+        raise ConfigError("edgar.forms debe ser una lista no vacía")
+    for name in ("edgar", "federal_register"):
+        sec = _section(cfg, name)
+        for key in ("start_year", "min_chars", "closed_grace_days", "max_retries"):
+            if not isinstance(sec.get(key), int) or sec[key] < 0:
+                raise ConfigError(f"{name}.{key} debe ser un entero no negativo")
+        if (
+            not isinstance(sec.get("requests_per_second"), int | float)
+            or sec["requests_per_second"] <= 0
+        ):
+            raise ConfigError(f"{name}.requests_per_second debe ser positivo")
 
 
 def _check_per_frequency(value: Any, name: str) -> None:
