@@ -122,6 +122,7 @@ def load_matrix(
 ) -> TermMatrix:
     """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla."""
     con = duckdb.connect()
+    con.execute("SET enable_progress_bar = false")
     con.execute(
         "CREATE TEMP TABLE tf AS SELECT section, period, term, doc_count, total_docs "
         "FROM read_parquet(?)",

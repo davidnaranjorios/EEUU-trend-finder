@@ -74,6 +74,35 @@ El bootstrap y la FDR son los de la fase 2 (ADR 0007); no se duplican.
   anuales y ruido persistente, el detector solo ve cambios grandes. Es lo esperable (BackTrend
   2026) y conviene tenerlo presente al fijar el umbral de recall de la Fase 6.
 
+## Verificación con datos reales (2026-11-03)
+
+Federal Register 2016-01 a 2026-10 bajado en el contenedor (130 meses, 273 MB de `term_freq`),
+grilla trimestral (43 trimestres completos, 2016Q1–2026Q3), configuración por defecto:
+
+| Paso | Cantidad |
+|---|---|
+| (sección, término) candidatos | 1.490.273 |
+| palabras funcionales detectadas en los datos | 692 |
+| excluidos por el prefiltro | 1.425.765 |
+| pruebas (familia BH) | 64.508 |
+| señales BH (q ≤ 0,05) | 303 (notice 214, prorule 47, rule 35, presdocu 7) |
+| sobreviven también a BY | 63 |
+| tiempo | 104 s (4 procesos) |
+
+Las señales con mayor efecto mezclan dos cosas:
+- **Cambios de contenido:** "deregulation", "unleashing prosperity", "rescinding",
+  "american energy", "categorical exclusions", sobre todo en rule y prorule.
+- **Artefactos administrativos:** nombres de firmantes de avisos ("christopher abbott",
+  "mcdonough") y fórmulas de trámite ("send additional written requests").
+
+Ambas cosas son cambios reales en los datos, pero las segundas no son tendencias estructurales.
+Se quitan con datos, no con listas:
+- en la Fase 5, con deduplicación y triangulación (un término sin respaldo en otra fuente no
+  entra al ranking);
+- **opcionalmente**, con una medida de amplitud: en cuántas entidades (agencias o empresas)
+  aparece el término. Hoy `term_freq` no la tiene; agregarla cambiaría el esquema, así que queda
+  propuesta para decidir.
+
 ## Uso
 
 ```
