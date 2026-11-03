@@ -471,3 +471,38 @@ def test_only_ingesta_group_syncs_shared_logs():
                     whole_logs = not args or "logs" in args  # sin argumentos = todo
                     if whole_logs:
                         assert group == "ingesta", f"{wf.name}: sincroniza logs/ entero"
+
+
+def test_sync_of_logs_never_touches_reporte_subdir(tmp_path):
+    """La sync de logs/ entero (grupo ingesta) excluye logs/reporte/ (workflow Reporte, otro
+    grupo de concurrencia): ni lo sube ni lo borra en R2, también en la verificación."""
+    shutil.copytree(INFRA, tmp_path / "infra")
+    (tmp_path / "data" / "processed" / "t").mkdir(parents=True)
+    (tmp_path / "data" / "processed" / "t" / "x.parquet").write_bytes(b"x")
+    (tmp_path / "data" / "logs" / "reporte").mkdir(parents=True)
+    (tmp_path / "data" / "rank").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.txt"
+    for name in ("rclone", "uv"):
+        (bin_dir / name).write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n')
+        (bin_dir / name).chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "R2_BUCKET": "b",
+        "CLOUDFLARE_ACCOUNT_ID": ACC,
+        "AWS_ACCESS_KEY_ID": KEY,
+        "AWS_SECRET_ACCESS_KEY": SECRET,
+    }
+    res = subprocess.run(
+        ["bash", str(tmp_path / "infra" / "sync_r2.sh"), "logs", "rank"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    lines = [ln for ln in calls.read_text().splitlines() if ln.startswith("rclone ")]
+    logs = [ln for ln in lines if "data/logs " in ln]
+    other = [ln for ln in lines if "data/rank " in ln]
+    assert len(logs) == 2 and all("--exclude reporte/**" in ln for ln in logs)  # sync y check
+    assert other and not any("reporte/**" in ln for ln in other)

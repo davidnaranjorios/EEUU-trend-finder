@@ -36,13 +36,17 @@ for dir in "$@"; do
       fi
       ;;
   esac
+  # logs/reporte/ es del workflow Reporte (otro grupo de concurrencia, ADR 0009): una sync de
+  # logs/ entero no lo toca (rclone no borra en el destino lo excluido sin --delete-excluded).
+  extra=()
+  if [[ "$dir" == "logs" ]]; then extra=(--exclude 'reporte/**'); fi
   rclone sync "data/$dir" "r2:$BUCKET/$dir" \
     --fast-list --transfers 8 --checksum --no-update-modtime \
-    --exclude '*.tmp' --exclude '.*' \
+    --exclude '*.tmp' --exclude '.*' "${extra[@]}" \
     --backup-dir "r2:$BUCKET/_trash/$STAMP/$dir"
   # R2 no implementa la autocopia con que rclone corrige la fecha de modificación (501
   # NotImplemented); --no-update-modtime la evita. Esta comprobación no depende de eso.
   rclone check "data/$dir" "r2:$BUCKET/$dir" --one-way --checksum --fast-list \
-    --exclude '*.tmp' --exclude '.*'
+    --exclude '*.tmp' --exclude '.*' "${extra[@]}"
 done
 echo "sync_r2: ok ($STAMP)"

@@ -174,6 +174,11 @@ Por eso Reporte:
 `tests/test_infra.py::test_only_ingesta_group_syncs_shared_logs` verifica que ningún workflow
 fuera del grupo `ingesta` sincronice `logs` entero.
 
+El caso inverso también está cubierto. Cuando `sync_r2.sh` sincroniza `logs`, excluye
+`reporte/**`, tanto en la sync como en la verificación. rclone no borra en el destino lo que
+queda excluido, así que la ingesta nunca pisa `logs/reporte/` ni lo manda a `_trash`
+(`test_sync_of_logs_never_touches_reporte_subdir`).
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:
