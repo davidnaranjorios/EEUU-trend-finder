@@ -141,6 +141,34 @@ DETECTOR_RUNS = TableSpec(
     key=("run_id", "detector"),
 )
 
+# Una fila por prueba (serie × detector × corrida), haya o no señal: explica por qué una serie
+# no dio señal y guarda el p calibrado. q_value/q_by quedan NULL hasta cerrar la familia (fdr).
+DETECTOR_TESTS = TableSpec(
+    name="detector_tests",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("detector", pa.string(), False),
+        ("source", pa.string(), False),
+        ("object_id", pa.string(), False),
+        ("frequency", pa.string(), False),
+        ("grid", pa.string(), False),
+        ("n_growth", pa.int64(), False),
+        ("block_length", pa.float64(), False),
+        ("statistic", pa.float64(), False),
+        ("effect_size", pa.float64(), False),
+        ("persistent", pa.bool_(), False),
+        ("p_value", pa.float64(), False),
+        ("p_method", pa.string(), False),  # empirical o gpd
+        ("q_value", pa.float64(), True),  # BH
+        ("q_by", pa.float64(), True),  # BY, solo comparación
+        ("n_tests", pa.int64(), True),
+        ("window_start", pa.date32(), False),
+        ("window_end", pa.date32(), False),
+        ("copyrighted", pa.bool_(), False),
+    ),
+    key=("run_id", "detector", "source", "object_id"),
+)
+
 SERIES_TERM_LINKS = TableSpec(
     name="series_term_links",
     schema=_schema(
@@ -178,6 +206,7 @@ ALL_SPECS = {
         SIGNALS,
         ELIGIBILITY,
         DETECTOR_RUNS,
+        DETECTOR_TESTS,
         SERIES_TERM_LINKS,
         CLUSTERS,
     )
@@ -256,6 +285,13 @@ def _check_lineage(table: pa.Table, spec: TableSpec) -> None:
         ),
         CLUSTERS.name: ("role NOT IN ('representante', 'miembro')", [], "rol inválido"),
         SIGNALS.name: ("n_tests < 1 OR run_id = ''", [], "n_tests < 1 o run_id vacío"),
+        DETECTOR_TESTS.name: (
+            "p_value NOT BETWEEN 0 AND 1 OR q_value NOT BETWEEN 0 AND 1 "
+            "OR q_by NOT BETWEEN 0 AND 1 OR p_method NOT IN ('empirical', 'gpd') "
+            "OR window_start > window_end OR n_tests < 1",
+            [],
+            "p/q fuera de [0,1], método o ventana inválidos",
+        ),
     }
     if spec.name in checks:
         where, params, msg = checks[spec.name]

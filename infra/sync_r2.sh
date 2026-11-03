@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sincroniza data/processed, data/exports y data/logs a Cloudflare R2 (ADR 0002).
+# Sincroniza data/processed, data/signals, data/exports y data/logs a Cloudflare R2 (ADR 0002).
 #
 # Las borradas en el destino no se pierden: van a _trash/<fecha>/ dentro del bucket.
 # Al final verifica que todo lo local esté en R2 con el mismo checksum; si no, falla.
@@ -17,7 +17,7 @@ if ! find "$PROCESSED" -name '*.parquet' -print -quit 2>/dev/null | grep -q .; t
   exit 1
 fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-for dir in processed exports logs; do
+for dir in processed signals exports logs; do
   [[ -d "data/$dir" ]] || continue
   rclone sync "data/$dir" "r2:$BUCKET/$dir" \
     --fast-list --transfers 8 --checksum --no-update-modtime \

@@ -8,7 +8,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
 # shellcheck source=infra/r2_env.sh
 source infra/r2_env.sh
-for dir in processed logs; do
+for dir in processed signals logs; do
   mkdir -p "data/$dir"
   rclone copy "r2:$BUCKET/$dir" "data/$dir" --fast-list --transfers 16 --checksum
 done

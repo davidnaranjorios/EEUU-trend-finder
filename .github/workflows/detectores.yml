@@ -1,0 +1,77 @@
+# Detectores numéricos de la Fase 2 (ADR 0005) sobre los datos vigentes en R2.
+#
+# Un solo job con 4 procesos (decisión B del 2026-11-03): trae processed/ y signals/ desde R2,
+# corre `python -m src.detect run` (pruebas + BH/BY + PELT para fechar) y sincroniza
+# detector_tests, detector_runs, signals y el reporte de vuelta a R2. Se lanza a mano; en la
+# Fase 7 se encadena después de la ingesta semanal.
+# Si algún día no cabe en 6 h: matriz de `run --shard I/N --run-id ID` y un job final
+# `fdr --run-id ID` (los índices bootstrap se regeneran por semilla en cada shard).
+name: Detectores
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_series:
+        description: "Tope de series (vacío = todas; solo para pruebas)"
+        required: false
+        default: ""
+
+concurrency:
+  group: ingesta # nunca a la vez que la ingesta: ambas escriben en R2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  detectores:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      MAX_SERIES: ${{ inputs.max_series }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked
+      - name: Instalar rclone
+        run: sudo infra/install_rclone.sh
+      - name: Verificar secrets
+        run: |
+          for v in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
+          done
+      - name: Traer datos desde R2
+        run: infra/pull_r2.sh
+      - name: Detectores
+        run: |
+          args=()
+          [ -n "$MAX_SERIES" ] && args+=(--max-series "$MAX_SERIES")
+          nproc
+          uv run python -m src.detect run "${args[@]}" | tee data/logs/detectores.md
+      - name: Sincronizar a R2
+        run: infra/sync_r2.sh
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            cat data/logs/detectores.md 2>/dev/null || echo "sin reporte"
+            echo '```'
+            tail -n 1 data/logs/runs.jsonl 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Logs y reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detectores-${{ github.run_id }}
+          path: |
+            data/logs/
+            data/signals/reports/
+          retention-days: 30
+          if-no-files-found: ignore

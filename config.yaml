@@ -61,6 +61,28 @@ persistence:
     Q: 3
     A: 2
 
+# Detectores numéricos de la Fase 2 (ADR 0005). Solo parámetros: ningún tema ni serie.
+detect:
+  source: fred
+  detectors: [slope, regime]
+  # Ventana del cambio de pendiente, en periodos de la grilla (D y W se agregan a mensual):
+  # 5 años recientes frente a 5 previos; anual 7 + 7 (decisión del 2026-11-03).
+  slope_window: {M: 60, Q: 20, A: 7}
+  lookback_years: 15            # historia usada por ambos detectores (CUSUM y línea base)
+  winsor_mad: 4.0               # crecimiento recortado en mediana ± 4·MAD
+  max_gap_share: 0.1            # máximo de periodos faltantes dentro de la ventana
+  phi_margin: 1.0               # φ del post-blackening + 1 error estándar (conservador)
+  workers: 4                    # procesos (runner de GitHub Actions: 4 vCPU)
+  tail:                         # cola GPD (Knijnenburg et al. 2009)
+    method: gpd
+    min_exceedances: 10
+    n_exceed: 250
+    n_exceed_min: 50
+    gof_alpha: 0.05
+  pelt:                         # solo para fechar el quiebre de los sobrevivientes de BH
+    jump: 5
+    penalty: 3.0                # pen = penalty · log(N) · sd²
+
 fdr:
   q: 0.05
   method: bh                    # único método que decide el ranking

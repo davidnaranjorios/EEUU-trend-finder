@@ -12,13 +12,29 @@ from typing import Any
 
 import duckdb
 
-from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
+from src.schemas import (
+    DETECTOR_RUNS,
+    DETECTOR_TESTS,
+    ELIGIBILITY,
+    SERIES,
+    SERIES_META,
+    SIGNALS,
+    TableSpec,
+)
 
 # Vista -> (subdirectorio bajo processed/, esquema). Cada fuente escribe <dir>/<fuente>/<NN>/.
 VIEWS: dict[str, tuple[str, TableSpec]] = {
     "series": ("series", SERIES),
     "series_meta": ("series_meta", SERIES_META),
     "eligibility": ("lineage/eligibility", ELIGIBILITY),
+}
+# Salidas de los detectores (Fase 2). Solo en la conexión local: en Actions se consultan sobre la
+# copia traída de R2, y sobre R2 una vista sin archivos fallaría antes de la primera corrida.
+# Rutas relativas a data/ (signals vive en data/signals, fuera de processed).
+DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
+    "detector_runs": ("processed/lineage/detector_runs", DETECTOR_RUNS),
+    "detector_tests": ("processed/lineage/detector_tests", DETECTOR_TESTS),
+    "signals": ("signals", SIGNALS),
 }
 # Credenciales de R2 en .env (nombres estándar de S3, que también leen rclone y DuckDB).
 # Nunca van en config.yaml.
@@ -28,8 +44,11 @@ R2_ENV = ("CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 def connect(processed_dir: Path | str, database: str = ":memory:") -> duckdb.DuckDBPyConnection:
     """Conexión con una vista por tabla; vacía (con su esquema) si aún no hay datos."""
     con = duckdb.connect(database)
-    for view, (subdir, spec) in VIEWS.items():
-        files = sorted((Path(processed_dir) / subdir).glob("*/??/*.parquet"))
+    data_dir = Path(processed_dir).parent
+    views = {view: (Path(processed_dir) / sub, spec) for view, (sub, spec) in VIEWS.items()}
+    views |= {view: (data_dir / sub, spec) for view, (sub, spec) in DETECT_VIEWS.items()}
+    for view, (root, spec) in views.items():
+        files = sorted(root.glob("*/??/*.parquet"))
         if files:
             listing = ", ".join(_quote(str(f)) for f in files)
             con.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet([{listing}])")
