@@ -56,7 +56,32 @@ def classify(
     cfg: dict[str, Any],
     today: date,
 ) -> list[dict[str, Any]]:
-    """Una decisión por serie: `group`, `rule`, `detail`, `geo_level`, `frequency`, ..."""
+    """Embudo de FRED: traduce fred_catalog + tags geográficos al catálogo neutral."""
+    rows = []
+    for r in catalog:
+        geo_level, geo_detail = geo_level_of(attrs.get(r["series_id"]))
+        rows.append(
+            {
+                **r,
+                "frequency": FREQ_MAP.get(r["frequency_short"] or ""),
+                "frequency_raw": r["frequency_short"],
+                "geo_level": geo_level,
+                "geo_detail": geo_detail,
+            }
+        )
+    return classify_rows(rows, cfg, today)
+
+
+def classify_rows(
+    catalog: Iterable[dict[str, Any]], cfg: dict[str, Any], today: date
+) -> list[dict[str, Any]]:
+    """Una decisión por serie del catálogo neutral (todas las fuentes).
+
+    Cada fila trae `series_id, title, frequency` (código del esquema o None), `frequency_raw`,
+    `units, seasonal_adjustment, observation_start, observation_end, discontinued,
+    copyrighted, geo_level, geo_detail`. Devuelve `group_name`, `rule`, `detail`, `geo_level`,
+    `frequency` y `copyrighted` por serie, ordenadas por id.
+    """
     el = cfg["eligibility"]
     max_stale = el["max_staleness_days"]
     min_days = el["min_history_years"] * 365.25
@@ -64,35 +89,11 @@ def classify(
     active: list[dict[str, Any]] = []
 
     for r in catalog:
-        freq = FREQ_MAP.get(r["frequency_short"] or "")
-        base = {
-            "series_id": r["series_id"],
-            "frequency": freq,  # NULL si no está soportada; el código va en `detail`
-            "copyrighted": bool(r["copyrighted"]),
-            "geo_level": None,
-            "detail": None,
-        }
-        start, end = r["observation_start"], r["observation_end"]
-        if r["discontinued"]:
-            out[r["series_id"]] = {**base, "group_name": "excluida", "rule": "descontinuada"}
-        elif freq is None:
-            out[r["series_id"]] = {
-                **base,
-                "group_name": "excluida",
-                "rule": "frecuencia_no_soportada",
-                "detail": r["frequency_short"],
-            }
-        elif start is None or end is None:
-            out[r["series_id"]] = {**base, "group_name": "excluida", "rule": "sin_fechas"}
-        elif (today - end).days > max_stale[freq]:
-            out[r["series_id"]] = {
-                **base,
-                "group_name": "excluida",
-                "rule": "inactiva",
-                "detail": f"ultimo_dato={end.isoformat()}",
-            }
+        decision = row_rule(r, max_stale, today)
+        if decision is not None:
+            out[r["series_id"]] = decision
         else:
-            active.append({**r, "_freq": freq, "_base": base})
+            active.append({**r, "_freq": r["frequency"], "_base": _base(r)})
 
     # Regla 4: una versión por variable (mismo título normalizado).
     rank = _variant_rank(el["variants"], min_days)
@@ -114,8 +115,7 @@ def classify(
 
     # Reglas 5 y 6: nivel geográfico y grupo de series nuevas.
     for r in keepers:
-        a = attrs.get(r["series_id"])
-        geo_level, geo_detail = geo_level_of(a)
+        geo_level, geo_detail = r["geo_level"] or "sin_geografia", r["geo_detail"]
         history = (r["observation_end"] - r["observation_start"]).days
         decision = {**r["_base"], "geo_level": geo_level, "detail": geo_detail}
         if geo_level == "sin_geografia":
@@ -127,6 +127,45 @@ def classify(
             decision.update(group_name=geo_level, rule="geografia")
         out[r["series_id"]] = decision
     return [out[sid] for sid in sorted(out)]
+
+
+def _base(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "series_id": r["series_id"],
+        "frequency": r["frequency"],  # NULL si no está soportada; el código va en `detail`
+        "copyrighted": bool(r["copyrighted"]),
+        "geo_level": None,
+        "detail": None,
+    }
+
+
+def row_rule(r: dict[str, Any], max_stale: dict[str, int], today: date) -> dict[str, Any] | None:
+    """Reglas 1–3 (descontinuada, frecuencia, sin fechas, inactiva): solo miran la fila.
+
+    Devuelve la decisión de exclusión, o None si la serie sigue en el embudo.
+    """
+    freq = r["frequency"]
+    base = _base(r)
+    end = r["observation_end"]
+    if r["discontinued"]:
+        return {**base, "group_name": "excluida", "rule": "descontinuada"}
+    if freq is None:
+        return {
+            **base,
+            "group_name": "excluida",
+            "rule": "frecuencia_no_soportada",
+            "detail": r["frequency_raw"],
+        }
+    if r["observation_start"] is None or end is None:
+        return {**base, "group_name": "excluida", "rule": "sin_fechas"}
+    if (today - end).days > max_stale[freq]:
+        return {
+            **base,
+            "group_name": "excluida",
+            "rule": "inactiva",
+            "detail": f"ultimo_dato={end.isoformat()}",
+        }
+    return None
 
 
 def normalize_title(title: str | None) -> str:

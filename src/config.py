@@ -69,6 +69,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     v2_limit = cfg["download"].get("v2_page_limit")
     if not isinstance(v2_limit, int) or not 0 < v2_limit <= 500000:
         raise ConfigError("download.v2_page_limit debe estar en 1..500000")
+    _validate_sources(_section(cfg, "sources"))
     _validate_exports(_section(cfg, "exports"))
     _validate_text(cfg)
     storage = _section(cfg, "storage")
@@ -160,6 +161,35 @@ def _validate_groups(groups: Any, name: str) -> None:
         raise ConfigError(
             f"{name} debe ser una lista no vacía con valores de {DOWNLOADABLE_GROUPS}"
         )
+
+
+# Fuentes con adaptador sobre src/ingest/common.py (Fase 4).
+COMMON_SOURCES = ("bls", "bea", "census")
+
+
+def _validate_sources(src: dict[str, Any]) -> None:
+    if not isinstance(src.get("n_buckets"), int) or not 0 < src["n_buckets"] <= 100:
+        raise ConfigError("sources.n_buckets debe ser un entero en 1..100")
+    if not isinstance(src.get("user_agent_env"), str) or not src["user_agent_env"]:
+        raise ConfigError("sources.user_agent_env debe nombrar una variable de entorno")
+    for name in COMMON_SOURCES:
+        s = src.get(name)
+        if not isinstance(s, dict):
+            raise ConfigError(f"falta la sección 'sources.{name}'")
+        rpm = s.get("requests_per_minute")
+        if not isinstance(rpm, int | float) or not 0 < rpm <= 100:
+            raise ConfigError(f"sources.{name}.requests_per_minute debe estar en (0, 100]")
+        for key in ("max_retries", "catalog_refresh_days", "write_batch_rows"):
+            if not isinstance(s.get(key), int) or s[key] < 1:
+                raise ConfigError(f"sources.{name}.{key} debe ser un entero positivo")
+        for key in ("backoff_base_s", "timeout_s"):
+            if not isinstance(s.get(key), int | float) or s[key] <= 0:
+                raise ConfigError(f"sources.{name}.{key} debe ser positivo")
+        agg = s.get("lineage_aggregate_min_series")
+        if agg is not None and (not isinstance(agg, int) or agg < 2):
+            raise ConfigError(
+                f"sources.{name}.lineage_aggregate_min_series debe ser null o un entero >= 2"
+            )
 
 
 def _section(cfg: dict[str, Any], name: str) -> dict[str, Any]:

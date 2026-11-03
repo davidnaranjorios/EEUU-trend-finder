@@ -206,7 +206,12 @@ sintético inyectado con crecimiento artificial (test).
 
 ### Fase 4 — Fuentes adicionales (BLS, BEA, Census)
 Usar un subagente por fuente, todos produciendo el esquema común.
-**Terminado cuando:** cada fuente pasa el mismo test de esquema e idempotencia.
+Hecho: capa común `src/ingest/common.py` (contrato `SourceAdapter`, embudo neutral, estado por
+unidad, presupuesto de minutos) y un adaptador por fuente; BLS por archivos masivos. Uso:
+`uv run python -m src.ingest.<bls|bea|census> crawl [--full] | download | update | estimate`;
+corrida semanal en `infra/sources_update.sh`. Decisiones y linaje agregado por unidad: ADR 0007.
+**Terminado cuando:** cada fuente pasa el mismo test de esquema e idempotencia
+(`tests/test_sources_contract.py`).
 
 ### Fase 5 — Triangulación, deduplicación y ranking
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia

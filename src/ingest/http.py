@@ -9,7 +9,8 @@ import logging
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,62 @@ class ApiClient:
                 reason = f"HTTP {resp.status_code}"
                 retry_after = _retry_after(resp)
 
+            if attempt == self.max_retries:
+                raise ApiError(
+                    f"{endpoint}: reintentos agotados ({self.max_retries}); último: {reason}"
+                )
+            delay = self.backoff_base_s * 2**attempt + self._rng.uniform(0, self.backoff_base_s)
+            if retry_after is not None:
+                delay = max(delay, retry_after)
+            self.n_retries += 1
+            self.log.warning(
+                "reintento",
+                extra={"fields": {"endpoint": endpoint, "reason": reason, "delay_s": delay}},
+            )
+            self._sleep(delay)
+        raise AssertionError("inalcanzable")
+
+    def head(self, endpoint: str, params: dict[str, Any] | None = None) -> httpx.Headers:
+        """Encabezados de `endpoint` (ETag, Last-Modified...) con rate limit y reintentos."""
+        resp = self._send("HEAD", endpoint, params or {})
+        return resp.headers
+
+    @contextmanager
+    def stream(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> Iterator[httpx.Response]:
+        """Respuesta en streaming (archivos grandes): los reintentos cubren solo el inicio."""
+        resp = self._send("GET", endpoint, params or {}, stream=True)
+        try:
+            yield resp
+        finally:
+            resp.close()
+
+    def _send(
+        self, method: str, endpoint: str, params: dict[str, Any], *, stream: bool = False
+    ) -> httpx.Response:
+        for attempt in range(self.max_retries + 1):
+            self._limiter.wait()
+            self.n_requests += 1
+            retry_after: float | None = None
+            try:
+                req = self._http.build_request(method, endpoint, params={**params, **self._auth})
+                resp = self._http.send(req, stream=stream)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                reason = type(exc).__name__
+            else:
+                if resp.status_code == 200:
+                    return resp
+                if stream:
+                    resp.read()
+                    resp.close()
+                if resp.status_code not in RETRYABLE_STATUS:
+                    raise ApiError(
+                        f"{endpoint}: HTTP {resp.status_code}: {_error_message(resp)}",
+                        resp.status_code,
+                    )
+                reason = f"HTTP {resp.status_code}"
+                retry_after = _retry_after(resp)
             if attempt == self.max_retries:
                 raise ApiError(
                     f"{endpoint}: reintentos agotados ({self.max_retries}); último: {reason}"
