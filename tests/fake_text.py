@@ -6,6 +6,9 @@ El contenido es sintético (tokens sin significado): los tests no dependen de ni
 from __future__ import annotations
 
 import gzip
+import io
+import json
+import zipfile
 from collections.abc import Callable
 
 import httpx
@@ -102,6 +105,13 @@ class FakeEdgar:
             return httpx.Response(200, content=self.index)
         if path.startswith("/Archives/edgar/full-index/"):
             return httpx.Response(200, content=form_index([]))
+        if path == "/Archives/edgar/daily-index/bulkdata/submissions.zip":
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                for cik, recent in self.subs.items():
+                    doc = {"cik": cik, "filings": {"recent": recent, "files": []}}
+                    zf.writestr(f"CIK{cik:010d}.json", json.dumps(doc))
+            return httpx.Response(200, content=buf.getvalue())
         if path.startswith("/submissions/CIK"):
             cik = int(path.removeprefix("/submissions/CIK").removesuffix(".json"))
             if cik not in self.subs:

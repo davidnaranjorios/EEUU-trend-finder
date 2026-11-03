@@ -12,14 +12,28 @@ from typing import Any
 
 import duckdb
 
-from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
+from src.schemas import (
+    ELIGIBILITY,
+    SERIES,
+    SERIES_META,
+    TERM_FREQ,
+    TEXT_DOCS,
+    TEXT_INGEST,
+    TableSpec,
+)
 
 # Vista -> (subdirectorio bajo processed/, esquema). Cada fuente escribe <dir>/<fuente>/<NN>/.
 VIEWS: dict[str, tuple[str, TableSpec]] = {
     "series": ("series", SERIES),
     "series_meta": ("series_meta", SERIES_META),
     "eligibility": ("lineage/eligibility", ELIGIBILITY),
+    # Texto (ADR 0005): particiones por periodo, <dir>/<fuente>/<periodo>/.
+    "text_docs": ("text_docs", TEXT_DOCS),
+    "term_freq": ("term_freq", TERM_FREQ),
+    "text_ingest": ("lineage/text_ingest", TEXT_INGEST),
 }
+# Nombre del subdirectorio de partición: bucket de dos dígitos (series) o periodo (texto).
+PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*"}
 # Credenciales de R2 en .env (nombres estándar de S3, que también leen rclone y DuckDB).
 # Nunca van en config.yaml.
 R2_ENV = ("CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
@@ -29,7 +43,8 @@ def connect(processed_dir: Path | str, database: str = ":memory:") -> duckdb.Duc
     """Conexión con una vista por tabla; vacía (con su esquema) si aún no hay datos."""
     con = duckdb.connect(database)
     for view, (subdir, spec) in VIEWS.items():
-        files = sorted((Path(processed_dir) / subdir).glob("*/??/*.parquet"))
+        part = PARTITION_GLOB.get(view, "??")
+        files = sorted((Path(processed_dir) / subdir).glob(f"*/{part}/*.parquet"))
         if files:
             listing = ", ".join(_quote(str(f)) for f in files)
             con.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet([{listing}])")
@@ -66,6 +81,10 @@ def r2_statements(storage: Mapping[str, Any], env: Mapping[str, str]) -> list[st
         f"ACCOUNT_ID {_quote(account_id(env['CLOUDFLARE_ACCOUNT_ID']))})",
     ]
     for view, (subdir, _) in VIEWS.items():
+        if view in PARTITION_GLOB:
+            # Las tablas de texto pueden no existir aún en R2 y DuckDB falla al crear una vista
+            # sobre un glob vacío; se consultan sobre la copia local (infra/pull_r2.sh).
+            continue
         glob = _quote(f"{base}/{subdir}/*/*/*.parquet")
         stmts.append(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({glob})")
     return stmts

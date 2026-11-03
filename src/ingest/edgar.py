@@ -304,10 +304,12 @@ class EdgarSource:
             return out
         zpath = self._submissions_zip()
         with zipfile.ZipFile(zpath) as zf:
-            names = set(zf.namelist())
+            # ~1 M de archivos en el zip: índice por CIK una sola vez (no un recorrido por CIK).
+            by_cik: dict[str, list[str]] = {}
+            for name in zf.namelist():
+                by_cik.setdefault(name[3:13], []).append(name)
             for cik in ciks:
-                base = f"CIK{cik:010d}"
-                for name in sorted(n for n in names if n.startswith(base)):
+                for name in sorted(by_cik.get(f"{cik:010d}", [])):
                     out.update(_primary_from(json.loads(zf.read(name)), wanted))
         return out
 

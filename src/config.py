@@ -150,6 +150,11 @@ def _validate_text(cfg: dict[str, Any]) -> None:
     for key in ("min_doc_count", "seed"):
         if not isinstance(text.get(key), int) or text[key] < 1:
             raise ConfigError(f"text.{key} debe ser un entero positivo")
+    if (
+        not isinstance(text.get("open_refresh_hours"), int | float)
+        or text["open_refresh_hours"] <= 0
+    ):
+        raise ConfigError("text.open_refresh_hours debe ser positivo")
     if not isinstance(text.get("workers"), int) or text["workers"] < 0:
         raise ConfigError("text.workers debe ser un entero >= 0 (0 = sin procesos)")
     edgar = _section(cfg, "edgar")

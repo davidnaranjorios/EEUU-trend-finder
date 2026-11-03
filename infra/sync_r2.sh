@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Sincroniza data/processed, data/exports y data/logs a Cloudflare R2 (ADR 0002).
+# Con argumentos, solo esas rutas bajo data/ (p. ej. `sync_r2.sh processed/term_freq logs`):
+# así la ingesta de texto no toca las tablas de FRED (ADR 0005).
 #
 # Las borradas en el destino no se pierden: van a _trash/<fecha>/ dentro del bucket.
 # Al final verifica que todo lo local esté en R2 con el mismo checksum; si no, falla.
@@ -17,8 +19,19 @@ if ! find "$PROCESSED" -name '*.parquet' -print -quit 2>/dev/null | grep -q .; t
   exit 1
 fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-for dir in processed exports logs; do
+if [[ $# -eq 0 ]]; then set -- processed exports logs; fi
+for dir in "$@"; do
   [[ -d "data/$dir" ]] || continue
+  # Una tabla local sin Parquet borraría su copia en R2: se salta (el estado es JSON).
+  case "$dir" in
+    processed/ingest_state*) ;;
+    processed/*)
+      if ! find "data/$dir" -name '*.parquet' -print -quit | grep -q .; then
+        echo "sync_r2: data/$dir sin Parquet: no se sincroniza" >&2
+        continue
+      fi
+      ;;
+  esac
   rclone sync "data/$dir" "r2:$BUCKET/$dir" \
     --fast-list --transfers 8 --checksum --no-update-modtime \
     --exclude '*.tmp' --exclude '.*' \

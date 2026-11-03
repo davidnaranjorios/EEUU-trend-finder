@@ -108,9 +108,12 @@ de FRED): se descargan y analizan, pero **no se publican en el reporte** sin ese
 Almacenamiento: `<tabla>/<fuente>/<NN>/part-*.parquet` con `NN = sha1(series_id) % n_buckets`;
 escritura idempotente en `src/ingest/store.py`; vistas DuckDB en `src/catalog.py`.
 
-**Texto** (`data/processed/text/`), clave `(source, doc_id, section)`: `source, doc_id, date,
-entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo, clave
-`(source, period, term)`: `source, period, term, doc_count, total_docs`.
+**Texto** (`data/processed/text_docs/`), clave `(source, doc_id, section)`: `source, doc_id,
+date, entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo
+(`data/processed/term_freq/`), clave `(source, section, period, term)`: `source, section,
+period, term, doc_count, total_docs`. `section` separa Item 1A / Item 7 o el tipo de documento
+sin crear fuentes nuevas. Linaje en `lineage/text_ingest`. Particiones por periodo
+(`<tabla>/<fuente>/<periodo>/`), no por bucket; el texto completo no se guarda (ADR 0005).
 
 **Señales** (`data/signals/`), clave `signal_id`: `signal_id, source, object_id` (serie o término)`,
 detector, window_start, window_end, effect_size, p_value, q_value, run_date`.
@@ -181,7 +184,10 @@ ejecución no duplica filas (test).
 
 ### Fase 3 — Ingesta y detección de texto (EDGAR, Federal Register)
 Referencia de diseño para EDGAR: el modelo dinámico de riesgos emergentes de Hanley & Hoberg
-(2019). Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
+(2019).
+Uso: `uv run python -m src.ingest.text edgar | federal_register [--max-periods N]
+[--periods P,...] [--sample N --processed-dir D] | summary`; en Actions, `infra/run_texto.sh`
+vía `.github/workflows/ingesta-texto.yml` (secret `SEC_USER_AGENT`). Diseño: ADR 0005. Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
 previa revisión de código y licencia.
 **Terminado cuando:** genero la tabla de frecuencias por periodo y el detector marca un término
 sintético inyectado con crecimiento artificial (test).

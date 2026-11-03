@@ -259,6 +259,17 @@ class TextState:
     def is_done(self, period: str) -> bool:
         return bool(self.periods.get(period, {}).get("closed"))
 
+    def needs_run(self, period: str, refresh_hours: float, now: datetime) -> bool:
+        """Cerrado y procesado: nunca más. Abierto: si su última pasada tiene más de
+        `refresh_hours` (así un bucle de tramos termina aunque el periodo siga abierto)."""
+        info = self.periods.get(period)
+        if info is None:
+            return True
+        if info.get("closed"):
+            return False
+        last = datetime.fromisoformat(info["processed_at"])
+        return (now - last).total_seconds() > refresh_hours * 3600
+
     def mark(self, period: str, *, closed: bool, run_id: str, stats: dict[str, Any]) -> None:
         self.periods[period] = {
             "closed": closed,
@@ -293,7 +304,9 @@ def run_source(
     today = today or date.today()
     text_cfg = cfg["text"]
     state = TextState(processed_dir, src.name)
-    candidates = only_periods or [p for p in src.periods(today) if not state.is_done(p)]
+    now = datetime.now(UTC)
+    refresh = text_cfg["open_refresh_hours"]
+    candidates = only_periods or [p for p in src.periods(today) if state.needs_run(p, refresh, now)]
     todo = candidates[:max_periods] if max_periods is not None else candidates
     n_workers = text_cfg["workers"] if workers is None else workers
     # forkserver: el proceso principal tiene hilos (httpx) y fork() con hilos puede bloquearse.
@@ -338,13 +351,10 @@ def run_source(
     finally:
         if executor is not None:
             executor.shutdown()
-    pending = [p for p in src.periods(today) if not state.is_done(p)]
-    # Los periodos abiertos se reprocesan siempre; solo cuentan como pendientes los cerrables.
-    pending_closable = [p for p in pending if src.is_closed(p, today)]
     return {
         "source": src.name,
         "periods_done_now": done,
-        "pending": 0 if only_periods else len(pending_closable),
+        "pending": 0 if only_periods else len(candidates) - len(todo),
     }
 
 

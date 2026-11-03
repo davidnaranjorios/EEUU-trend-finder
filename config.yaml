@@ -92,6 +92,7 @@ text:
   min_doc_count: 5                # un n-grama entra a term_freq si aparece en >= N documentos
   workers: 4                      # procesos de análisis (HTML -> secciones -> n-gramas)
   seed: 20261103                  # muestras de medición (--sample)
+  open_refresh_hours: 20          # un periodo abierto se reprocesa como mucho una vez por corrida
 
 edgar:
   base_url: https://www.sec.gov

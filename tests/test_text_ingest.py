@@ -226,22 +226,47 @@ def test_edgar_resumes_after_interruption(cfg, tmp_path):
 def test_closed_periods_are_skipped_and_pending_counted(cfg, tmp_path):
     processed = tmp_path / "processed"
     fake = FakeEdgar()
-    stats = run_source(
-        edgar(cfg, fake, tmp_path),
+
+    def go(run_id, **kw):
+        src = edgar(cfg, fake, tmp_path)
+        return run_source(src, cfg, processed_dir=processed, run_id=run_id, today=TODAY, **kw)
+
+    stats = go("a", max_periods=1)
+    assert [p["period"] for p in stats["periods_done_now"]] == ["2024Q1"]
+    assert stats["pending"] == 1  # queda 2024Q2 (abierto) por procesar en esta corrida
+    fake.requests.clear()
+    stats = go("b", max_periods=1)
+    assert [p["period"] for p in stats["periods_done_now"]] == ["2024Q2"]
+    assert stats["pending"] == 0
+    assert not any("QTR1" in r for r in fake.requests)  # el cerrado no se vuelve a pedir
+    # El abierto ya se procesó en esta corrida: el bucle de tramos termina.
+    assert go("c", max_periods=1)["periods_done_now"] == []
+
+
+def test_submissions_zip_matches_api(cfg, tmp_path):
+    api = tmp_path / "api"
+    run_source(
+        edgar(cfg, FakeEdgar(), tmp_path),
         cfg,
-        processed_dir=processed,
+        processed_dir=api,
         run_id="a",
         today=TODAY,
-        max_periods=1,
+        only_periods=["2024Q1"],
     )
-    assert [p["period"] for p in stats["periods_done_now"]] == ["2024Q1"]
-    assert stats["pending"] == 0  # 2024Q2 sigue abierto: no cuenta como pendiente
-    fake.requests.clear()
-    stats = run_source(
-        edgar(cfg, fake, tmp_path), cfg, processed_dir=processed, run_id="b", today=TODAY
+    zcfg = copy.deepcopy(cfg)
+    zcfg["edgar"]["submissions_api_max_ciks"] = 0  # fuerza submissions.zip
+    fake = FakeEdgar()
+    zipped = tmp_path / "zip"
+    run_source(
+        edgar(zcfg, fake, tmp_path),
+        zcfg,
+        processed_dir=zipped,
+        run_id="z",
+        today=TODAY,
+        only_periods=["2024Q1"],
     )
-    assert [p["period"] for p in stats["periods_done_now"]] == ["2024Q2"]
-    assert not any("QTR1" in r for r in fake.requests)  # el cerrado no se vuelve a pedir
+    assert not any(r.startswith("/submissions/") for r in fake.requests)
+    assert read_all(zipped, "edgar") == read_all(api, "edgar")
 
 
 def test_parallel_workers_match_inline(cfg, tmp_path):
@@ -340,3 +365,25 @@ def test_federal_register_rerun_is_idempotent(cfg, tmp_path):
             first, files = read_all(processed, "federal_register"), parquet_files(processed)
     assert read_all(processed, "federal_register") == first
     assert parquet_files(processed) == files
+
+
+def test_catalog_views_over_text_tables(cfg, tmp_path):
+    from src.catalog import connect
+
+    processed = tmp_path / "processed"
+    run_source(
+        fr_source(cfg, fr_fake(), tmp_path),
+        cfg,
+        processed_dir=processed,
+        run_id="r",
+        today=TODAY,
+        only_periods=["2024-01"],
+    )
+    con = connect(processed)
+    n, total = con.execute(
+        "SELECT count(*), max(total_docs) FROM term_freq WHERE section = 'notice'"
+    ).fetchone()
+    assert n > 0 and total == 3
+    assert con.execute("SELECT count(*) FROM text_docs").fetchone()[0] == 5
+    assert con.execute("SELECT count(*) FROM text_ingest").fetchone()[0] == 7
+    assert con.execute("SELECT count(*) FROM series").fetchone()[0] == 0  # vistas vacías ok
