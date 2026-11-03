@@ -94,6 +94,38 @@ fred:
   updates_fallback_days: 13       # series/updates solo cubre las dos últimas semanas
   verification_seed: 20261020
 
+# Texto (Fase 3, ADR 0005). Solo se guardan text_hash y frecuencias, nunca el texto completo.
+text:
+  ngram_max: 3                    # n-gramas de 1 a 3 tokens
+  min_doc_count: 5                # un n-grama entra a term_freq si aparece en >= N documentos
+  workers: 4                      # procesos de análisis (HTML -> secciones -> n-gramas)
+  seed: 20261103                  # muestras de medición (--sample)
+  open_refresh_hours: 20          # un periodo abierto se reprocesa como mucho una vez por corrida
+
+edgar:
+  base_url: https://www.sec.gov
+  data_url: https://data.sec.gov
+  forms: [10-K, 10-K405]          # 10-K/A, 10-KT, 10-KSB... quedan en el linaje como excluidos
+  start_year: 2006                # Item 1A obligatorio desde ejercicios cerrados >= 2005-12-01
+  requests_per_second: 8          # límite oficial: 10/s
+  max_retries: 6
+  backoff_base_s: 2.0
+  timeout_s: 120
+  min_chars: 2000                 # secciones más cortas (p. ej. "no aplica") -> muy_corta
+  closed_grace_days: 7            # un trimestre se congela 7 días después de terminar
+  submissions_api_max_ciks: 500   # más CIK que esto: se usa submissions.zip (una descarga)
+  submissions_zip_max_age_hours: 20
+
+federal_register:
+  base_url: https://www.govinfo.gov
+  start_year: 2000                # primer año del XML masivo de govinfo
+  requests_per_second: 2          # govinfo no publica límite: margen conservador
+  max_retries: 6
+  backoff_base_s: 2.0
+  timeout_s: 120
+  min_chars: 300
+  closed_grace_days: 3
+
 logging:
   level: INFO
   runs_file: data/logs/runs.jsonl

@@ -271,8 +271,8 @@ def test_state_and_logs_round_trip_through_r2():
     pull = (INFRA / "pull_r2.sh").read_text()
     sync = (INFRA / "sync_r2.sh").read_text()
     assert "rclone copy" in pull and "rclone sync" not in pull  # traer nunca borra
-    assert "for dir in processed logs" in pull
-    assert "for dir in processed exports logs" in sync
+    assert "set -- processed logs" in pull and 'for dir in "$@"' in pull
+    assert "set -- processed exports logs" in sync and 'for dir in "$@"' in sync
     entry = (INFRA / "run_actions.sh").read_text()
     assert "initial_download.done" in entry and "run_tramos.sh" in entry
     assert "weekly_update.sh" in entry
@@ -397,3 +397,45 @@ def test_install_rclone_no_sigpipe():
     # `rclone version | head -n 1` con pipefail falla al azar con 141 (SIGPIPE).
     text = (INFRA / "install_rclone.sh").read_text()
     assert "| head" not in text
+
+
+TEXT_PATHS = (
+    "processed/text_docs",
+    "processed/term_freq",
+    "processed/lineage/text_ingest",
+    "processed/ingest_state/text",
+)
+
+
+def _text_workflow():
+    import yaml
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ingesta-texto.yml").read_text())
+    wf["on"] = wf.pop(True, wf.get("on"))
+    return wf
+
+
+def test_text_workflow_shares_lock_and_secrets():
+    wf = _text_workflow()
+    assert wf["concurrency"] == _workflow()["concurrency"]  # nunca dos sync a R2 a la vez
+    assert wf["permissions"] == {"contents": "read"}
+    job = wf["jobs"]["texto"]
+    assert job["timeout-minutes"] < 360
+    for name in ("SEC_USER_AGENT", "CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID"):
+        assert job["env"][name] == "${{ secrets." + name + " }}"
+    assert "FRED_API_KEY" not in job["env"]
+    runs = [s.get("run", "") for s in job["steps"]]
+    pull = next(i for i, r in enumerate(runs) if "pull_r2.sh" in r)
+    work = next(i for i, r in enumerate(runs) if "run_texto.sh" in r)
+    assert pull < work
+    assert all(p in runs[pull] for p in TEXT_PATHS)  # solo trae las tablas de texto
+
+
+def test_text_tramos_sync_only_text_paths():
+    text = (INFRA / "run_texto.sh").read_text()
+    loop = text[text.index("tramos() {") : text.index("\n}", text.index("tramos() {"))]
+    assert "sync_r2" in loop and "--max-periods" in loop
+    assert all(p in text for p in TEXT_PATHS)
+    assert 'infra/sync_r2.sh "${TEXT_PATHS[@]}"' in text  # nunca el processed/ completo
+    pull = (INFRA / "pull_r2.sh").read_text()
+    assert "rc -eq 3" in pull  # tabla aún inexistente en R2: no falla la primera corrida

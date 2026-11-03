@@ -110,9 +110,12 @@ escritura idempotente y compactación (≤ 1 archivo por bucket) en `src/ingest/
 DuckDB en `src/catalog.py`. Linaje: `eligibility` (por qué cada serie entra o no) y
 `vintage_lineage` (por qué una serie de la muestra no tiene vintages).
 
-**Texto** (`data/processed/text/`), clave `(source, doc_id, section)`: `source, doc_id, date,
-entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo, clave
-`(source, period, term)`: `source, period, term, doc_count, total_docs`.
+**Texto** (`data/processed/text_docs/`), clave `(source, doc_id, section)`: `source, doc_id,
+date, entity, section, text_hash`. Tabla derivada de frecuencias de términos por periodo
+(`data/processed/term_freq/`), clave `(source, section, period, term)`: `source, section,
+period, term, doc_count, total_docs`. `section` separa Item 1A / Item 7 o el tipo de documento
+sin crear fuentes nuevas. Linaje en `lineage/text_ingest`. Particiones por periodo
+(`<tabla>/<fuente>/<periodo>/`), no por bucket; el texto completo no se guarda (ADR 0005).
 
 **Señales** (`data/signals/`), clave `signal_id`: `signal_id, source, object_id` (serie o término)`,
 detector, window_start, window_end, effect_size, p_value, q_value, run_date`.
@@ -185,7 +188,10 @@ ejecución no duplica filas (test).
 
 ### Fase 3 — Ingesta y detección de texto (EDGAR, Federal Register)
 Referencia de diseño para EDGAR: el modelo dinámico de riesgos emergentes de Hanley & Hoberg
-(2019). Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
+(2019).
+Uso: `uv run python -m src.ingest.text edgar | federal_register [--max-periods N]
+[--periods P,...] [--sample N --processed-dir D] | summary`; en Actions, `infra/run_texto.sh`
+vía `.github/workflows/ingesta-texto.yml` (secret `SEC_USER_AGENT`). Diseño: ADR 0005. Capa opcional de temas sobre los n-gramas: evaluar BERTrend (Boutaleb et al. 2024),
 previa revisión de código y licencia.
 **Terminado cuando:** genero la tabla de frecuencias por periodo y el detector marca un término
 sintético inyectado con crecimiento artificial (test).
@@ -234,4 +240,4 @@ Verificadas abriendo la fuente el 2026-10-20 (metadatos de doi.org o texto del p
 | Liu, Sun & Ke (2024), "A generalized knockoff procedure for FDR control in structural change detection", *Journal of Econometrics* 239(2), 105331 | DOI [10.1016/j.jeconom.2022.07.008](https://doi.org/10.1016/j.jeconom.2022.07.008) | Verificado (doi.org) |
 | Zhou et al. (2026), "BackTrend: Evaluating Scientific Weak-Signal Prediction via Backward Reconstruction", arXiv [2609.24921](https://arxiv.org/abs/2609.24921) | F1 máximo 10,1 % (set-level, juez LLM; DeepSeek-R1-0528); Coverage@10 máx. 18,5 % | Verificado (abstract y Tabla 2) |
 | Hanley & Hoberg (2019), "Dynamic Interpretation of Emerging Risks in the Financial Sector", *Review of Financial Studies* 32(12), 4543–4603 | Alerta "as early as mid-2005"; DOI [10.1093/rfs/hhz023](https://doi.org/10.1093/rfs/hhz023) | Verificado (abstract y doi.org) |
-| Boutaleb, Picault & Grosjean (2024), BERTrend, arXiv [2411.05930](https://arxiv.org/abs/2411.05930) | Método de temas para señales débiles | Código y licencia no verificados |
+| Boutaleb, Picault & Grosjean (2024), BERTrend, arXiv [2411.05930](https://arxiv.org/abs/2411.05930) | Método de temas para señales débiles; código `rte-france/BERTrend`, MPL-2.0 | Verificado 2026-11-03 (ADR 0006): no se integra por ahora |
