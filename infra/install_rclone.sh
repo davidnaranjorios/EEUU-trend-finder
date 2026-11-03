@@ -14,4 +14,4 @@ curl -fsSL -o "$tmp/$name.zip" "https://downloads.rclone.org/${VERSION}/${name}.
 echo "$SHA256  $tmp/$name.zip" | sha256sum -c --quiet
 unzip -q "$tmp/$name.zip" -d "$tmp"
 install -m 0755 "$tmp/$name/rclone" "$DEST/rclone"
-"$DEST/rclone" version | head -n 1
+"$DEST/rclone" version | sed -n 1p  # sed lee todo: con head, pipefail daba 141 (SIGPIPE)
