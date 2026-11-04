@@ -73,6 +73,58 @@ def test_republished_data_counts_as_one_source(a, b):
     assert _sources(a, b) == 1
 
 
+def _z1_real(sid, title, units="Millions of U.S. Dollars"):
+    return resolve_origin(
+        RULES,
+        source="fred",
+        series_id=sid,
+        agencies=FED,
+        release_ids=[52],
+        units=units,
+        title=title,
+    )
+
+
+BEA = frozenset({agency_key("U.S. Bureau of Economic Analysis")})
+
+
+def test_real_z1_heloc_depository_institutions_matches_fdic():
+    """Corrida 702b8ff3: Z.1 sector 70 (Private Depository Institutions) quedaba como Fed."""
+    z1 = _z1_real(
+        "BOGZ1FL703065125Q", "Private Depository Institutions; Home Equity Loans; Asset, Level"
+    )
+    assert z1.keys == _fdic("FDICHELOC").keys == frozenset({"call reports"})
+    assert _sources(z1, _fdic("FDICHELOC")) == 1
+
+
+def test_real_z1_price_index_matches_bea():
+    """Corrida 702b8ff3: índice de precios de la Z.1 (unidades 'Percent') frente a BEA."""
+    z1 = _z1_real(
+        "BOGZ1FL075013203Q",
+        "Interest Rates and Price Indexes; Expenditures on Equipment; Chain Weights, Level",
+        units="Percent",
+    )
+    bea = resolve_origin(RULES, source="bea", series_id="T20304", agencies=BEA)
+    assert z1.keys == bea.keys
+    assert _sources(z1, bea) == 1
+    assert format_chain(z1.chain) == "BEA → republicado por Fed Z.1"
+
+
+@pytest.mark.parametrize(
+    "sid,title",
+    [
+        ("BOGZ1FL073161113Q", "Interest Rates and Price Indexes; 10-Year Treasury Yield, Level"),
+        ("BOGZ1FL072052006Q", "Interest Rates and Price Indexes; Effective Federal Funds Rate"),
+        (
+            "BOGZ1FL075035503Q",
+            "Interest Rates and Price Indexes; Commercial Real Estate Price Index",
+        ),
+    ],
+)
+def test_real_z1_rates_are_not_bea(sid, title):
+    assert _z1_real(sid, title, units="Percent").keys == FED
+
+
 def test_unrelated_agencies_stay_independent():
     other = resolve_origin(
         RULES, source="fred", series_id="X", agencies=frozenset({"census bureau"}), release_ids=[3]

@@ -13,13 +13,19 @@ rules:
     origin: call_reports
     chain: [Call Reports (FFIEC), FDIC QBP]
   - id: z1_banks_call_reports
-    # Z.1, sectores de bancos (códigos 73, 74, 76 en el id: bancos de EE. UU., sucursales extranjeras y áreas afiliadas): se arman con los Call Reports.
-    match: {source: fred, release_id: 52, series_id_regex: "^BOGZ1[A-Z]{2}(73|74|76)"}
+    # Z.1, sectores de bancos (códigos 70 depository institutions, 73, 74, 76 en el id): se arman
+    # con los Call Reports.
+    match: {source: fred, release_id: 52, series_id_regex: "^BOGZ1[A-Z]{2}(70|73|74|76)"}
     origin: call_reports
     chain: [Call Reports (FFIEC), Fed Z.1]
   - id: z1_price_indices_bea
-    # Z.1, series que son índices (por unidades): usan los índices de precios de BEA.
-    match: {source: fred, release_id: 52, units_regex: "(?i)index"}
+    # Z.1, sector 07 "Interest Rates and Price Indexes", instrumento 075 (índices de precios) en
+    # cadena (Chain Weights): vienen de BEA. Las tasas (072, 073) no.
+    match:
+      source: fred
+      release_id: 52
+      series_id_regex: "^BOGZ1[A-Z]{2}075"
+      title_regex: "(?i)chain weights"
     origin: bureau of economic analysis
     chain: [BEA, Fed Z.1]
   - id: oecd_mei_wages_bls
