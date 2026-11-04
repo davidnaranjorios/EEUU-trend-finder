@@ -1,6 +1,7 @@
 """Construye el sitio estático del reporte semanal (Fase 5, ADR 0009).
 
-Uso: `uv run python -m src.report build [--rank-run ID] [--site-dir D]`
+Uso: `uv run python -m src.report build [--rank-run ID] [--site-dir D]` y
+`uv run python -m src.report verify [--site-dir D]` (verificación independiente de copyright).
 
 Salida:
 - `report.site_dir` (por defecto `data/site/`): `index.html` (ranking), `dashboard.html`
@@ -165,14 +166,41 @@ def _dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=1, default=str)
 
 
+def verify_site(cfg: dict[str, Any], site_dir: Path | None = None) -> dict[str, Any]:
+    """Verificación independiente del sitio ya construido: vuelve a leer la lista de series con
+    copyright y recorre los archivos de `site_dir`. Lanza CopyrightLeak si encuentra alguna."""
+    site = site_dir or _resolve(cfg["report"]["site_dir"])
+    con = connect(_resolve(cfg["paths"]["processed_dir"]))
+    copyrighted = rdata.copyrighted_series(con)
+    public = con.execute(
+        "SELECT DISTINCT series_id, title FROM series_meta WHERE NOT copyrighted"
+    ).fetchall()
+    con.close()
+    ids, titles = forbidden_sets(((i, t) for _, i, t in copyrighted), public)
+    assert_publishable(site, ids, titles)
+    return {
+        "site_dir": str(site),
+        "files": sum(1 for p in site.rglob("*") if p.is_file()),
+        "copyrighted_series": len(copyrighted),
+        "forbidden_ids": len(ids),
+        "forbidden_titles": len(titles),
+        "leaks": 0,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.report")
     sub = parser.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="construye el sitio y verifica que no tenga copyright")
     b.add_argument("--rank-run", default=None)
     b.add_argument("--site-dir", type=Path, default=None)
+    v = sub.add_parser("verify", help="vuelve a buscar series con copyright en el sitio")
+    v.add_argument("--site-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     cfg = load_config()
+    if args.cmd == "verify":
+        print(json.dumps(verify_site(cfg, args.site_dir), indent=2, ensure_ascii=False))
+        return 0
     log = get_logger("report", cfg["logging"]["level"])
     with run(["report"], _resolve(cfg["report"]["runs_file"])) as record:
         with record.stage("build"):

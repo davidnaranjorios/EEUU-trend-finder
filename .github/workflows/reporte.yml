@@ -69,6 +69,10 @@ jobs:
           uv run python -m src.rank run | tee data/logs/reporte/rank.json
       - name: Reporte
         run: uv run python -m src.report build | tee data/logs/reporte/report.json
+      # Verificación independiente (además de la barrera dentro de build): relee la lista de
+      # series con copyright y recorre el sitio final. Si encuentra una, no se publica.
+      - name: Verificar copyright
+        run: uv run python -m src.report verify | tee data/logs/reporte/verify.json
       - name: Sincronizar a R2
         run: |
           infra/sync_r2.sh processed/rank processed/_internal/embeddings reports logs/reporte
@@ -78,6 +82,7 @@ jobs:
           {
             echo '## Ranking'; echo '```'; cat data/logs/reporte/rank.json 2>/dev/null || true; echo '```'
             echo '## Reporte'; echo '```'; cat data/logs/reporte/report.json 2>/dev/null || true; echo '```'
+            echo '## Copyright'; echo '```'; cat data/logs/reporte/verify.json 2>/dev/null || true; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Sitio (artefacto)
         uses: actions/upload-artifact@v6

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from src.rank.run import rank_run
-from src.report.build import build_site
+from src.report.build import build_site, verify_site
 from src.report.charts import line_chart
 from src.report.guard import CopyrightLeak, assert_publishable, forbidden_sets, scan
 from tests.fakes_rank import build
@@ -133,7 +133,20 @@ def test_report_workflow_publishes_only_after_guarded_build():
     wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "reporte.yml").read_text())
     assert wf["concurrency"]["group"] == "reporte"  # no compite con la ingesta
     steps = [s.get("name", "") for s in wf["jobs"]["reporte"]["steps"]]
-    assert steps.index("Reporte") < steps.index("Publicar en Cloudflare Pages")
+    assert steps.index("Reporte") < steps.index("Verificar copyright")
+    assert steps.index("Verificar copyright") < steps.index("Publicar en Cloudflare Pages")
+    assert steps.index("Verificar copyright") < steps.index("Preparar GitHub Pages")
     sync = next(s for s in wf["jobs"]["reporte"]["steps"] if s.get("name") == "Sincronizar a R2")
     assert "processed/series " not in sync["run"] and "processed/rank" in sync["run"]
     assert wf["jobs"]["pages"]["needs"] == "reporte"
+
+
+def test_verify_site_rereads_copyright_list(site, tmp_path):
+    fx, site_dir, _ = site
+    out = verify_site(fx.cfg, site_dir)
+    assert out["leaks"] == 0 and out["forbidden_ids"] >= 11
+    copy = tmp_path / "site"
+    shutil.copytree(site_dir, copy)
+    (copy / "x.html").write_text(f"<td>{fx.ids['crfill3'][1]}</td>", "utf-8")
+    with pytest.raises(CopyrightLeak):
+        verify_site(fx.cfg, copy)
