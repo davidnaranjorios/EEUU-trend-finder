@@ -374,6 +374,10 @@ def term_industries(
             }
         ),
     )
+    cols = {r[0] for r in con.execute("DESCRIBE term_freq").fetchall()}
+    if "n_industries" not in cols:
+        # Particiones anteriores al esquema 4 (ADR 0011): aún no medido en ninguna.
+        return {}
     rows = con.execute(
         "SELECT t.source, t.section, t.term, f.period, f.n_industries FROM term_freq f "
         "JOIN _iterms t USING (source, section, term) WHERE f.n_industries IS NOT NULL"

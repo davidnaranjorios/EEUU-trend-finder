@@ -28,6 +28,10 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -eo pipefail {0} # un `| tee` no debe ocultar un fallo de rank
+
 jobs:
   reporte:
     runs-on: ubuntu-latest

@@ -224,3 +224,17 @@ def test_period_counter_counts_distinct_industries():
     c2 = PeriodCounter()
     c2.add("s", h, "a")
     assert c2.n_groups("s", hashes) is None  # sin SIC no se inventa la medida
+
+
+def test_term_industries_without_column_returns_empty():
+    # Particiones de term_freq anteriores al esquema 4 no tienen n_industries: rank no debe caer.
+    import duckdb
+
+    from src.rank.run import term_industries
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE VIEW term_freq AS SELECT 'edgar' AS source, 'item_1a' AS section, 'x' AS term"
+    )
+    sig = [{"source": "edgar", "object_id": "item_1a|x", "window_start": "2024-01-01"}]
+    assert term_industries(con, sig) == {}
