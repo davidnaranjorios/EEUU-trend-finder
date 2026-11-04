@@ -82,6 +82,9 @@ def build_site(
         "coverage": rdata.coverage(con),
         "candidates": candidates,
         "explorer": explorer_index,
+        "weights": cfg["rank"]["weights"],
+        "q": cfg["fdr"]["q"],
+        "min_sources": cfg["rank"]["min_sources"],
     }
     public_ids = con.execute(
         "SELECT DISTINCT m.series_id, m.title FROM series_meta m WHERE NOT m.copyrighted"

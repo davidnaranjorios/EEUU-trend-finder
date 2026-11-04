@@ -20,7 +20,8 @@ from src.detect.text import grid_start
 from src.ingest.store import read_table
 from src.rank.run import NUMERIC_RUN_PARTITIONS, PARTITION, latest_rank_run, rank_root, term_text
 from src.report.charts import line_chart
-from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_EVIDENCE
+from src.report.narrative import regime_sentence, slope_sentence, term_sentence
+from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_EVIDENCE, SIGNALS
 
 UNIT_WILDCARD = "/*"
 
@@ -85,6 +86,7 @@ def candidates_data(
         if e["item_kind"] == "term"
     }
     shares = _term_shares(con, cfg, term_keys)
+    windows = _signal_windows(cfg, rank_run.get("numeric_run_id"), keys)
     out: dict[str, list[dict[str, Any]]] = {"series": [], "text": []}
     for c in sorted(cands, key=lambda c: (c["kind"], c["rank"] or 0)):
         items = ev[c["candidate_id"]]
@@ -96,6 +98,18 @@ def candidates_data(
                 continue
             m = meta.get(k, {})
             d, v = values.get(k, ([], []))
+            win = windows.get(k, {})
+            slope_w = win.get("slope")
+            pelt = win["regime"][0] if "regime" in win else None
+            units = m.get("units") or ""
+            sentences = [
+                x
+                for x in (
+                    slope_sentence(d, v, slope_w, units) if slope_w else None,
+                    regime_sentence(d, v, pelt, units) if pelt else None,
+                )
+                if x
+            ]
             series.append(
                 {
                     "source": e["source"],
@@ -109,12 +123,16 @@ def candidates_data(
                     "effect_size": e["effect_size"],
                     "window": [e["window_start"], e["window_end"]],
                     "agencies": json.loads(e["agencies_json"]),
+                    "pelt": pelt,
+                    "sentences": sentences,
+                    # Unidades originales (escala lineal): lo que publica la agencia.
                     "chart": line_chart(
                         d,
                         v,
-                        label=m.get("title") or e["object_id"],
-                        window=(e["window_start"], e["window_end"]) if e["window_start"] else None,
-                        log_scale=bool(v) and min(v) > 0,
+                        label=f"{m.get('title') or e['object_id']} ({units})",
+                        window=slope_w
+                        or ((e["window_start"], e["window_end"]) if e["window_start"] else None),
+                        marker=pelt,
                     ),
                 }
             )
@@ -125,6 +143,13 @@ def candidates_data(
             if linked and tuple(linked.split("|", 1)) in forbidden:
                 linked = None
             d, v = shares.get((e["source"], e["object_id"]), ([], []))
+            sentence = (
+                term_sentence(
+                    d, v, e["window_start"], src_label(e["source"]), term_text(e["object_id"])
+                )
+                if e["window_start"]
+                else None
+            )
             terms.append(
                 {
                     "source": e["source"],
@@ -135,6 +160,7 @@ def candidates_data(
                     "n_entities": e["n_entities"],
                     "link_score": e["link_score"],
                     "linked_series": linked,
+                    "sentence": sentence,
                     "window": [e["window_start"], e["window_end"]],
                     "chart": line_chart(
                         d,
@@ -160,6 +186,36 @@ def candidates_data(
                 "terms": sorted(terms, key=lambda t: t["q_value"]),
             }
         )
+    return out
+
+
+def src_label(source: str) -> str:
+    return (
+        source.upper()
+        if "_" not in source and len(source) <= 6
+        else (source.replace("_", " ").title())
+    )
+
+
+def _signal_windows(
+    cfg: dict[str, Any], numeric_run: str | None, keys: set[tuple[str, str]]
+) -> dict[tuple[str, str], dict[str, tuple[date, date]]]:
+    """Ventana de cada señal numérica por detector (en regime, el inicio es la fecha PELT)."""
+    out: dict[tuple[str, str], dict[str, tuple[date, date]]] = defaultdict(dict)
+    if not numeric_run or not keys:
+        return out
+    for src in sorted({k[0] for k in keys}):
+        rows = read_table(
+            SIGNALS,
+            table_root(cfg, "signals"),
+            source=src,
+            where="run_id = ?",
+            params=[numeric_run],
+        ).to_pylist()
+        for r in rows:
+            k = (src, r["object_id"])
+            if k in keys:
+                out[k][r["detector"]] = (r["window_start"], r["window_end"])
     return out
 
 
