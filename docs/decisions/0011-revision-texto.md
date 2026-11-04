@@ -1,4 +1,4 @@
-# ADR 0010 — Revisión del detector de texto (corrida 2a02c981, parte C)
+# ADR 0011 — Revisión del detector de texto (corrida 2a02c981, parte C)
 
 Fecha: 2026-11-04. Pedido de David; sin cambios a los principios no negociables, con una excepción
 acotada al principio 1 (punto 3).
