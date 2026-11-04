@@ -506,3 +506,21 @@ def test_sync_of_logs_never_touches_reporte_subdir(tmp_path):
     other = [ln for ln in lines if "data/rank " in ln]
     assert len(logs) == 2 and all("--exclude reporte/**" in ln for ln in logs)  # sync y check
     assert other and not any("reporte/**" in ln for ln in other)
+
+
+def test_detectors_workflow_runs_text_detector_per_source():
+    import yaml
+
+    from src.config import load_config
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "detectores.yml").read_text())
+    steps = wf["jobs"]["detectores"]["steps"]
+    names = [s.get("name", "") for s in steps]
+    pull = steps[names.index("Traer datos desde R2")]["run"]
+    assert "processed/term_freq" in pull
+    text = steps[names.index("Detector de texto")]["run"]
+    for src in load_config()["text_detect"]["grid"]:
+        assert src in text  # una familia por fuente de texto configurada
+    assert "src.detect.text --source" in text
+    assert names.index("Detectores") < names.index("Detector de texto")
+    assert names.index("Detector de texto") < names.index("Sincronizar a R2")
