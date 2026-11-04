@@ -262,6 +262,17 @@ report:
   # ingesta, así que nunca sincroniza logs/ entero (pisaría runs.jsonl).
   runs_file: data/logs/reporte/runs.jsonl
   chart_years: 20
+  # Zoom de 12 meses: contexto DESCRIPTIVO (sin p/q; no cambia el ranking). Estado por serie M/W/D
+  # comparando el ritmo anualizado de los últimos `months` con la pendiente de `baseline_years` años:
+  # revierte si tiene signo contrario y |reciente| >= reverse_frac·|tendencia|; acelera si
+  # reciente/tendencia >= accel_ratio; se frena si <= slow_ratio; si no, continúa.
+  recent:
+    months: 12
+    chart_months: 24
+    baseline_years: 5
+    accel_ratio: 1.5
+    slow_ratio: 0.5
+    reverse_frac: 0.25
   explorer:
     n_buckets: 128
     max_file_kb: 2048
