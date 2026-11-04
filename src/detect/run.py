@@ -36,6 +36,7 @@ import pyarrow as pa
 from src.catalog import connect
 from src.config import REPO_ROOT, load_config
 from src.detect.approval import annotate
+from src.detect.dedup import dedup_series
 from src.detect.family import FamilyParams, Item, run_family
 from src.detect.numeric import locate_break
 from src.ingest.store import bucket_of, read_table, upsert
@@ -331,6 +332,31 @@ def write_by_source(spec: Any, rows: list[dict[str, Any]], root: Path, bucket_co
 RUNS_PARTITION = "numeric"
 
 
+def save_dedup(
+    cfg: dict[str, Any],
+    run_id: str,
+    n_before: int,
+    n_after: int,
+    groups: dict[tuple[str, str], list[tuple[str, str]]],
+) -> None:
+    """Resumen de la deduplicación (idéntico en todos los shards; finalize lo suma al reporte)."""
+    root = table_root(cfg, "reports") / "dedup"
+    root.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "series_before": n_before,
+        "series_after": n_after,
+        "groups": {
+            f"{k[0]}|{k[1]}": [f"{m[0]}|{m[1]}" for m in v] for k, v in sorted(groups.items())
+        },
+    }
+    (root / f"{run_id}.json").write_text(json.dumps(doc, indent=1), "utf-8")
+
+
+def load_dedup(cfg: dict[str, Any], run_id: str) -> dict[str, Any] | None:
+    path = table_root(cfg, "reports") / "dedup" / f"{run_id}.json"
+    return json.loads(path.read_text("utf-8")) if path.exists() else None
+
+
 def run_detectors(
     cfg: dict[str, Any],
     run_id: str,
@@ -342,10 +368,14 @@ def run_detectors(
     con = connect(_resolve(cfg["paths"]["processed_dir"]))
     series = load_series(con, cfg)
     con.close()
+    n_before = len(series)
+    series, dup_groups = dedup_series(series)
+    save_dedup(cfg, run_id, n_before, len(series), dup_groups)
     if max_series is not None:
         series = series[:max_series]
     stats: dict[str, Any] = {
         "series_loaded": len(series),
+        "series_before_dedup": n_before,
         "by_source": dict(Counter(s.source for s in series)),
         "by_frequency": dict(Counter(s.frequency for s in series)),
     }
@@ -399,6 +429,7 @@ def finalize(
         "q": q,
         "sources": detect_sources(cfg),
         "detectors": {},
+        "dedup": load_dedup(cfg, run_id),
     }
     for detector, rows in sorted(by_det.items()):
         p = np.array([r["p_value"] for r in rows])
@@ -459,6 +490,7 @@ def finalize(
         report["detectors"], annotate(runs, ac["factor"], ac["min_rate"]), strict=False
     ):
         report["detectors"][det]["approval_alert"] = a["alert"]
+        report["detectors"][det]["possible_failure"] = a["possible_failure"]
     save_report(cfg, report)
     if log is not None:
         log.info("familias cerradas", extra={"fields": {"run_id": run_id, "signals": len(signals)}})
@@ -498,7 +530,13 @@ def summarize(rows: list[dict[str, Any]], q: float) -> dict[str, Any]:
             f["bh"] += int(r["q_value"] <= q)
             f["by"] += int(r["q_by"] <= q)
     bh = [r for r in rows if r["q_value"] <= q]
+    # Resolución de p: el p mínimo posible por método (piso empírico 1/(B+1)) frente al umbral
+    # mínimo de BH, q/m. Si el piso supera q/m, BH no puede aprobar nada aunque la señal sea fuerte.
+    p_min = min((r["p_value"] for r in rows), default=1.0)
     return {
+        "p_min": p_min,
+        "bh_min_p_needed": q / len(rows) if rows else None,
+        "p_floor_blocks_bh": bool(rows) and p_min > q / len(rows),
         "n_tests": len(rows),
         "n_bh": len(bh),
         "n_by": sum(r["q_by"] <= q for r in rows),
@@ -521,10 +559,20 @@ def to_markdown(report: dict[str, Any]) -> str:
         "| Detector | Pruebas | BH | % BH | BY | Suben | Bajan | Con copyright | Método del p |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
+    dd = report.get("dedup")
+    if dd:
+        lines.insert(
+            4,
+            f"Deduplicación previa a las pruebas: {dd['series_before']} series antes, "
+            f"{dd['series_after']} después ({len(dd['groups'])} grupos de variables repetidas).\n",
+        )
     for det, s in report["detectors"].items():
+        flags = (" ⚠" if s.get("approval_alert") else "") + (
+            " ❓ posible falla" if s.get("possible_failure") else ""
+        )
         lines.append(
             f"| {det} | {s['n_tests']} | {s['n_bh']} | {s['bh_rate']:.2%}"
-            f"{' ⚠' if s.get('approval_alert') else ''} | {s['n_by']} | {s['bh_increase']} | "
+            f"{flags} | {s['n_by']} | {s['bh_increase']} | "
             f"{s['bh_decrease']} | {s['bh_copyrighted']} | "
             + ", ".join(f"{k} {v}" for k, v in sorted(s["p_method"].items()))
             + " |"

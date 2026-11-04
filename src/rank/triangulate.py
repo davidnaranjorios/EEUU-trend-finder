@@ -145,7 +145,10 @@ def score(
             c.components = raw_components(c, detectors)
             for k in COMPONENTS:
                 raw[k].append(c.components[k])
-        pct = {k: _percentile(v) for k, v in raw.items()}
+        if len(group) < MIN_FOR_PERCENTILES:
+            pct = {k: _fixed_scale(k, v) for k, v in raw.items()}
+        else:
+            pct = {k: _percentile(v) for k, v in raw.items()}
         for i, c in enumerate(group):
             c.score = sum(weights[k] * pct[k][i] for k in COMPONENTS) / total if total else 0.0
         group.sort(key=lambda c: (-(c.score or 0.0), c.candidate_id))
@@ -155,6 +158,26 @@ def score(
                 c.status = "fuera_del_tope"
                 c.published = False
     return candidates
+
+
+# Con pocos candidatos el percentil no informa (con 1 todo vale 1; con 2, 0 o 1): se usa una
+# escala fija, saturada en el valor que da el componente completo. Tope = valor de referencia
+# metodológico, no un tema: −log10 q = 10, 3 fuentes, efecto de 3 desvíos robustos, amplitud
+# log(1+20), tamaño log(1+50).
+MIN_FOR_PERCENTILES = 5
+FIXED_SCALE_MAX = {
+    "strength": 10.0,
+    "n_sources": 3.0,
+    "effect": 3.0,
+    "agreement": 1.0,
+    "breadth": math.log1p(20),
+    "size": math.log1p(50),
+}
+
+
+def _fixed_scale(component: str, values: list[float]) -> np.ndarray:
+    top = FIXED_SCALE_MAX[component]
+    return np.clip(np.asarray(values, dtype=float) / top, 0.0, 1.0)
 
 
 def _percentile(values: list[float]) -> np.ndarray:

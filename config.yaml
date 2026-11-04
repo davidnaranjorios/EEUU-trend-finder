@@ -188,7 +188,8 @@ text_detect:
   # Amplitud: entidades distintas (agencias en FR, empresas en EDGAR) que usan el término en la
   # ventana reciente. Filtro neutral (no mira el estadístico). EDGAR: 0 = desactivado, porque
   # cada documento es de una empresa y n_entities ≈ doc_count.
-  min_entities: {edgar: 0, federal_register: 3}   # medido en FR 2016–2026 (ADR 0008)
+  min_entities: {edgar: 20, federal_register: 20}   # revisión 702b8ff3 (antes edgar 0, FR 3)
+  min_signal_years: 2             # persistencia mínima de la señal, en años (revisión 702b8ff3)
   block_sample: 5000              # términos para la mediana de la longitud de bloque automática
   workers: 4
   # Punto de quiebre estimado por término (revisión 2a02c981): el inicio del crecimiento es el
@@ -223,6 +224,10 @@ text_detect:
     - securities exchange act
     - not applicable
     - item 1a
+    - advantages and disadvantages
+    - advantages disadvantages
+    - risks and uncertainties
+    - pros and cons
     - risk factors
     - results of operations
   # Amplitud entre grupos SIC de 2 dígitos (EDGAR): n_industries mediana en la ventana
