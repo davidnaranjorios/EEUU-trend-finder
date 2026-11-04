@@ -85,6 +85,7 @@ def build_site(
         "weights": cfg["rank"]["weights"],
         "q": cfg["fdr"]["q"],
         "min_sources": cfg["rank"]["min_sources"],
+        "recent": cfg["report"]["recent"],
     }
     public_ids = con.execute(
         "SELECT DISTINCT m.series_id, m.title FROM series_meta m WHERE NOT m.copyrighted"

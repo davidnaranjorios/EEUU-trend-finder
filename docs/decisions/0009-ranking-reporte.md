@@ -192,6 +192,32 @@ queda excluido, así que la ingesta nunca pisa `logs/reporte/` ni lo manda a `_t
   y score, con los pesos de config.yaml) y tooltips en q, efecto y similitud.
 - Sin cambios en la lógica de ranking ni en la regla de fuentes.
 
+### Zoom de 12 meses, descriptivo (aprobado por David, 2026-11-04)
+
+Contexto sobre los datos más recientes (`src/report/recent.py`). No es una señal: no tiene p ni q,
+no pasa por FDR y no cambia `rank_candidates` ni el score.
+
+Por serie de frecuencia M, W o D:
+- un gráfico de los últimos 24 meses con los 12 últimos resaltados;
+- el cambio interanual;
+- el ritmo anualizado de los últimos 12 meses frente a la pendiente de 5 años;
+- un estado con regla fija sobre el cociente reciente/tendencia (`report.recent`):
+
+  | Estado | Condición |
+  |---|---|
+  | acelera | ≥ 1,5 |
+  | se frena | ≤ 0,5 |
+  | revierte | signo contrario y |cociente| ≥ 0,25 |
+  | continúa | el resto |
+
+- Q y A dan "dato insuficiente". Q muestra igual el interanual, con aviso, si hay ≥ 4 trimestres.
+- Lleva la etiqueta "preliminar".
+
+Por término: la proporción de documentos del último año de la grilla frente al año anterior.
+
+Por candidato: el estado más frecuente entre sus series ("mixto" si hay empate). El sitio filtra y
+ordena por estado en JS, sin tocar el score.
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:

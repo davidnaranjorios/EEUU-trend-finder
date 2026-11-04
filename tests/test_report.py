@@ -189,3 +189,66 @@ def test_plain_language_sentences():
     assert r.startswith("Cambió de ritmo en 01/2015")
     neg = [v - 200 for v in vals]  # serie con valores negativos: unidades por año
     assert "Index por año" in slope_sentence(dates, neg, (dates[180], dates[-1]), "Index")
+
+
+def _monthly(rates_by_year):
+    """Serie mensual con crecimiento anual dado por tramo: [(años, tasa), ...]."""
+    from datetime import date
+
+    dates, vals, v, i = [], [], 100.0, 0
+    for years, rate in rates_by_year:
+        for _ in range(int(years * 12)):
+            dates.append(date(2000 + i // 12, i % 12 + 1, 1))
+            vals.append(v)
+            v *= (1 + rate) ** (1 / 12)
+            i += 1
+    return dates, vals
+
+
+@pytest.mark.parametrize(
+    ("tail_rate", "state"),
+    [(0.12, "acelera"), (0.05, "continúa"), (0.01, "se frena"), (-0.05, "revierte")],
+)
+def test_recent_state_rule(tail_rate, state):
+    from src.config import load_config
+    from src.report.recent import series_recent
+
+    cfg = load_config()["report"]["recent"]
+    d, v = _monthly([(14, 0.05), (1.01, tail_rate)])
+    r = series_recent(d, v, "M", cfg)
+    assert r.state == state
+    assert r.zoom and len(r.zoom[0]) >= 24 and r.highlight
+    assert r.yoy and r.yoy[1]
+
+
+def test_recent_insufficient_for_low_frequency():
+    from datetime import date
+
+    from src.config import load_config
+    from src.report.recent import INSUFFICIENT, series_recent, summary_state
+
+    cfg = load_config()["report"]["recent"]
+    ann = [date(2000 + i, 1, 1) for i in range(20)]
+    r = series_recent(ann, [100 + i for i in range(20)], "A", cfg)
+    assert r.state == INSUFFICIENT and r.yoy is None and r.zoom is None
+    qd = [date(2000 + i // 4, 3 * (i % 4) + 1, 1) for i in range(40)]
+    rq = series_recent(qd, [100 + i for i in range(40)], "Q", cfg)
+    assert rq.state == INSUFFICIENT and rq.yoy is not None and "cautela" in rq.note
+    assert summary_state(["acelera", "acelera", "se frena", INSUFFICIENT]) == "acelera"
+    assert summary_state(["acelera", "se frena"]) == "mixto"
+
+
+def test_recent_zoom_is_descriptive_only(site):
+    """El zoom no toca rank_candidates y el sitio lo muestra con su aviso y el filtro."""
+    import pyarrow.parquet as pq
+
+    fx, site_dir, _ = site
+    root = Path(fx.cfg["paths"]["processed_dir"]) / "rank" / "rank_candidates"
+    before = sorted(pq.read_table(f).to_pylist().__repr__() for f in root.rglob("*.parquet"))
+    build_site(fx.cfg)
+    after = sorted(pq.read_table(f).to_pylist().__repr__() for f in root.rglob("*.parquet"))
+    assert before == after
+    index = (site_dir / "index.html").read_text("utf-8")
+    assert "Últimos 12 meses" in index and "los meses recientes se revisan" in index
+    assert 'id="rank-controls"' in index and 'data-state="' in index
+    assert "Contexto descriptivo, no una señal" in index

@@ -21,6 +21,7 @@ from src.ingest.store import read_table
 from src.rank.run import NUMERIC_RUN_PARTITIONS, PARTITION, latest_rank_run, rank_root, term_text
 from src.report.charts import line_chart
 from src.report.narrative import regime_sentence, slope_sentence, term_sentence
+from src.report.recent import series_recent, summary_state, term_recent
 from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_EVIDENCE, SIGNALS
 
 UNIT_WILDCARD = "/*"
@@ -110,6 +111,7 @@ def candidates_data(
                 )
                 if x
             ]
+            rec = series_recent(d, v, m.get("frequency") or "", cfg["report"]["recent"])
             series.append(
                 {
                     "source": e["source"],
@@ -124,6 +126,21 @@ def candidates_data(
                     "window": [e["window_start"], e["window_end"]],
                     "agencies": json.loads(e["agencies_json"]),
                     "pelt": pelt,
+                    "recent": {
+                        "state": rec.state,
+                        "yoy": rec.yoy,
+                        "recent_rate": rec.recent_rate,
+                        "trend_rate": rec.trend_rate,
+                        "note": rec.note,
+                        "chart": line_chart(
+                            rec.zoom[0],
+                            rec.zoom[1],
+                            label=f"Últimos meses: {m.get('title') or e['object_id']} ({units})",
+                            window=rec.highlight,
+                        )
+                        if rec.zoom and len(rec.zoom[0]) >= 2
+                        else None,
+                    },
                     "sentences": sentences,
                     # Unidades originales (escala lineal): lo que publica la agencia.
                     "chart": line_chart(
@@ -161,6 +178,7 @@ def candidates_data(
                     "link_score": e["link_score"],
                     "linked_series": linked,
                     "sentence": sentence,
+                    "recent": term_recent(d, v, cfg["text_detect"]["grid"].get(e["source"], "A")),
                     "window": [e["window_start"], e["window_end"]],
                     "chart": line_chart(
                         d,
@@ -182,6 +200,7 @@ def candidates_data(
                 "components": json.loads(c["components_json"] or "{}"),
                 "n_members": c["n_members"],
                 "series": series,
+                "state": summary_state([x["recent"]["state"] for x in series]),
                 "hidden_series": hidden,
                 "terms": sorted(terms, key=lambda t: t["q_value"]),
             }

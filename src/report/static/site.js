@@ -41,6 +41,27 @@
     svg.addEventListener("pointerleave", function () { g.setAttribute("visibility", "hidden"); tip.hidden = true; });
   });
 
+  // --- Ranking: filtro y orden por el estado de los últimos 12 meses (no cambia el score) ---
+  var rc = document.getElementById("rank-controls"), list = document.getElementById("rank-list");
+  if (rc && list) {
+    var order = ["acelera", "continúa", "se frena", "revierte", "mixto", "dato insuficiente"];
+    var fSel = rc.querySelector('[data-role="state"]'), sSel = rc.querySelector('[data-role="sort"]');
+    var apply = function () {
+      var cards = Array.prototype.slice.call(list.querySelectorAll("section.cand"));
+      cards.forEach(function (c) { c.hidden = !!fSel.value && c.dataset.state !== fSel.value; });
+      cards.sort(function (a, b) {
+        if (sSel.value === "state") {
+          var d = order.indexOf(a.dataset.state) - order.indexOf(b.dataset.state);
+          if (d) return d;
+        }
+        return Number(a.dataset.rank) - Number(b.dataset.rank);
+      });
+      cards.forEach(function (c) { list.appendChild(c); });
+    };
+    fSel.addEventListener("change", apply);
+    sSel.addEventListener("change", apply);
+  }
+
   // --- Explorador ---------------------------------------------------------------------------
   var root = document.getElementById("explorer");
   if (!root) return;

@@ -7,6 +7,8 @@ import math
 from collections import defaultdict
 from typing import Any
 
+from src.report.recent import INSUFFICIENT, STATES
+
 DETECTOR_NAMES = {
     "slope": "cambio de pendiente",
     "regime": "quiebre de régimen",
@@ -105,9 +107,18 @@ def _why_sources(groups: list[list[str]]) -> str:
     )
 
 
-def guide(weights: dict[str, float], q: float, min_sources: int) -> str:
+def guide(
+    weights: dict[str, float], q: float, min_sources: int, recent: dict[str, Any] | None = None
+) -> str:
     """Cómo leer la página y glosario (pesos y umbrales tomados de config.yaml)."""
     total = sum(weights.values()) or 1.0
+    rc = recent or {
+        "months": 12,
+        "baseline_years": 5,
+        "accel_ratio": 1.5,
+        "slow_ratio": 0.5,
+        "reverse_frac": 0.25,
+    }
 
     def item(k: str, text: str) -> str:
         w = weights.get(k, 0.0) / total
@@ -140,6 +151,13 @@ def guide(weights: dict[str, float], q: float, min_sources: int) -> str:
         "<dt>BH</dt><dd>Benjamini-Hochberg: el método que decide qué señales pasan.</dd>",
         "<dt>BY</dt><dd>Benjamini-Yekutieli: versión más estricta, válida con cualquier "
         "dependencia. Se reporta solo como comparación.</dd>",
+        "<dt>Últimos 12 meses</dt><dd>Contexto descriptivo, no una señal: sin p ni q, no cambia "
+        f"el ranking. Compara el ritmo anualizado de los últimos {rc['months']} meses con la "
+        f"pendiente de {rc['baseline_years']} años: <em>acelera</em> (≥ {rc['accel_ratio']} "
+        f"veces la tendencia), <em>se frena</em> (≤ {rc['slow_ratio']} veces), "
+        f"<em>revierte</em> (signo contrario y al menos {rc['reverse_frac']} veces), "
+        "<em>continúa</em> (el resto). "
+        "Solo para series mensuales o más frecuentes; los datos recientes son preliminares.</dd>",
         "<dt>Fuente independiente</dt><dd>Grupo de agencias que no comparten datos: el mismo dato "
         "publicado por FRED y por la agencia original cuenta una vez.</dd>",
         f"<dt>Score</dt><dd>Promedio ponderado de percentiles dentro de la corrida:<ul>{rows}"
@@ -155,6 +173,8 @@ TIPS = {
     "(comparable entre series con unidades distintas).",
     "efecto_logit": "Aumento del logit de la proporción de documentos que mencionan el término "
     "(ventana reciente frente a la línea base).",
+    "reciente": "Lectura de los datos más recientes: no es una señal estadística (sin p ni q) "
+    "y no cambia el ranking ni el score.",
     "similitud": "Coseno entre los embeddings del término y del título de la serie; solo se "
     "enlaza si supera lo que alcanza por azar la mejor coincidencia de un término común.",
 }
@@ -199,7 +219,7 @@ def _series_block(s: dict[str, Any]) -> str:
 <dt>{tip("Efecto", "efecto_sd")}</dt><dd>{fnum(s["effect_size"])} sd</dd>
 <dt>Ventana</dt><dd>{esc(w[0])} → {esc(w[1])}</dd></dl></div>
 <figure>{caption}{s["chart"]}{_legend(bool(w[0]), s.get("pelt"))}</figure>
-</div>"""
+</div>{_recent_block(s)}"""
 
 
 def _linked(key: str) -> tuple[str, str]:
@@ -231,8 +251,49 @@ def _term_block(t: dict[str, Any]) -> str:
 <dt>Ventana</dt><dd>{esc(w[0])} → {esc(w[1])}</dd></dl></div>
 <figure><p class="cap"><strong>Proporción de documentos con “{esc(t["term"])}”</strong><br>
 % de documentos por periodo · {esc(src_name(t["source"]))}, sección {esc(t["section"])}</p>
-{t["chart"]}{_legend(bool(w[0]), None)}</figure>
+{t["chart"]}{_legend(bool(w[0]), None)}</figure>{_term_recent(t)}
 </div>"""
+
+
+STATE_OPTIONS = (*STATES, "mixto", INSUFFICIENT)
+PRELIM = "Preliminar: los meses recientes se revisan."
+
+
+def _rate(r: Any) -> str:
+    if not r:
+        return "—"
+    value, pct = r
+    return f"{value:+.1f} %" if pct else f"{value:+.3g}"
+
+
+def _recent_block(s: dict[str, Any]) -> str:
+    """Zoom de 12 meses (descriptivo: sin p ni q, no entra al ranking)."""
+    r = s.get("recent") or {}
+    if not r:
+        return ""
+    note = f'<p class="muted">{esc(r["note"])}</p>' if r.get("note") else ""
+    chart = (
+        f'{r["chart"]}<p class="legend"><span class="key win"></span> últimos 12 meses</p>'
+        if r.get("chart")
+        else ""
+    )
+    return f"""<div class="recent"><h4>Últimos 12 meses ·
+<span class="state" data-state="{esc(r["state"])}">{esc(r["state"])}</span></h4>
+<p class="muted">{tip("Contexto descriptivo", "reciente")}. {PRELIM}</p>{note}
+<dl><dt>Interanual</dt><dd>{_rate(r.get("yoy"))} (último dato vs 12 meses antes)</dd>
+<dt>Ritmo 12 meses</dt><dd>{_rate(r.get("recent_rate"))} anualizado</dd>
+<dt>Tendencia 5 años</dt><dd>{_rate(r.get("trend_rate"))} anualizado</dd></dl>{chart}</div>"""
+
+
+def _term_recent(t: dict[str, Any]) -> str:
+    r = t.get("recent")
+    if not r:
+        return ""
+    last, prev = r
+    return (
+        f'<p class="plain recent">Último año: {last * 100:.2f} % de los documentos, frente a '
+        f"{prev * 100:.2f} % el año anterior ({tip('contexto descriptivo', 'reciente')}).</p>"
+    )
 
 
 def _candidate(c: dict[str, Any]) -> str:
@@ -246,8 +307,15 @@ def _candidate(c: dict[str, Any]) -> str:
     ev = "".join(_series_block(s) for s in c["series"]) + "".join(
         _term_block(t) for t in c["terms"]
     )
-    return f"""<section class="card" id="{esc(c["candidate_id"])}">
-<header><span class="rank">#{c["rank"]}</span>
+    state = c.get("state") or ""
+    badge = (
+        f'<span class="state" data-state="{esc(state)}">Últimos 12 meses: {esc(state)}</span>'
+        if c["kind"] == "series"
+        else ""
+    )
+    return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
+ data-state="{esc(state)}">
+<header><span class="rank">#{c["rank"]}</span>{badge}
 <strong>{c["n_sources"]} fuentes independientes</strong>
 <span>score {fnum(c["score"], 3)}</span>
 <span class="muted">{c["n_members"]} miembro(s) · {len(c["terms"])} término(s)</span></header>
@@ -294,12 +362,20 @@ def ranking_page(data: dict[str, Any]) -> str:
         '<p class="lead">Clusters de series y términos con señal estadística (FDR controlada con '
         "Benjamini-Hochberg) respaldados por al menos dos fuentes independientes.</p>",
         tiles,
-        guide(data["weights"], data["q"], data["min_sources"]),
+        guide(data["weights"], data["q"], data["min_sources"], data.get("recent")),
         "<h2>Señales por detector</h2>",
         _table(det_rows, {2, 3, 4, 5}, "Familia", "Detector", "Pruebas", "BH", "BY", "q"),
         '<p class="muted">BH decide; BY se reporta solo como comparación.</p>',
         f"<h2>Ranking ({len(series)})</h2>",
-        concat(*(_candidate(c) for c in series)) if series else none,
+        '<div class="controls" id="rank-controls"><label>Últimos 12 meses '
+        '<select data-role="state"><option value="">todos</option>'
+        + concat(*(f'<option value="{esc(x)}">{esc(x)}</option>' for x in STATE_OPTIONS))
+        + '</select></label><label>Ordenar <select data-role="sort">'
+        '<option value="rank">por score</option><option value="state">por estado</option>'
+        "</select></label></div>",
+        '<div id="rank-list">'
+        + (concat(*(_candidate(c) for c in series)) if series else none)
+        + "</div>",
         f"<h2>Candidatos solo de texto ({len(text)})</h2>",
         '<p class="muted">Términos emergentes parecidos en EDGAR y en el Federal Register.</p>',
         concat(*(_candidate(c) for c in text)) if text else none,
