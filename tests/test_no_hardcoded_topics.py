@@ -36,6 +36,17 @@ YAML_TRAPS = {
     "watchlist.yaml": "watchlist: []\n",
     "long_list.yaml": "anything: [a, b, c, d, e, f]\n",
     "series_value.yaml": "baseline: A191RL1Q225SBEA\n",
+    # La excepción de series de referencia no se extiende a otras rutas ni a otras claves.
+    "reference_elsewhere.yaml": "report:\n  reference_series:\n    deflator: CPIAUCSL\n",
+    "reference_extra_key.yaml": (
+        "context:\n  reference_series:\n    deflator: CPIAUCSL\n    population: POP\n"
+        "    recessions: USREC\n    favorite: GDPC1\n"
+    ),
+    "reference_missing_key.yaml": "context:\n  reference_series:\n    deflator: CPIAUCSL\n",
+    "reference_list.yaml": (
+        "context:\n  reference_series:\n    deflator: [CPIAUCSL, GDPC1]\n    population: POP\n"
+        "    recessions: USREC\n"
+    ),
 }
 
 
@@ -54,3 +65,13 @@ def test_py_guard_allows_structural_code(tmp_path):
         encoding="utf-8",
     )
     assert hardcoded_topic_violations_py(tmp_path) == []
+
+
+def test_yaml_guard_allows_only_the_reference_series_exception(tmp_path):
+    path = tmp_path / "ok.yaml"
+    path.write_text(
+        "context:\n  reference_series:\n    deflator: CPIAUCSL\n    population: POP\n"
+        "    recessions: USREC\n",
+        encoding="utf-8",
+    )
+    assert hardcoded_topic_violations_yaml(path) == []

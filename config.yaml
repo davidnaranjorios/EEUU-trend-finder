@@ -278,6 +278,33 @@ report:
     max_file_kb: 2048
     max_total_mb: 80
 
+# Ficha del fenómeno (Fase 5, ADR 0009): contexto DESCRIPTIVO por candidato (sin p/q; no cambia
+# el ranking). Las reglas miran unidades y metadatos, nunca temas.
+context:
+  # ÚNICA excepción al principio 1 (aprobada por David el 2026-11-04): series de referencia
+  # metodológicas, no temas. No entran a detectores ni al ranking. El guard acepta ids solo aquí,
+  # con exactamente estas tres claves.
+  reference_series:
+    deflator: CPIAUCSL            # IPC-U (deflactor para valores reales)
+    population: POP               # población (per cápita)
+    recessions: USREC             # indicador de recesión (sombreado)
+  max_related: 8
+  pool_max: 300                   # vecinas de la misma rama prefiltradas por título
+  alpha: 0.5                      # puntaje = α·coseno del título + (1−α)·|ρ| de crecimientos
+  min_overlap: {M: 36, Q: 12, A: 8}
+  max_lag_months: 24
+  windows_years: [3, 5, 7]        # sensibilidad de la pendiente a la ventana
+  # Unidades nominales (deflactar / per cápita): casan la primera y no la segunda.
+  nominal_units: "(?i)dollar|\\$"
+  not_nominal_units: "(?i)chained|real|constant|percent|index|rate|ratio"
+  # Rol inferido de las UNIDADES (primera regex que casa; si ninguna: otro).
+  roles:
+    tasa: "(?i)percent|rate|ratio"
+    empleo: "(?i)person|employ|jobs|workers"
+    precio: "(?i)index|price"
+    dinero: "(?i)dollar|\\$"
+    cantidad: "(?i)units|number|tons|barrels|thousands|millions|billions"
+
 logging:
   level: INFO
   runs_file: data/logs/runs.jsonl

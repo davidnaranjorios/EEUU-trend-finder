@@ -291,6 +291,17 @@ RANK_EVIDENCE = TableSpec(
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
 
+# Ficha del fenómeno (descriptiva): relacionadas y rezagos por candidato de series.
+RANK_CONTEXT = TableSpec(
+    name="rank_context",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("candidate_id", pa.string(), False),
+        ("payload_json", pa.string(), False),
+    ),
+    key=("run_id", "candidate_id"),
+)
+
 RANK_RUNS = TableSpec(
     name="rank_runs",
     schema=_schema(
@@ -330,6 +341,7 @@ ALL_SPECS = {
         RANK_CANDIDATES,
         RANK_EVIDENCE,
         RANK_RUNS,
+        RANK_CONTEXT,
     )
 }
 

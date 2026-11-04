@@ -158,6 +158,11 @@ def guide(
         f"<em>revierte</em> (signo contrario y al menos {rc['reverse_frac']} veces), "
         "<em>continúa</em> (el resto). "
         "Solo para series mensuales o más frecuentes; los datos recientes son preliminares.</dd>",
+        "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
+        "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
+        "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "
+        "título parecido y crecimientos correlacionados; el rol sale de las unidades), rezagos y "
+        "sensibilidad a la ventana y a las revisiones.</dd>",
         "<dt>Fuente independiente</dt><dd>Grupo de agencias que no comparten datos: el mismo dato "
         "publicado por FRED y por la agencia original cuenta una vez.</dd>",
         f"<dt>Score</dt><dd>Promedio ponderado de percentiles dentro de la corrida:<ul>{rows}"
@@ -296,6 +301,115 @@ def _term_recent(t: dict[str, Any]) -> str:
     )
 
 
+SA_NOTE = " · desestacionalizada en el gráfico"
+
+
+def _phenomenon(p: dict[str, Any] | None) -> str:
+    """Ficha del fenómeno (descriptiva: sin p ni q; no cambia el ranking)."""
+    if not p:
+        return ""
+    head = (
+        f'<p class="muted">{tip("Contexto descriptivo", "reciente")}: no es una señal ni cambia el '
+        "ranking.</p>"
+    )
+    core = ""
+    if p["chart"]:
+        rec = " Zonas grises: recesiones." if p["has_recessions"] else ""
+        core = (
+            f"<h4>Núcleo: series del cluster en base 100 (= {esc(p['base'])})</h4>"
+            f'<p class="muted">Cambio fechado en {esc(p["change_date"])}.{rec}</p>{p["chart"]}'
+        )
+    trows = [
+        [
+            t["title"]
+            + (" · desestacionalizada en el gráfico" if t["seasonally_adjusted_here"] else ""),
+            f"{fnum(t['last'], 2)} {t['units']} ({t['last_date']})",
+            t["yoy"] or "—",
+            t["annual"] or "—",
+            t["real_annual"] or ("no aplica" if not t["nominal"] else "—"),
+            fnum(t["per_capita"], 2)
+            if t["per_capita"] is not None
+            else ("no aplica" if not t["nominal"] else "—"),
+        ]
+        for t in p["transforms"]
+    ]
+    rrows = [
+        [
+            r["role"],
+            r["title"],
+            f"{src_name(r['source'])} · {r['series_id']}",
+            fnum(r["score"], 3),
+            "—" if r["rho"] is None else fnum(r["rho"], 2),
+            "—" if r["lag"] is None else f"{r['lag']} ({r['grid']}), ρ {fnum(r['lag_corr'], 2)}",
+            "descargada" if r["downloaded"] else "no descargada",
+        ]
+        for r in p["related"]
+    ]
+    wrows = [
+        [
+            w["title"],
+            *[w["windows"].get(k) or "—" for k in sorted(w["windows"])],
+            "—"
+            if not w["revision"]
+            else f"{w['revision']['then']} (vintage {w['revision']['vintage']}) → "
+            f"{w['revision']['now']}",
+        ]
+        for w in p["robust"]
+    ]
+    years = sorted(p["robust"][0]["windows"]) if p["robust"] else []
+    missing = (
+        '<p class="muted">Series de referencia no descargadas: '
+        f"{esc(', '.join(p['missing_refs']))}.</p>"
+        if p["missing_refs"]
+        else ""
+    )
+    return concat(
+        '<details class="pheno"><summary><strong>Ficha del fenómeno</strong></summary>',
+        head,
+        core,
+        "<h4>Transformaciones</h4>",
+        _table(
+            trows,
+            {2, 3, 4, 5},
+            "Serie",
+            "Último dato",
+            "Interanual",
+            "Anualizada 5 años",
+            "Real anualizada",
+            "Per cápita (último)",
+        ),
+        '<p class="muted">Real y per cápita solo con unidades nominales (dólares corrientes).</p>',
+        missing,
+        "<h4>Relacionadas (elegidas por los datos)</h4>",
+        _table(
+            rrows,
+            {3, 4},
+            "Rol",
+            "Serie",
+            "Fuente",
+            "Puntaje",
+            "ρ crecim.",
+            "Rezago (periodos)",
+            "Estado",
+        )
+        if rrows
+        else '<p class="muted">Sin series de la misma rama.</p>',
+        '<p class="muted">Rezago descriptivo: > 0 significa que la relacionada va detrás del '
+        "núcleo.</p>",
+        "<h4>Robustez</h4>",
+        _table(
+            wrows,
+            set(range(1, len(years) + 1)),
+            "Serie",
+            *[f"Pendiente {y} años" for y in years],
+            "Revisiones (vintages)",
+        )
+        if wrows
+        else "",
+        "</details>",
+    )
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -322,7 +436,7 @@ def _candidate(c: dict[str, Any]) -> str:
 <div>{_sources_chips(c["sources"])}</div>
 <p class="plain">{esc(_why_sources(c["sources"]))}</p>
 <details><summary>Componentes del score</summary><p class="muted">{esc(comp)}</p></details>
-{hidden}{ev}
+{hidden}{ev}{_phenomenon(c.get("phenomenon"))}
 </section>"""
 
 
