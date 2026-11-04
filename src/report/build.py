@@ -115,6 +115,7 @@ def build_site(
         _dumps(
             {
                 "date": today,
+                "generated": generated,
                 "run_id": (rank_run or {}).get("run_id"),
                 "n_published": sum(len(v) for v in candidates.values()),
             }
@@ -131,6 +132,11 @@ def build_site(
         shutil.copy2(meta.parent / "index.html", dst / "index.html")
         shutil.copy2(meta.parent / "report.json", dst / "report.json")
     (tmp / "archivo.html").write_text(archive_page(entries, generated), "utf-8")
+    # index.html siempre es la última corrida del archivo (no necesariamente la recién construida).
+    latest = latest_entry(entries)
+    if latest and latest.get("run_id") != (rank_run or {}).get("run_id"):
+        page = (reports / latest["date"] / "index.html").read_text("utf-8")
+        (tmp / "index.html").write_text(unrelocate(page, "../../"), "utf-8")
 
     ids, titles = forbidden_sets(
         ((i, t) for _, i, t in copyrighted), ((i, t) for i, t in public_ids)
@@ -155,6 +161,18 @@ def relocate(page: str, prefix: str) -> str:
     for attr in ('href="', 'src="'):
         for target in ("assets/", "index.html", "dashboard.html", "archivo.html"):
             page = page.replace(attr + target, attr + prefix + target)
+    return page
+
+
+def latest_entry(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Última corrida del archivo: fecha más reciente y, a igual fecha, la generada después."""
+    return max(entries, key=lambda m: (m["date"], m.get("generated", "")), default=None)
+
+
+def unrelocate(page: str, prefix: str) -> str:
+    """Inverso de `relocate`: rutas de una página de `archivo/<fecha>/` a la raíz del sitio."""
+    for attr in ('href="', 'src="'):
+        page = page.replace(attr + prefix, attr)
     return page
 
 

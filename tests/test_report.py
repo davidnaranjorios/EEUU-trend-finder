@@ -76,7 +76,7 @@ def test_dashboard_and_explorer(site):
     for heading in ("Estado del sistema", "Embudo de elegibilidad", "Cobertura", "Explorador"):
         assert heading in dash
     idx = json.loads((site_dir / "data" / "explorer" / "index.json").read_text("utf-8"))
-    assert idx["n_cards"] == 407  # 400 de relleno + 4 con señal + 3 de referencia
+    assert idx["n_cards"] == 411  # 400 de relleno + 8 con señal + 3 de referencia
     assert idx["copyrighted_withheld"] == 0  # ya filtradas en la consulta (NOT copyrighted)
     assert set(idx["by_source"]) == {"fred", "bls", "bea", "census"}
     cards = [
@@ -252,3 +252,27 @@ def test_recent_zoom_is_descriptive_only(site):
     assert "Últimos 12 meses" in index and "los meses recientes se revisan" in index
     assert 'id="rank-controls"' in index and 'data-state="' in index
     assert "Contexto descriptivo, no una señal" in index
+
+
+def test_index_shows_latest_run_of_archive(tmp_path):
+    """Principio de publicación: index.html == última corrida del archivo (reports_dir)."""
+    fx = build(tmp_path)
+    rank_run(fx.cfg, "rank1")
+    out = build_site(fx.cfg)
+    site_dir = Path(out["site_dir"])
+    reports = next(p.parent.parent for p in tmp_path.rglob("meta.json"))
+    # Una corrida posterior ya está en el archivo; reconstruir con una anterior no la desplaza.
+    newer = reports / "2999-01-01"
+    shutil.copytree(next(p.parent for p in reports.glob("*/meta.json")), newer)
+    meta = json.loads((newer / "meta.json").read_text("utf-8"))
+    meta.update(date="2999-01-01", run_id="rank-latest")
+    (newer / "meta.json").write_text(json.dumps(meta), "utf-8")
+    page = (newer / "index.html").read_text("utf-8")
+    (newer / "index.html").write_text(page.replace("rank1", "rank-latest"), "utf-8")
+    build_site(fx.cfg)
+    entries = [json.loads(p.read_text("utf-8")) for p in reports.glob("*/meta.json")]
+    last = max(entries, key=lambda m: (m["date"], m.get("generated", "")))
+    index = (site_dir / "index.html").read_text("utf-8")
+    assert last["run_id"] == "rank-latest"
+    assert f"<code>{last['run_id']}</code>" in index
+    assert 'href="../../' not in index
