@@ -86,6 +86,15 @@ def candidates_data(
         for r in _rank_rows(cfg, RANK_CONTEXT, "rank_context", run_id)
     }
     refs = _reference_data(con, cfg)
+    # Valores de las relacionadas descargadas (panel apilado), sin copyright.
+    related_keys = {
+        (r["source"], r["series_id"])
+        for p in contexts.values()
+        for r in p.get("related", [])
+        if r["downloaded"] and (r["source"], r["series_id"]) not in forbidden
+    }
+    related_values = _series_values(con, related_keys, cfg)
+    related_meta = _series_meta(con, related_keys)
     vintages = _vintages(con, keys)
     term_keys = {
         (e["source"], e["object_id"])
@@ -212,6 +221,8 @@ def candidates_data(
                     series,
                     {k: values[k] for k in values if k in {(x["source"], x["id"]) for x in series}},
                     contexts.get(c["candidate_id"]),
+                    related_values,
+                    related_meta,
                     refs,
                     vintages,
                     cfg["context"],

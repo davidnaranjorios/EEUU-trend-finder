@@ -62,6 +62,17 @@
     sSel.addEventListener("change", apply);
   }
 
+  // --- Ficha del fenómeno: mostrar u ocultar relacionadas en el panel apilado ---
+  document.querySelectorAll(".stack").forEach(function (panel) {
+    panel.querySelectorAll('.stack-pick input[type="checkbox"]').forEach(function (box) {
+      box.addEventListener("change", function () {
+        panel.querySelectorAll(".stack-item").forEach(function (fig) {
+          if (fig.dataset.key === box.dataset.key) fig.hidden = !box.checked;
+        });
+      });
+    });
+  });
+
   // --- Explorador ---------------------------------------------------------------------------
   var root = document.getElementById("explorer");
   if (!root) return;

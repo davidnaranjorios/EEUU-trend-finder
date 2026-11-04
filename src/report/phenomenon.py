@@ -178,6 +178,8 @@ def build_phenomenon(
     series: Sequence[dict[str, Any]],
     values: dict[tuple[str, str], tuple[list[date], list[float]]],
     payload: dict[str, Any] | None,
+    related_values: dict[tuple[str, str], tuple[list[date], list[float]]],
+    related_meta: dict[tuple[str, str], dict[str, Any]],
     refs: dict[str, dict[str, Any]],
     vintages: dict[tuple[str, str], list[tuple[date, float, date]]],
     cfg: dict[str, Any],
@@ -185,7 +187,7 @@ def build_phenomenon(
 ) -> dict[str, Any]:
     """Ficha descriptiva de un candidato: núcleo en base 100, transformaciones, relacionadas,
     dinámica y robustez. Solo series públicas (las de `series` ya vienen filtradas)."""
-    from src.report.charts import multi_line_chart
+    from src.report.charts import line_chart, multi_line_chart
 
     rec = refs.get("recessions", {})
     bands = recession_bands(rec.get("dates") or [], rec.get("values") or [])
@@ -257,6 +259,7 @@ def build_phenomenon(
         if (r["source"], r["series_id"]) not in forbidden
     ]
     missing_refs = [f"{role} ({r['id']})" for role, r in refs.items() if not r["dates"]]
+    stack = stacked_panel(series, values, related, related_values, related_meta, bands, line_chart)
     changes = [s.get("pelt") or s["window"][0] for s in series if s["window"][0]]
     return {
         "chart": multi_line_chart(lines, label="Series del cluster en base 100", bands=bands)
@@ -268,6 +271,64 @@ def build_phenomenon(
         "related": related,
         "robust": robust,
         "has_recessions": bool(bands),
+        "stack": stack,
         "missing_refs": missing_refs,
         "n_pool": (payload or {}).get("n_pool", 0),
     }
+
+
+def stacked_panel(
+    series: Sequence[dict[str, Any]],
+    values: dict[tuple[str, str], tuple[list[date], list[float]]],
+    related: Sequence[dict[str, Any]],
+    related_values: dict[tuple[str, str], tuple[list[date], list[float]]],
+    related_meta: dict[tuple[str, str], dict[str, Any]],
+    bands: Sequence[tuple[date, date]],
+    line_chart: Any,
+) -> list[dict[str, Any]]:
+    """Gráficos apilados con el mismo eje de fechas: núcleo primero, después las relacionadas
+    descargadas, cada una en sus unidades y con las recesiones sombreadas."""
+    entries = []
+    core = next((s for s in series if values.get((s["source"], s["id"]), ([], []))[0]), None)
+    if core:
+        entries.append(
+            {
+                "key": f"{core['source']}|{core['id']}",
+                "title": core["title"],
+                "units": core["units"],
+                "source": core["source"],
+                "id": core["id"],
+                "role": "núcleo",
+                "core": True,
+                "data": values[(core["source"], core["id"])],
+            }
+        )
+    for r in related:
+        k = (r["source"], r["series_id"])
+        if not r["downloaded"] or k not in related_values or not related_values[k][0]:
+            continue
+        m = related_meta.get(k, {})
+        entries.append(
+            {
+                "key": f"{k[0]}|{k[1]}",
+                "title": m.get("title") or r["title"],
+                "units": m.get("units") or r.get("units") or "",
+                "source": k[0],
+                "id": k[1],
+                "role": r["role"],
+                "core": False,
+                "data": related_values[k],
+            }
+        )
+    if not entries:
+        return []
+    start = min(min(e["data"][0]) for e in entries)  # eje común: unión de los tramos
+    end = max(max(e["data"][0]) for e in entries)
+    out = []
+    for e in entries:
+        d, v = e.pop("data")
+        e["chart"] = line_chart(
+            d, v, label=f"{e['title']} ({e['units']})", bands=bands, x_range=(start, end)
+        )
+        out.append(e)
+    return out

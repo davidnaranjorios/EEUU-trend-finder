@@ -248,6 +248,22 @@ No agrega p ni q, y no cambia el score, la FDR ni la regla de fuentes.
   clusters, evidencia y relacionadas. Lo verifica
   `test_reference_series_never_enter_detectors_or_ranking`.
 
+### Panel apilado y descarga de las series de referencia (2026-11-04)
+
+- **Panel apilado.** "Comparar con relacionadas" muestra el núcleo arriba y después las
+  relacionadas descargadas.
+  - Todos los gráficos comparten el eje de fechas (`line_chart(x_range=...)`).
+  - Cada uno conserva sus unidades y lleva las recesiones sombreadas.
+  - Un checkbox por relacionada controla cuáles se ven; al abrir están marcadas las 3 primeras.
+  - Las series con copyright quedan fuera.
+- **Recesiones ausentes en la primera corrida con texto** (rank 7fee45fd). La ficha decía
+  "Series de referencia no descargadas: recessions (USREC)".
+  - Causa: el embudo no clasifica USREC en `download.groups`, así que nunca se descargaba.
+  - Arreglo: `FredIngestor._targets(with_reference=True)` suma las tres series de referencia a
+    `observations` y a `download`, pero no a la muestra de vintages. Lo cubre
+    `test_reference_series_are_downloaded_outside_target_groups`.
+  - Las recesiones aparecen después de la próxima ingesta FRED y del siguiente Reporte.
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:

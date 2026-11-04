@@ -154,3 +154,6 @@ svg.chart .line.s6 { stroke: var(--series-6); }
 .pheno { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
 .pheno h4 { margin: 12px 0 4px; font-size: 14px; }
 .pheno svg.chart { max-width: 640px; }
+.stack-pick { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0 10px; font-size: 13px; color: var(--text-secondary); }
+.stack-item { margin: 0 0 10px; }
+.stack svg.chart { max-width: 640px; }

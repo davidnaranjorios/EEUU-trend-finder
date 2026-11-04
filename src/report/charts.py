@@ -53,18 +53,25 @@ def line_chart(
     log_scale: bool = False,
     value_format: str = "number",
     bands: Sequence[tuple[date, date]] = (),
+    x_range: tuple[date, date] | None = None,
 ) -> str:
     """SVG de una serie; `log_scale` dibuja log(valor) con etiquetas en el valor original.
+
+    `x_range`: eje de fechas fijo (para apilar gráficos alineados); recorta los puntos fuera.
 
     `bands`: tramos sombreados aparte de la ventana (p. ej. recesiones)."""
     pts = [(d, v) for d, v in zip(dates, values, strict=True) if v is not None and math.isfinite(v)]
     if log_scale:
         pts = [(d, v) for d, v in pts if v > 0]
+    if x_range:
+        pts = [(d, v) for d, v in pts if x_range[0] <= d <= x_range[1]]
     if len(pts) < 2:
         return '<p class="muted">Sin datos suficientes para el gráfico.</p>'
     xs = [d.toordinal() for d, _ in pts]
     ys = [math.log(v) if log_scale else v for _, v in pts]
     x0, x1 = min(xs), max(xs)
+    if x_range:
+        x0, x1 = x_range[0].toordinal(), x_range[1].toordinal()
     y0, y1 = min(ys), max(ys)
     if y1 == y0:
         y0, y1 = y0 - 1, y1 + 1
