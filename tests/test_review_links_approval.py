@@ -104,3 +104,16 @@ def test_text_run_records_bh_rate_in_detector_runs_params():
     src = Path("src/detect/text.py").read_text(encoding="utf-8")
     assert '"bh_rate"' in src and '"approval_alert"' in src
     assert json.dumps({"bh_rate": 0.0})
+
+
+def test_zero_approval_detector_excluded_from_median_and_flagged():
+    from src.detect.approval import failures
+
+    rows = [
+        {"detector": "a", "n_bh": 0, "n_tests": 1000},
+        {"detector": "b", "n_bh": 10, "n_tests": 1000},
+        {"detector": "c", "n_bh": 40, "n_tests": 1000},
+    ]
+    assert failures(rows) == ["a"]
+    assert alert_flags(rows) == {"a": False, "b": False, "c": True}  # mediana de b, no de {a,b}
+    assert [r["possible_failure"] for r in annotate(rows)] == [True, False, False]

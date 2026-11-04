@@ -16,6 +16,11 @@ def rate(n_bh: int, n_tests: int) -> float:
     return n_bh / n_tests if n_tests else 0.0
 
 
+def failures(rows: Sequence[dict[str, Any]]) -> list[str]:
+    """Detectores con pruebas y 0 aprobaciones: se reportan aparte como "posible falla"."""
+    return [r["detector"] for r in rows if r["n_tests"] > 0 and r["n_bh"] == 0]
+
+
 def alert_flags(
     rows: Sequence[dict[str, Any]], factor: float = 3.0, min_rate: float = 0.001
 ) -> dict[str, bool]:
@@ -24,9 +29,11 @@ def alert_flags(
     Con un solo detector no hay con qué comparar (sin alerta). Si la mediana de los demás es 0,
     alerta solo si la tasa supera `min_rate` (evita alertar por una señal suelta)."""
     rates = {r["detector"]: rate(r["n_bh"], r["n_tests"]) for r in rows}
+    # Un detector sin aprobaciones no entra a la mediana: arrastraría la referencia a 0.
+    failed = set(failures(rows))
     out: dict[str, bool] = {}
     for det, r in rates.items():
-        others = [v for d, v in rates.items() if d != det]
+        others = [v for d, v in rates.items() if d != det and d not in failed]
         if not others:
             out[det] = False
             continue
@@ -40,7 +47,13 @@ def annotate(
 ) -> list[dict[str, Any]]:
     flags = alert_flags(rows, factor, min_rate)
     return [
-        {**r, "bh_rate": rate(r["n_bh"], r["n_tests"]), "alert": flags[r["detector"]]} for r in rows
+        {
+            **r,
+            "bh_rate": rate(r["n_bh"], r["n_tests"]),
+            "alert": flags[r["detector"]],
+            "possible_failure": r["detector"] in set(failures(rows)),
+        }
+        for r in rows
     ]
 
 
