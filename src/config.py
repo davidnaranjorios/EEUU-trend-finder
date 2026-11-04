@@ -73,6 +73,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_exports(_section(cfg, "exports"))
     _validate_text(cfg)
     _validate_rank(_section(cfg, "rank"))
+    _validate_context(_section(cfg, "context"))
     storage = _section(cfg, "storage")
     for key in ("bucket", "prefix"):
         if not isinstance(storage.get(key), str) or not storage[key]:
@@ -321,3 +322,23 @@ def _validate_rank(r: dict[str, Any]) -> None:
     q = lk.get("null_quantile")
     if not isinstance(q, int | float) or not 0 < q < 1:
         raise ConfigError("rank.links.null_quantile debe estar en (0, 1)")
+
+
+REFERENCE_KEYS = ("deflator", "population", "recessions")
+
+
+def _validate_context(c: dict[str, Any]) -> None:
+    """Ficha del fenómeno: exactamente tres series de referencia metodológica (ADR 0009)."""
+    refs = c.get("reference_series")
+    if not isinstance(refs, dict) or set(refs) != set(REFERENCE_KEYS):
+        raise ConfigError(f"context.reference_series debe tener exactamente {REFERENCE_KEYS}")
+    if not all(isinstance(v, str) and v for v in refs.values()):
+        raise ConfigError("context.reference_series: un id de serie por clave")
+    for key in ("roles", "min_overlap"):
+        if not isinstance(c.get(key), dict) or not c[key]:
+            raise ConfigError(f"context.{key} debe ser un mapeo no vacío")
+    for pattern in [*c["roles"].values(), c.get("nominal_units"), c.get("not_nominal_units")]:
+        try:
+            re.compile(pattern)
+        except (re.error, TypeError) as exc:
+            raise ConfigError(f"context: regex inválida {pattern!r}") from exc

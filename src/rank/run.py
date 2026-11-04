@@ -19,7 +19,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,14 @@ import pyarrow as pa
 
 from src.catalog import connect
 from src.config import load_config
-from src.detect.run import _resolve, detect_sources, load_series, prep_for, table_root
+from src.detect.run import (
+    _resolve,
+    detect_sources,
+    load_series,
+    prep_for,
+    reference_keys,
+    table_root,
+)
 from src.detect.text import DETECTOR as TEXT_DETECTOR
 from src.detect.text import grid_start
 from src.ingest.fred import SERIES_ATTRS
@@ -45,6 +52,7 @@ from src.rank.cluster import (
     growth_correlation,
     similarity,
 )
+from src.rank.context import select_related
 from src.rank.embed import CachedEmbedder, Embedder, make_embedder
 from src.rank.links import LinkParams, null_threshold, sample_null, top_links
 from src.rank.triangulate import Candidate, Evidence, assess, score
@@ -52,6 +60,7 @@ from src.schemas import (
     CLUSTERS,
     DETECTOR_RUNS,
     RANK_CANDIDATES,
+    RANK_CONTEXT,
     RANK_EVIDENCE,
     RANK_RUNS,
     SERIES_TERM_LINKS,
@@ -68,6 +77,7 @@ RANK_TABLES = {
     "rank_candidates": RANK_CANDIDATES,
     "rank_evidence": RANK_EVIDENCE,
     "rank_runs": RANK_RUNS,
+    "rank_context": RANK_CONTEXT,
 }
 
 
@@ -330,8 +340,10 @@ def rank_run(
         for s in (_signals(cfg, src, numeric_run) if numeric_run else [])
     ]
     txt_signals = [s for src, rid in sorted(text_runs.items()) for s in _signals(cfg, src, rid)]
+    refs = reference_keys(cfg)  # series de referencia metodológica: nunca al ranking
+    num_signals = [x for x in num_signals if (x["source"], x["object_id"]) not in refs]
     by_series = _best_by_series(num_signals)
-    tested = tested_series(con, numeric_run)
+    tested = [t for t in tested_series(con, numeric_run) if (t[0], t[1]) not in refs]
     signal_keys = sorted(by_series)
     info = series_info(
         con,
@@ -475,6 +487,19 @@ def rank_run(
             candidates.append(assess(Candidate(cid, "text", ev, len(members)), min_sources))
 
     score(candidates, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
+    members_of = dict(zip(cids, clusters, strict=True))
+    context_rows = [
+        {
+            "run_id": run_id,
+            "candidate_id": c.candidate_id,
+            "payload_json": json.dumps(
+                phenomenon_context(con, cfg, members_of[c.candidate_id], info, emb, refs),
+                default=str,
+            ),
+        }
+        for c in candidates
+        if c.kind == "series" and c.status == "candidato"
+    ]
     con.close()
 
     # 5. Escritura.
@@ -560,6 +585,7 @@ def rank_run(
     _write("series_term_links", link_rows, cfg)
     _write("rank_candidates", cand_rows, cfg)
     _write("rank_evidence", ev_rows, cfg)
+    _write("rank_context", context_rows, cfg)
     _write("rank_runs", [run_row], cfg)
     if log is not None:
         log.info("ranking", extra={"fields": summary})
@@ -625,6 +651,88 @@ def _term_evidence(
         linked_series=linked,
         n_entities=n_entities,
     )
+
+
+def phenomenon_context(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    members: list[tuple[str, str]],
+    info: dict[tuple[str, str], SeriesInfo],
+    emb: Any,
+    refs: set[tuple[str, str]],
+) -> dict[str, Any]:
+    """Relacionadas y rezagos del candidato (descriptivo; src/rank/context.py)."""
+    c = cfg["context"]
+    con.register(
+        "_core",
+        pa.table({"source": [k[0] for k in members], "series_id": [k[1] for k in members]}),
+    )
+    # Candidatas: misma rama de category_path que algún miembro, sin copyright.
+    pool = con.execute(
+        """
+        WITH b AS (
+          SELECT DISTINCT unnest(string_split(m.category_path, ';')) AS branch
+          FROM series_meta m JOIN _core USING (source, series_id)
+        )
+        SELECT DISTINCT m.source, m.series_id, m.title FROM series_meta m,
+          (SELECT unnest(string_split(category_path, ';')) AS branch, source, series_id
+           FROM series_meta WHERE NOT copyrighted) x
+        WHERE x.source = m.source AND x.series_id = m.series_id AND x.branch <> ''
+          AND x.branch IN (SELECT branch FROM b)
+        ORDER BY 1, 2
+        """
+    ).fetchall()
+    member_set = set(members)
+    rows = [
+        {"source": s_, "series_id": i, "title": t or i, "downloaded": (s_, i) in info}
+        for s_, i, t in pool
+        if (s_, i) not in refs and (s_, i) not in member_set
+    ]
+    # Prefiltro barato para las no descargadas (no tienen embedding en caché): solapamiento de
+    # palabras del título con el núcleo; las descargadas usan el embedding cacheado.
+    core_titles = [info[k].title for k in members if k in info]
+    words = {w for t in core_titles for w in t.casefold().split()}
+    down = [r for r in rows if r["downloaded"]]
+    miss = sorted(
+        (r for r in rows if not r["downloaded"]),
+        key=lambda r: (
+            -len(words & set(r["title"].casefold().split())),
+            r["source"],
+            r["series_id"],
+        ),
+    )[: c["pool_max"]]
+    pool_rows = down + miss
+    if not pool_rows or not core_titles:
+        return {"members": members, "related": [], "n_pool": len(rows)}
+    core_vec = emb.embed(core_titles).mean(axis=0)
+    core_vec = core_vec / (np.linalg.norm(core_vec) or 1.0)
+    vecs = emb.embed([r["title"] for r in pool_rows])
+    order = np.argsort(-(vecs @ core_vec), kind="stable")[: 2 * c["pool_max"]]
+    pool_rows = [pool_rows[i] for i in sorted(order)]
+    vecs = vecs[sorted(order)]
+    keys = [(r["source"], r["series_id"]) for r in pool_rows if r["downloaded"]]
+    units = (
+        dict(
+            ((s_, i), u)
+            for s_, i, u in con.execute(
+                "SELECT source, series_id, any_value(units) FROM series JOIN "
+                "(SELECT unnest(?) AS source, unnest(?) AS series_id) k USING (source, series_id) "
+                "GROUP BY ALL",
+                [[k[0] for k in keys], [k[1] for k in keys]],
+            ).fetchall()
+        )
+        if keys
+        else {}
+    )
+    for r in pool_rows:
+        r["units"] = units.get((r["source"], r["series_id"]), "")
+    growth = growth_of(con, cfg, sorted(set(keys) | {k for k in members if k in info}))
+    related = select_related(members, pool_rows, core_vec, vecs, growth, c)
+    return {
+        "members": members,
+        "related": [asdict(r) for r in related],
+        "n_pool": len(rows),
+    }
 
 
 def latest_rank_run(cfg: dict[str, Any]) -> dict[str, Any] | None:

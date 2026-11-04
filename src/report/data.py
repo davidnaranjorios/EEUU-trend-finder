@@ -15,14 +15,15 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
-from src.detect.run import RUNS_PARTITION, _resolve, table_root
+from src.detect.run import REFERENCE_SOURCE, RUNS_PARTITION, _resolve, table_root
 from src.detect.text import grid_start
 from src.ingest.store import read_table
 from src.rank.run import NUMERIC_RUN_PARTITIONS, PARTITION, latest_rank_run, rank_root, term_text
 from src.report.charts import line_chart
 from src.report.narrative import regime_sentence, slope_sentence, term_sentence
+from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
-from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_EVIDENCE, SIGNALS
+from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_CONTEXT, RANK_EVIDENCE, SIGNALS
 
 UNIT_WILDCARD = "/*"
 
@@ -80,6 +81,12 @@ def candidates_data(
     }
     meta = _series_meta(con, keys)
     values = _series_values(con, keys, cfg)
+    contexts = {
+        r["candidate_id"]: json.loads(r["payload_json"])
+        for r in _rank_rows(cfg, RANK_CONTEXT, "rank_context", run_id)
+    }
+    refs = _reference_data(con, cfg)
+    vintages = _vintages(con, keys)
     term_keys = {
         (e["source"], e["object_id"])
         for c in cands
@@ -201,6 +208,17 @@ def candidates_data(
                 "n_members": c["n_members"],
                 "series": series,
                 "state": summary_state([x["recent"]["state"] for x in series]),
+                "phenomenon": build_phenomenon(
+                    series,
+                    {k: values[k] for k in values if k in {(x["source"], x["id"]) for x in series}},
+                    contexts.get(c["candidate_id"]),
+                    refs,
+                    vintages,
+                    cfg["context"],
+                    forbidden,
+                )
+                if c["kind"] == "series"
+                else None,
                 "hidden_series": hidden,
                 "terms": sorted(terms, key=lambda t: t["q_value"]),
             }
@@ -269,6 +287,40 @@ def _series_meta(
         }
         for r in rows
     }
+
+
+def _reference_data(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Series de referencia metodológica (context.reference_series), si están descargadas."""
+    out: dict[str, Any] = {}
+    for role, sid in cfg["context"]["reference_series"].items():
+        row = con.execute(
+            "SELECT list(date ORDER BY date), list(value ORDER BY date), any_value(units) "
+            "FROM series WHERE source = ? AND series_id = ? AND vintage_date IS NULL "
+            "AND value IS NOT NULL",
+            [REFERENCE_SOURCE, sid],
+        ).fetchone()
+        out[role] = (
+            {"id": sid, "dates": row[0], "values": row[1], "units": row[2] or ""}
+            if row and row[0]
+            else {"id": sid, "dates": [], "values": [], "units": ""}
+        )
+    return out
+
+
+def _vintages(
+    con: duckdb.DuckDBPyConnection, keys: set[tuple[str, str]]
+) -> dict[tuple[str, str], list[tuple[date, float, date]]]:
+    if not keys:
+        return {}
+    _register(con, "_vtk", keys)
+    rows = con.execute(
+        "SELECT source, series_id, date, value, vintage_date FROM series JOIN _vtk "
+        "USING (source, series_id) WHERE vintage_date IS NOT NULL AND value IS NOT NULL"
+    ).fetchall()
+    out: dict[tuple[str, str], list[tuple[date, float, date]]] = defaultdict(list)
+    for src, sid, d, v, vd in rows:
+        out[(src, sid)].append((d, v, vd))
+    return out
 
 
 def _series_values(

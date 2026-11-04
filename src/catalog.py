@@ -18,6 +18,7 @@ from src.schemas import (
     DETECTOR_TESTS,
     ELIGIBILITY,
     RANK_CANDIDATES,
+    RANK_CONTEXT,
     RANK_EVIDENCE,
     RANK_RUNS,
     SERIES,
@@ -55,6 +56,7 @@ DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
     "rank_candidates": ("processed/rank/rank_candidates", RANK_CANDIDATES),
     "rank_evidence": ("processed/rank/rank_evidence", RANK_EVIDENCE),
     "rank_runs": ("processed/rank/rank_runs", RANK_RUNS),
+    "rank_context": ("processed/rank/rank_context", RANK_CONTEXT),
 }
 # Nombre del subdirectorio de partición: bucket de dos dígitos (series) o periodo (texto).
 PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*"}

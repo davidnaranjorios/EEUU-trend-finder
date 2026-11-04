@@ -103,7 +103,26 @@ def hardcoded_topic_violations_yaml(path: Path) -> list[str]:
     return [f"{path}: {v}" for v in _walk_yaml(data, "")]
 
 
+# Única excepción (aprobada por David el 2026-11-04, ADR 0009): series de referencia
+# METODOLÓGICAS para la ficha del fenómeno (deflactar, per cápita, sombrear recesiones). Solo en
+# esta ruta, con exactamente estas claves y un id por clave; fuera de ella todo sigue prohibido.
+REFERENCE_PATH = "context.reference_series"
+REFERENCE_KEYS = frozenset({"deflator", "population", "recessions"})
+
+
+def _reference_violations(node: Any) -> Iterator[str]:
+    if not isinstance(node, dict) or set(node) != REFERENCE_KEYS:
+        yield f"'{REFERENCE_PATH}' debe tener exactamente las claves {sorted(REFERENCE_KEYS)}"
+        return
+    for key, value in node.items():
+        if not isinstance(value, str):
+            yield f"'{REFERENCE_PATH}.{key}' debe ser un único id de serie"
+
+
 def _walk_yaml(node: Any, where: str) -> Iterator[str]:
+    if where == REFERENCE_PATH:
+        yield from _reference_violations(node)
+        return
     if isinstance(node, dict):
         for key, value in node.items():
             here = f"{where}.{key}" if where else str(key)

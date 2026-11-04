@@ -88,7 +88,21 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
     series_rows, meta, elig, attrs, tests, sigs = [], [], [], [], [], []
     decided = datetime(2026, 11, 1, tzinfo=UTC)
 
-    def add_series(name, source, sid, title, growth, *, signal, copyrighted=False, agencies=None):
+    def add_series(
+        name,
+        source,
+        sid,
+        title,
+        growth,
+        *,
+        signal,
+        copyrighted=False,
+        agencies=None,
+        units="Index",
+        category=None,
+        sa="SA",
+        detect=True,
+    ):
         level = 100 * np.exp(np.cumsum(growth))
         series_rows.extend(
             {
@@ -98,8 +112,8 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
                 "value": float(v),
                 "vintage_date": None,
                 "frequency": "M",
-                "units": "Index",
-                "seasonal_adjustment": "SA",
+                "units": units,
+                "seasonal_adjustment": sa,
             }
             for i, v in enumerate(level)
         )
@@ -108,7 +122,7 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
                 "source": source,
                 "series_id": sid,
                 "title": title,
-                "category_path": None,
+                "category_path": category,
                 "start_date": month(0),
                 "end_date": month(N_MONTHS - 1),
                 "last_updated": decided,
@@ -142,7 +156,7 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
                     "popularity": 1,
                 }
             )
-        for det in ("slope", "regime"):
+        for det in ("slope", "regime") if detect else ():
             q = 1e-6 if signal else 0.9
             row = {
                 "run_id": NUM_RUN,
@@ -202,7 +216,17 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
         agencies=["U.S. Bureau of Labor Statistics"],
     )
     add_series("dup_bls", "bls", "DUPB", dup_title, dup_growth, signal=True)
-    add_series("linked", "bea", "LNK", phrase(rng) + " total", trend(), signal=True)
+    cat = "Rama sintetica > " + pseudo_word(rng)
+    add_series(
+        "linked",
+        "bea",
+        "LNK",
+        phrase(rng) + " total",
+        trend(),
+        signal=True,
+        units="Millions of Dollars",
+        category=cat,
+    )
     add_series(
         "cr",
         "fred",
@@ -224,6 +248,8 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
             0.002 + 0.01 * rng.standard_normal(N_MONTHS),
             signal=False,
             agencies=["Filler Agency"],
+            category=cat if k % 50 == 0 else None,
+            units="Percent" if k % 100 == 0 else "Index",
         )
     for k in range(10):  # copyrighted sin señal: no deben aparecer en el explorador
         add_series(
@@ -235,7 +261,45 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
             signal=False,
             copyrighted=True,
             agencies=["Third Party Publisher"],
+            category=cat,  # misma rama que "linked": nunca deben salir como relacionadas
         )
+    # Series de referencia metodológica (context.reference_series). El deflactor lleva una
+    # "señal" fingida para comprobar que no entra al ranking.
+    refs = fx.cfg["context"]["reference_series"]
+    add_series(
+        "ref_deflator",
+        "fred",
+        refs["deflator"],
+        "Price level reference",
+        np.full(N_MONTHS, 0.002),
+        signal=True,
+        agencies=["Reference Agency"],
+    )
+    add_series(
+        "ref_population",
+        "fred",
+        refs["population"],
+        "Population reference",
+        np.full(N_MONTHS, 0.0008),
+        signal=False,
+        units="Thousands",
+        agencies=["Reference Agency"],
+    )
+    add_series(
+        "ref_recessions",
+        "fred",
+        refs["recessions"],
+        "Recession indicator",
+        np.zeros(N_MONTHS),
+        signal=False,
+        agencies=["Reference Agency"],
+        detect=False,
+    )
+    rec = np.zeros(N_MONTHS)
+    rec[24:36] = 1  # una recesión de 12 meses
+    for r in series_rows:  # el indicador de recesión es 0/1, no un nivel exponencial
+        if r["series_id"] == refs["recessions"]:
+            r["value"] = float(rec[(r["date"].year - 2006) * 12 + r["date"].month - 1])
 
     for src in ("fred", "bls", "bea", "census"):
 

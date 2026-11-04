@@ -98,6 +98,16 @@ def table_root(cfg: dict[str, Any], name: str) -> Path:
 # --- carga ---------------------------------------------------------------------------------------
 
 
+# Fuente de las series de referencia metodológicas (context.reference_series, ADR 0009).
+REFERENCE_SOURCE = "fred"
+
+
+def reference_keys(cfg: dict[str, Any]) -> set[tuple[str, str]]:
+    """Series de referencia (deflactor, población, recesiones): nunca entran a detectores."""
+    refs = (cfg.get("context") or {}).get("reference_series") or {}
+    return {(REFERENCE_SOURCE, sid) for sid in refs.values()}
+
+
 def detect_sources(cfg: dict[str, Any]) -> list[str]:
     """Fuentes numéricas que entran a la familia (una familia por detector, todas juntas)."""
     return list(cfg["detect"]["sources"])
@@ -167,6 +177,7 @@ def _load_source(
         params,
     ).to_arrow_table()
     out: list[Series] = []
+    refs = reference_keys(cfg)
     gi_col, val_col = rel.column("gi").combine_chunks(), rel.column("vals").combine_chunks()
     gi_flat = gi_col.flatten().to_numpy(zero_copy_only=False).astype(np.int64)
     val_flat = val_col.flatten().to_numpy(zero_copy_only=False).astype(float)
@@ -181,7 +192,7 @@ def _load_source(
             strict=True,
         )
     ):
-        if n_obs < min_obs[freq]:
+        if n_obs < min_obs[freq] or (source, sid) in refs:
             continue
         lo, hi = offsets[i], offsets[i + 1]
         level, first = to_grid(gi_flat[lo:hi], val_flat[lo:hi])

@@ -76,7 +76,7 @@ def test_dashboard_and_explorer(site):
     for heading in ("Estado del sistema", "Embudo de elegibilidad", "Cobertura", "Explorador"):
         assert heading in dash
     idx = json.loads((site_dir / "data" / "explorer" / "index.json").read_text("utf-8"))
-    assert idx["n_cards"] == 404  # 400 de relleno + 4 con señal sin copyright
+    assert idx["n_cards"] == 407  # 400 de relleno + 4 con señal + 3 de referencia
     assert idx["copyrighted_withheld"] == 0  # ya filtradas en la consulta (NOT copyrighted)
     assert set(idx["by_source"]) == {"fred", "bls", "bea", "census"}
     cards = [
@@ -163,7 +163,7 @@ def test_site_explains_itself(site):
     assert figures and all('class="cap"' in f and "<svg" in f for f in figures)
     caps = re.findall(r'<p class="cap"><strong>[^<]+</strong><br>([^<]+)</p>', index)
     assert caps and all(c.strip() for c in caps)  # unidades y fuente bajo el título
-    assert "Index" in index  # unidades originales de la serie del fixture
+    assert "Millions of Dollars" in index  # unidades originales de la serie del fixture
     assert "En los últimos 5 años creció" in index
     assert "Cambió de ritmo en" in index
     assert "Cuenta como 2 fuentes independientes" in index

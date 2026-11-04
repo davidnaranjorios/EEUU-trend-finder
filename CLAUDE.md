@@ -13,6 +13,11 @@ El sistema propone candidatos. La interpretación final la hace un humano.
 1. **Cero temas hardcodeados.** Ningún archivo en `src/` puede contener listas de industrias,
    tendencias, palabras clave o series "de interés". La selección sale de los datos.
    `config.yaml` tampoco puede contenerlas (lo verifica `tests/test_no_hardcoded_topics.py`).
+   Única excepción, aprobada por David el 2026-11-04 (ADR 0009):
+   - `context.reference_series` lista tres series de referencia metodológica: deflactor,
+     población y recesiones;
+   - tiene exactamente esas claves, y el guard no acepta ids de serie en ninguna otra parte;
+   - esas series no entran a los detectores ni al ranking.
 2. **El set de evaluación está aislado.** Los eventos históricos conocidos viven solo en
    `eval/known_events.yaml` y solo los lee `eval/`. Un test debe fallar si algún módulo de
    `src/` importa o lee algo de `eval/` (`tests/test_isolation.py`).
@@ -224,7 +229,9 @@ barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009.
 Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
 build`; en Actions, `.github/workflows/reporte.yml` (publica en GitHub Pages; otro destino con la
 variable `PUBLISH_TARGET`: cloudflare_pages o none). Tablas en `processed/rank/`:
-`clusters`, `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`.
+`clusters`, `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`,
+`rank_context`. Esta última es la ficha del fenómeno, descriptiva: relacionadas elegidas por los
+datos, rezagos, transformaciones y robustez (`src/rank/context.py`, `src/report/phenomenon.py`).
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia
 (series, gráficos, términos, q-values), ningún candidato tiene una sola fuente y ninguna serie
 con `copyrighted = true` aparece en el reporte publicado (tests).

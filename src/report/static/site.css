@@ -7,6 +7,12 @@
   --text-secondary: #52514e;
   --text-muted: #75746f;
   --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --rec: rgba(82, 81, 78, 0.18);
   --window: rgba(82, 81, 78, 0.12);
   --grid: #e8e7e2;
   --accent: #2a78d6;
@@ -22,6 +28,12 @@
     --text-secondary: #c3c2b7;
     --text-muted: #9a998f;
     --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --rec: rgba(195, 194, 183, 0.2);
     --window: rgba(195, 194, 183, 0.14);
     --grid: #2a2a27;
     --accent: #5b9ced;
@@ -37,6 +49,12 @@
   --text-secondary: #c3c2b7;
   --text-muted: #9a998f;
   --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --rec: rgba(195, 194, 183, 0.2);
   --window: rgba(195, 194, 183, 0.14);
   --grid: #2a2a27;
   --accent: #5b9ced;
@@ -117,3 +135,22 @@ abbr[title] { text-decoration: underline dotted; cursor: help; }
 .recent svg.chart { max-width: 560px; }
 .state { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; font-size: 12px; color: var(--text-secondary); }
 .controls label { color: var(--text-secondary); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+svg.chart .rec { fill: var(--rec); }
+svg.chart.multi .line { stroke-width: 2; }
+svg.chart .line.s1 { stroke: var(--series-1); }
+.sw.s1 { background: var(--series-1); }
+svg.chart .line.s2 { stroke: var(--series-2); }
+.sw.s2 { background: var(--series-2); }
+svg.chart .line.s3 { stroke: var(--series-3); }
+.sw.s3 { background: var(--series-3); }
+svg.chart .line.s4 { stroke: var(--series-4); }
+.sw.s4 { background: var(--series-4); }
+svg.chart .line.s5 { stroke: var(--series-5); }
+.sw.s5 { background: var(--series-5); }
+svg.chart .line.s6 { stroke: var(--series-6); }
+.sw.s6 { background: var(--series-6); }
+.lines-legend { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); }
+.sw { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.pheno { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.pheno h4 { margin: 12px 0 4px; font-size: 14px; }
+.pheno svg.chart { max-width: 640px; }

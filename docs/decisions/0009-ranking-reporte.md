@@ -218,6 +218,36 @@ Por término: la proporción de documentos del último año de la grilla frente 
 Por candidato: el estado más frecuente entre sus series ("mixto" si hay empate). El sitio filtra y
 ordena por estado en JS, sin tocar el score.
 
+### Ficha del fenómeno, descriptiva (aprobada por David, 2026-11-04)
+
+No agrega p ni q, y no cambia el score, la FDR ni la regla de fuentes.
+
+`src/rank/context.py` corre en `rank run` y escribe `rank_context`. Calcula:
+- **relacionadas**: candidatas de la misma rama de `category_path` (categoría de FRED, encuesta
+  de BLS, tabla de BEA, dataset de Census), prefiltradas por título y puntuadas con
+  0,5·coseno del título + 0,5·|ρ de crecimientos|. El empate se resuelve por id, así que el
+  resultado es determinista. Quedan fuera las series con copyright y las de referencia. Las no
+  descargadas se listan aparte;
+- **rol** (precio, cantidad, empleo, dinero o tasa), con 5 regex genéricas sobre las unidades;
+- **rezago** de máxima |ρ| entre el núcleo y cada relacionada, dentro de ±24 meses.
+
+`src/report/phenomenon.py` arma el resto:
+- el núcleo en base 100, desestacionalizado si es NSA;
+- el interanual y la variación anualizada;
+- valores real y per cápita, solo con unidades nominales (`nominal_units` / `not_nominal_units`);
+- la sensibilidad de la pendiente a ventanas de 3, 5 y 7 años;
+- el cambio por revisiones si hay vintages;
+- las recesiones sombreadas.
+
+**Excepción al principio 1.** `context.reference_series` lleva `deflator: CPIAUCSL`,
+`population: POP` y `recessions: USREC`.
+- Son referencias metodológicas, no temas.
+- El guard (`tests/guards.py`) acepta ids de serie solo en esa ruta y con exactamente esas tres
+  claves. Las trampas fuera de ella, con otra clave o con una lista, se siguen detectando.
+- `detect.run.reference_keys` las saca de la familia de detectores y `rank run` las excluye de
+  clusters, evidencia y relacionadas. Lo verifica
+  `test_reference_series_never_enter_detectors_or_ranking`.
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:
