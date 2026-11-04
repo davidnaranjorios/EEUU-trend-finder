@@ -179,6 +179,19 @@ El caso inverso también está cubierto. Cuando `sync_r2.sh` sincroniza `logs`, 
 queda excluido, así que la ingesta nunca pisa `logs/reporte/` ni lo manda a `_trash`
 (`test_sync_of_logs_never_touches_reporte_subdir`).
 
+### Legibilidad del reporte (aprobado por David, 2026-11-04)
+
+- Los gráficos usan las unidades originales en escala lineal. Cada uno lleva título, unidades,
+  ajuste estacional, fuente y agencia, más una leyenda de la ventana sombreada y de la fecha PELT.
+- Frases en lenguaje simple calculadas desde los datos (`src/report/narrative.py`):
+  - crecimiento anual en la ventana frente a la ventana previa;
+  - cambio de ritmo en la fecha PELT;
+  - proporción de documentos con el término antes y después;
+  - por qué el candidato cuenta como ≥ 2 fuentes.
+- Una sección "Cómo leer esta página" con glosario (efecto, p, q, BH, BY, fuente independiente
+  y score, con los pesos de config.yaml) y tooltips en q, efecto y similitud.
+- Sin cambios en la lógica de ranking ni en la regla de fuentes.
+
 ## Consecuencias y pendientes
 
 - La primera corrida real necesita, en orden:

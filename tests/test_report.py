@@ -150,3 +150,42 @@ def test_verify_site_rereads_copyright_list(site, tmp_path):
     (copy / "x.html").write_text(f"<td>{fx.ids['crfill3'][1]}</td>", "utf-8")
     with pytest.raises(CopyrightLeak):
         verify_site(fx.cfg, copy)
+
+
+def test_site_explains_itself(site):
+    """Glosario, cómo leer, frase simple y leyenda/unidades por gráfico (legibilidad)."""
+    fx, site_dir, _ = site
+    index = (site_dir / "index.html").read_text("utf-8")
+    assert 'id="glosario"' in index and 'id="como-leer"' in index
+    for word in ("Efecto", "<dt>p</dt>", "<dt>q</dt>", "BH", "BY", "Score", "strength"):
+        assert word in index
+    figures = re.findall(r"<figure>(.*?)</figure>", index, flags=re.S)
+    assert figures and all('class="cap"' in f and "<svg" in f for f in figures)
+    caps = re.findall(r'<p class="cap"><strong>[^<]+</strong><br>([^<]+)</p>', index)
+    assert caps and all(c.strip() for c in caps)  # unidades y fuente bajo el título
+    assert "Index" in index  # unidades originales de la serie del fixture
+    assert "En los últimos 5 años creció" in index
+    assert "Cambió de ritmo en" in index
+    assert "Cuenta como 2 fuentes independientes" in index
+    assert "proporción de documentos que mencionan" in index
+    assert index.count("<abbr title=") >= 4  # tooltips en q, efecto y similitud
+
+
+def test_plain_language_sentences():
+    from datetime import date
+
+    from src.report.narrative import annual_rate, regime_sentence, slope_sentence
+
+    dates = [date(2000 + i // 12, i % 12 + 1, 1) for i in range(240)]
+    vals = [
+        100 * (1.02 ** (i / 12) if i < 180 else 1.02**15 * 1.10 ** ((i - 180) / 12))
+        for i in range(240)
+    ]
+    rate, pct = annual_rate(dates, vals, dates[180], dates[-1])
+    assert pct and rate == pytest.approx(10.0, abs=0.1)
+    s = slope_sentence(dates, vals, (dates[180], dates[-1]), "Index")
+    assert "+10.0 % anual" in s and "+2.0 % anual" in s
+    r = regime_sentence(dates, vals, dates[180], "Index")
+    assert r.startswith("Cambió de ritmo en 01/2015")
+    neg = [v - 200 for v in vals]  # serie con valores negativos: unidades por año
+    assert "Index por año" in slope_sentence(dates, neg, (dates[180], dates[-1]), "Index")
