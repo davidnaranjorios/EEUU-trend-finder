@@ -20,6 +20,7 @@ from src.schemas import (
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
+    RANK_ORIGIN,
     RANK_RUNS,
     SERIES,
     SERIES_META,
@@ -55,6 +56,7 @@ DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
     "series_term_links": ("processed/rank/series_term_links", SERIES_TERM_LINKS),
     "rank_candidates": ("processed/rank/rank_candidates", RANK_CANDIDATES),
     "rank_evidence": ("processed/rank/rank_evidence", RANK_EVIDENCE),
+    "rank_origin": ("processed/rank/rank_origin", RANK_ORIGIN),
     "rank_runs": ("processed/rank/rank_runs", RANK_RUNS),
     "rank_context": ("processed/rank/rank_context", RANK_CONTEXT),
 }

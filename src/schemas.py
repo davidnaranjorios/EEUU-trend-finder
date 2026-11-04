@@ -299,6 +299,23 @@ RANK_EVIDENCE = TableSpec(
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
 
+# Origen del dato de cada serie con evidencia (ADR 0010): identidad usada para triangular, cadena
+# de republicación y posibles copias entre agencias ("posible mismo origen", revisión humana).
+RANK_ORIGIN = TableSpec(
+    name="rank_origin",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("object_id", pa.string(), False),
+        ("origin_json", pa.string(), False),
+        ("chain_json", pa.string(), False),
+        ("rule_id", pa.string(), True),
+        ("possible_same_origin_json", pa.string(), False),
+        ("duplicate_rho", pa.float64(), True),
+    ),
+    key=("run_id", "source", "object_id"),
+)
+
 # Ficha del fenómeno (descriptiva): relacionadas y rezagos por candidato de series.
 RANK_CONTEXT = TableSpec(
     name="rank_context",
@@ -348,6 +365,7 @@ ALL_SPECS = {
         TEXT_INGEST,
         RANK_CANDIDATES,
         RANK_EVIDENCE,
+        RANK_ORIGIN,
         RANK_RUNS,
         RANK_CONTEXT,
     )

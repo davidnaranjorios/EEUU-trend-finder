@@ -19,12 +19,20 @@ from src.detect.approval import alert_flags
 from src.detect.run import REFERENCE_SOURCE, RUNS_PARTITION, _resolve, table_root
 from src.detect.text import grid_start
 from src.ingest.store import read_table
+from src.rank.origin import format_chain
 from src.rank.run import NUMERIC_RUN_PARTITIONS, PARTITION, latest_rank_run, rank_root, term_text
 from src.report.charts import line_chart
 from src.report.narrative import regime_sentence, slope_sentence, term_sentence
 from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
-from src.schemas import DETECTOR_RUNS, RANK_CANDIDATES, RANK_CONTEXT, RANK_EVIDENCE, SIGNALS
+from src.schemas import (
+    DETECTOR_RUNS,
+    RANK_CANDIDATES,
+    RANK_CONTEXT,
+    RANK_EVIDENCE,
+    RANK_ORIGIN,
+    SIGNALS,
+)
 
 UNIT_WILDCARD = "/*"
 
@@ -82,6 +90,10 @@ def candidates_data(
     }
     meta = _series_meta(con, keys)
     values = _series_values(con, keys, cfg)
+    origins = {
+        (r["source"], r["object_id"]): r
+        for r in _rank_rows(cfg, RANK_ORIGIN, "rank_origin", run_id)
+    }
     contexts = {
         r["candidate_id"]: json.loads(r["payload_json"])
         for r in _rank_rows(cfg, RANK_CONTEXT, "rank_context", run_id)
@@ -142,6 +154,12 @@ def candidates_data(
                     "effect_size": e["effect_size"],
                     "window": [e["window_start"], e["window_end"]],
                     "agencies": json.loads(e["agencies_json"]),
+                    "origin_chain": format_chain(json.loads(origins[k]["chain_json"]))
+                    if k in origins
+                    else "",
+                    "possible_same_origin": json.loads(origins[k]["possible_same_origin_json"])
+                    if k in origins
+                    else [],
                     "pelt": pelt,
                     "recent": {
                         "state": rec.state,

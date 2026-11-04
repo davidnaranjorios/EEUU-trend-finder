@@ -1,0 +1,30 @@
+# Tabla data_origin (ADR 0010, aprobada por David el 2026-11-04): ORIGEN primario del dato cuando
+# una agencia lo republica o lo deriva de otra. La independencia (principio 4) se cuenta por
+# origen, no por la agencia que publica. Es metodología de independencia, no una lista de temas:
+# el archivo solo lo lee src/rank/origin.py, que valida el esquema (versionado en git).
+# Cada regla: `match` (AND de source / release_id / agency / series_id_regex / units_regex),
+# `origin` (clave de origen; el mismo texto que la agencia raíz si es una agencia) y `chain`
+# (cadena legible, de la raíz a quien republica). Gana la primera regla que casa.
+# Una serie sin regla conserva su agencia como origen.
+version: 1
+rules:
+  - id: fdic_qbp_call_reports
+    match: {source: fred, release_id: 482}          # FDIC Quarterly Banking Profile
+    origin: call_reports
+    chain: [Call Reports (FFIEC), FDIC QBP]
+  - id: z1_banks_call_reports
+    # Z.1, sectores de bancos (códigos 73, 74, 76 en el id: bancos de EE. UU., sucursales extranjeras y áreas afiliadas): se arman con los Call Reports.
+    match: {source: fred, release_id: 52, series_id_regex: "^BOGZ1[A-Z]{2}(73|74|76)"}
+    origin: call_reports
+    chain: [Call Reports (FFIEC), Fed Z.1]
+  - id: z1_price_indices_bea
+    # Z.1, series que son índices (por unidades): usan los índices de precios de BEA.
+    match: {source: fred, release_id: 52, units_regex: "(?i)index"}
+    origin: bureau of economic analysis
+    chain: [BEA, Fed Z.1]
+  - id: oecd_mei_wages_bls
+    # OECD MEI (release 205), series de remuneración (prefijo LC) y empleo/paro (LR, LF):
+    # los valores de EE. UU. vienen de BLS.
+    match: {source: fred, release_id: 205, series_id_regex: "^L[CRF]"}
+    origin: bureau of labor statistics
+    chain: [BLS, OCDE MEI]
