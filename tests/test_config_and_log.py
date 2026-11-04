@@ -32,6 +32,8 @@ def test_config_loads_with_defaults():
         (("rank", "weights"), {"strength": -1.0}),
         (("rank", "embeddings", "backend"), "remoto"),
         (("detect", "sources"), []),
+        (("sources", "bea", "crawl_budget_share"), 0),
+        (("sources", "bls", "crawl_budget_share"), 1.5),
     ],
 )
 def test_invalid_config_rejected(path, value):

@@ -160,6 +160,47 @@ def test_crawl_budget_leaves_units_pending_and_resumes(tmp_path):
     assert second["units_unchanged"] == first["units_processed"]
 
 
+class _CountingVersions(SyntheticAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.version_calls = 0
+
+    def values_version(self, unit: Unit) -> str | None:
+        self.version_calls += 1
+        return super().values_version(unit)
+
+
+def test_download_without_budget_does_not_query_versions(tmp_path):
+    """En la corrida real, BEA gastó 12 min pidiendo versiones de 436 unidades que igual
+    quedaron pendientes: sin presupuesto no se consulta nada."""
+    adapter = _CountingVersions()
+    ing, _ = _ing(tmp_path, adapter)
+    ing.crawl(run_id="r1")
+    out = ing.download(budget_s=0.0)
+    assert adapter.version_calls == 0
+    assert out["units_pending"] == out["target_units"] > 0
+
+
+def test_update_reserves_budget_for_download_once_targets_exist(tmp_path):
+    """El crawl no se come todo el presupuesto cuando ya hay series que descargar."""
+    adapter = SyntheticAdapter()
+    ing, _ = _ing(tmp_path, adapter, crawl_budget_share=0.5)
+    first = ing.update(budget_s=10_000)  # sin objetivos aún: el crawl usa todo
+    assert first["crawl"]["units_processed"] == 3
+
+    seen: list[float | None] = []
+    crawl = ing.crawl
+
+    def spy(**kw):
+        seen.append(kw.get("budget_s"))
+        return crawl(**kw)
+
+    ing.crawl = spy
+    second = ing.update(budget_s=100.0, run_id="r2")
+    assert seen == [50.0]
+    assert "units_pending" in second["download"]
+
+
 def test_old_classification_is_refreshed(tmp_path):
     adapter = SyntheticAdapter()
     ing, _ = _ing(tmp_path, adapter, catalog_refresh_days=30)

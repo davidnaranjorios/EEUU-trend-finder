@@ -137,6 +137,9 @@ sources:
     timeout_s: 300
     catalog_refresh_days: 30
     write_batch_rows: 500000
+    # Parte del presupuesto de `update` que puede usar el crawl cuando ya hay series objetivo;
+    # el resto queda para la descarga (sin objetivos aún, el crawl usa todo).
+    crawl_budget_share: 0.5
     # Unidad entera excluida por una misma regla de fila (p. ej. encuesta sin datos recientes)
     # con al menos este número de series: una fila de linaje agregada (null = una por serie).
     lineage_aggregate_min_series: 100000
@@ -145,8 +148,11 @@ sources:
     max_retries: 6
     backoff_base_s: 2.0
     timeout_s: 300
-    catalog_refresh_days: 30
+    # Un crawl completo de BEA (2.014 tablas) toma ~4,5 h: con 30 días no cabría en el
+    # presupuesto semanal y la fuente recorrería el catálogo sin descargar nunca.
+    catalog_refresh_days: 90
     write_batch_rows: 500000
+    crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
   census:
     requests_per_minute: 60       # sin cupo publicado con key
@@ -155,6 +161,7 @@ sources:
     timeout_s: 300
     catalog_refresh_days: 30
     write_batch_rows: 500000
+    crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
 
 # Texto (Fase 3, ADR 0005). Solo se guardan text_hash y frecuencias, nunca el texto completo.

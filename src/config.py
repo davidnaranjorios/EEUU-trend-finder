@@ -194,6 +194,9 @@ def _validate_sources(src: dict[str, Any]) -> None:
         for key in ("backoff_base_s", "timeout_s"):
             if not isinstance(s.get(key), int | float) or s[key] <= 0:
                 raise ConfigError(f"sources.{name}.{key} debe ser positivo")
+        share = s.get("crawl_budget_share", 0.5)
+        if not isinstance(share, int | float) or not 0 < share <= 1:
+            raise ConfigError(f"sources.{name}.crawl_budget_share debe estar en (0, 1]")
         agg = s.get("lineage_aggregate_min_series")
         if agg is not None and (not isinstance(agg, int) or agg < 2):
             raise ConfigError(
