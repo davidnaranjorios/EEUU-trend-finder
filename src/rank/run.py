@@ -226,6 +226,7 @@ def series_info(
             agencies=agencies,
             release_ids=fred_releases.get(sid, ()) if src == "fred" else (),
             units=units.get((src, sid), ""),
+            title=title or "",
         )
         out[(src, sid)] = SeriesInfo(
             src,

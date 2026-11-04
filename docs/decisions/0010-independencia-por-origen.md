@@ -34,8 +34,8 @@ sigue fallando el guard, y otro que el esquema rechaza claves fuera de la lista 
 | Regla | Evidencia |
 |---|---|
 | release 482 (FDIC Quarterly Banking Profile) → Call Reports | nombre del release en `fred/releases` |
-| release 52 (Z.1), ids `BOGZ1xx73/74/76…` → Call Reports | `BOGZ1FL763065105Q` = "U.S.-Chartered Depository Institutions; One-to-Four-Family Residential Mortgages…" |
-| release 52, unidades "index" → BEA (índices de precios) | la Z.1 documenta que usa índices de BEA |
+| release 52 (Z.1), ids `BOGZ1xx70/73/74/76…` → Call Reports | `BOGZ1FL763065105Q` = "U.S.-Chartered Depository Institutions; One-to-Four-Family Residential Mortgages…" |
+| release 52, ids `BOGZ1xx075…` y título "Chain Weights" → BEA (índices de precios) | `BOGZ1FL075013203Q` = "Interest Rates and Price Indexes; Expenditures on Equipment; Chain Weights, Level" (unidades "Percent": por eso no se usa la regla por unidades). Tasas (`…072…`, `…073…`) no |
 | release 205 (OECD MEI), ids `LC*`, `LR*`, `LF*` → BLS | `LCEAMN01USM189S` = "Labor Compensation: Earnings: Manufacturing: Hourly for United States", release 205 |
 
 ## Otros casos plausibles, NO incluidos (revisar con datos)
@@ -51,3 +51,7 @@ sigue fallando el guard, y otro que el esquema rechaza claves fuera de la lista 
 
 La tabla es incompleta por naturaleza; el detector solo atrapa copias casi exactas (mismo nivel).
 Una derivación con otra transformación (índice, escala) escapa a ambos y queda para revisión.
+
+## Corrección (datos reales, corrida 702b8ff3)
+
+La primera versión no casaba el lado Z.1: HELOC `BOGZ1FL703065125Q` es sector 70 ("Private Depository Institutions") y los índices de precios de la Z.1 tienen unidades "Percent". Se añadió el sector 70 y la regla de índices pasó a id `…075…` + título `Chain Weights` (nuevo campo `title_regex`).

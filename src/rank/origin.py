@@ -22,7 +22,10 @@ import yaml
 from src.config import REPO_ROOT
 from src.rank.agencies import agency_key
 
-MATCH_KEYS = frozenset({"source", "release_id", "agency", "series_id_regex", "units_regex"})
+# Campos de una regla `match` (dos grupos: identidad de la serie y descripción de la serie).
+_ID_FIELDS = frozenset({"source", "release_id", "agency"})
+_DESC_FIELDS = frozenset({"series_id_regex", "units_regex", "title_regex"})
+MATCH_KEYS = _ID_FIELDS | _DESC_FIELDS
 DEFAULT_PATH = REPO_ROOT / "config" / "data_origin.yaml"
 
 
@@ -66,7 +69,7 @@ def validate_table(data: Any) -> list[Rule]:
             continue
         if "release_id" in m and not isinstance(m["release_id"], int):
             errors.append(f"{where}.match.release_id debe ser entero")
-        for k in ("series_id_regex", "units_regex"):
+        for k in ("series_id_regex", "units_regex", "title_regex"):
             if k in m:
                 try:
                     re.compile(m[k])
@@ -101,6 +104,7 @@ def resolve_origin(
     agencies: frozenset[str],
     release_ids: Iterable[int] = (),
     units: str = "",
+    title: str = "",
 ) -> Origin:
     """Origen de una serie: la primera regla que casa; si no, sus agencias."""
     rels = set(release_ids)
@@ -115,6 +119,8 @@ def resolve_origin(
         if "series_id_regex" in m and not re.search(m["series_id_regex"], series_id):
             continue
         if "units_regex" in m and not re.search(m["units_regex"], units or ""):
+            continue
+        if "title_regex" in m and not re.search(m["title_regex"], title or ""):
             continue
         return Origin(frozenset({r.origin}), r.chain, r.id)
     return Origin(agencies, ())
