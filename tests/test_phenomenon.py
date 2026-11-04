@@ -157,3 +157,48 @@ def test_related_selection_is_stable_across_runs(built):
     assert [json.loads(p)["related"] for (p,) in first if p] == [
         json.loads(p)["related"] for (p,) in second
     ]
+
+
+def test_stacked_panel_aligns_dates_and_puts_core_first():
+    import re
+
+    from src.report.charts import line_chart
+
+    d1, d2 = _months(120, 2005), _months(60, 2012)
+    series = [{"source": "s", "id": "core", "title": "Core", "units": "Index"}]
+    values = {("s", "core"): (d1, [100 + i for i in range(120)])}
+    related = [
+        {
+            "source": "s",
+            "series_id": "r1",
+            "title": "R1",
+            "units": "Percent",
+            "role": "tasa",
+            "downloaded": True,
+        },
+        {
+            "source": "s",
+            "series_id": "gone",
+            "title": "G",
+            "units": "",
+            "role": "otro",
+            "downloaded": False,
+        },
+    ]
+    rel_values = {("s", "r1"): (d2, [5.0 + (i % 7) for i in range(60)])}
+    bands = [(date(2008, 1, 1), date(2009, 6, 1))]
+    stack = ph.stacked_panel(series, values, related, rel_values, {}, bands, line_chart)
+    assert [e["key"] for e in stack] == ["s|core", "s|r1"] and stack[0]["core"]
+    ticks = [re.findall(r'text-anchor="middle">(\d{4})<', e["chart"]) for e in stack]
+    assert ticks[0] == ticks[1]  # mismo eje de fechas
+    assert all('class="rec"' in e["chart"] for e in stack[:1])  # recesión dentro del tramo
+
+
+def test_stack_panel_in_site(built):
+    fx, site = built
+    index = (site / "index.html").read_text("utf-8")
+    assert "Comparar con relacionadas" in index
+    assert 'class="stack-pick"' in index and 'type="checkbox"' in index
+    first = index.split('class="stack-item"', 2)[1]
+    assert "núcleo" in first.split("</figure>")[0]
+    assert "CRF" not in index.split("Comparar con relacionadas", 1)[1].split("Robustez", 1)[0]

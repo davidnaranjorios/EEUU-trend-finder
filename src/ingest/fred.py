@@ -355,7 +355,9 @@ class FredIngestor:
         `vintage_date` queda NULL ("no aplica"): las revisiones reemplazan el valor. El
         historial de publicación solo se guarda para la muestra de `vintages`.
         """
-        targets = self._targets(ids, self.cfg["download"]["groups"], category_id)
+        targets = self._targets(
+            ids, self.cfg["download"]["groups"], category_id, with_reference=category_id is None
+        )
         state = self._state(self.paths.fetch_state)
         todo = [r for r in targets if _needs_fetch(r, state.get(r["series_id"]))]
         if max_series is not None:
@@ -386,7 +388,10 @@ class FredIngestor:
         """
         if self.v2 is None:
             raise RuntimeError("download requiere el cliente de la API v2")
-        targets = {r["series_id"]: r for r in self._targets(None, self.cfg["download"]["groups"])}
+        targets = {
+            r["series_id"]: r
+            for r in self._targets(None, self.cfg["download"]["groups"], with_reference=True)
+        }
         attrs = {
             r["series_id"]: r
             for r in read_table(SERIES_ATTRS, self.paths.series_attrs, source=SOURCE).to_pylist()
@@ -605,9 +610,19 @@ class FredIngestor:
     # --- utilidades de descarga ----------------------------------------------------------------
 
     def _targets(
-        self, ids: list[str] | None, groups: list[str], category_id: int | None = None
+        self,
+        ids: list[str] | None,
+        groups: list[str],
+        category_id: int | None = None,
+        *,
+        with_reference: bool = False,
     ) -> list[dict[str, Any]]:
-        """Filas de catálogo de las series objetivo, ordenadas por id."""
+        """Filas de catálogo de las series objetivo, ordenadas por id.
+
+        `with_reference`: suma las series de referencia metodológica (context.reference_series,
+        ADR 0009) aunque el embudo no las clasifique en `groups`: la ficha del fenómeno las
+        necesita (deflactar, per cápita, recesiones). Nunca entran a detectores ni ranking.
+        """
         if ids is None:
             lineage = read_table(ELIGIBILITY, self.paths.eligibility, source=SOURCE)
             if lineage.num_rows == 0:
@@ -619,6 +634,9 @@ class FredIngestor:
             ids = [
                 r["series_id"] for r in rows if r["run_id"] == last and r["group_name"] in groups
             ]
+            if with_reference:
+                refs = (self.cfg.get("context") or {}).get("reference_series") or {}
+                ids += list(refs.values())
         catalog = read_table(
             FRED_CATALOG,
             self.paths.catalog,

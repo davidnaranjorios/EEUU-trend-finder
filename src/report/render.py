@@ -304,6 +304,39 @@ def _term_recent(t: dict[str, Any]) -> str:
 SA_NOTE = " · desestacionalizada en el gráfico"
 
 
+STACK_DEFAULT = 3  # relacionadas visibles al abrir el panel
+
+
+def _stack(entries: list[dict[str, Any]]) -> str:
+    """Panel de gráficos apilados (mismo eje de fechas) con selector de relacionadas."""
+    if len(entries) < 2:
+        return ""
+    boxes, charts = [], []
+    for i, e in enumerate(entries):
+        on = e["core"] or i <= STACK_DEFAULT
+        if not e["core"]:
+            boxes.append(
+                f'<label><input type="checkbox" data-key="{esc(e["key"])}"'
+                f"{' checked' if on else ''}> {esc(e['role'])}: {esc(e['title'])}</label>"
+            )
+        charts.append(
+            f'<figure class="stack-item" data-key="{esc(e["key"])}"{"" if on else " hidden"}>'
+            f'<p class="cap"><strong>{esc(e["title"])}</strong><br>{esc(e["units"]) or "—"} · '
+            f"{esc(src_name(e['source']))} · {esc(e['id'])} · {esc(e['role'])}</p>{e['chart']}"
+            "</figure>"
+        )
+    return concat(
+        "<h4>Comparar con relacionadas (mismo eje de fechas)</h4>",
+        '<p class="muted">El núcleo va siempre arriba; cada gráfico usa sus propias unidades. '
+        "Marca las relacionadas que quieras ver.</p>",
+        '<div class="stack"><div class="stack-pick">',
+        *boxes,
+        "</div>",
+        *charts,
+        "</div>",
+    )
+
+
 def _phenomenon(p: dict[str, Any] | None) -> str:
     """Ficha del fenómeno (descriptiva: sin p ni q; no cambia el ranking)."""
     if not p:
@@ -396,6 +429,7 @@ def _phenomenon(p: dict[str, Any] | None) -> str:
         else '<p class="muted">Sin series de la misma rama.</p>',
         '<p class="muted">Rezago descriptivo: > 0 significa que la relacionada va detrás del '
         "núcleo.</p>",
+        _stack(p.get("stack") or []),
         "<h4>Robustez</h4>",
         _table(
             wrows,

@@ -251,6 +251,20 @@ def test_only_target_groups_fetched(make, fake):
     assert fetched == {"AAA", "BBB", "FFF"}
 
 
+def test_reference_series_are_downloaded_outside_target_groups(make, fake, cfg):
+    # Una serie de referencia metodológica (ADR 0009) que el embudo deja fuera (EEE: historia
+    # corta) igual se descarga: la ficha del fenómeno la necesita.
+    cfg["context"]["reference_series"] = {
+        "deflator": "EEE",
+        "population": "AAA",
+        "recessions": "BBB",
+    }
+    ing = prepare(make)
+    ing.observations()
+    fetched = {p["series_id"] for e, p in fake.requests if e == "series/observations"}
+    assert fetched == {"AAA", "BBB", "FFF", "EEE"}
+
+
 def test_observations_max_series_reports_pending(make):
     ing = prepare(make)
     assert ing.observations(max_series=2)["pending"] == 1
