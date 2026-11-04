@@ -43,6 +43,7 @@ from src.detect.text import grid_start
 from src.ingest.fred import SERIES_ATTRS
 from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
+from src.rank import origin as origin_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
     ClusterParams,
@@ -62,6 +63,7 @@ from src.schemas import (
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
+    RANK_ORIGIN,
     RANK_RUNS,
     SERIES_TERM_LINKS,
     SIGNALS,
@@ -76,6 +78,7 @@ RANK_TABLES = {
     "series_term_links": SERIES_TERM_LINKS,
     "rank_candidates": RANK_CANDIDATES,
     "rank_evidence": RANK_EVIDENCE,
+    "rank_origin": RANK_ORIGIN,
     "rank_runs": RANK_RUNS,
     "rank_context": RANK_CONTEXT,
 }
@@ -133,7 +136,11 @@ class SeriesInfo:
     title: str
     units: str
     copyrighted: bool
-    agencies: frozenset[str]
+    agencies: frozenset[str]  # identidad de fuente para triangular: el ORIGEN (ADR 0010)
+    chain: tuple[str, ...] = ()  # cadena de origen, raíz primero (vacía si no hay regla)
+    rule_id: str | None = None
+    duplicates: tuple[str, ...] = ()  # "fuente|serie" de posibles copias de otra agencia
+    duplicate_rho: float | None = None
 
     @property
     def key(self) -> str:
@@ -198,18 +205,80 @@ def series_info(
             ).fetchall()
         }
     fred_agencies = _fred_agencies(cfg)
+    fred_releases = _fred_releases(cfg)
+    rules = origin_mod.load_rules(_origin_path(cfg))
+    # Las unidades solo se leen de las series con señal; las reglas por unidades las usan si hay.
     out = {}
     for src, sid, cr in keys:
         title, copyrighted = meta.get((src, sid), (None, cr))
+        agencies = series_agencies(src, fred_agencies.get(sid) if src == "fred" else None)
+        org = origin_mod.resolve_origin(
+            rules,
+            source=src,
+            series_id=sid,
+            agencies=agencies,
+            release_ids=fred_releases.get(sid, ()) if src == "fred" else (),
+            units=units.get((src, sid), ""),
+        )
         out[(src, sid)] = SeriesInfo(
             src,
             sid,
             title or sid,
             units.get((src, sid), ""),
             bool(copyrighted or cr),
-            series_agencies(src, fred_agencies.get(sid) if src == "fred" else None),
+            org.keys,
+            org.chain,
+            org.rule_id,
         )
     return out
+
+
+def _origin_path(cfg: dict[str, Any]) -> Any:
+    p = cfg["rank"].get("origin", {}).get("table")
+    return _resolve(p) if p else None
+
+
+def _fred_releases(cfg: dict[str, Any]) -> dict[str, list[int]]:
+    root = _resolve(cfg["paths"]["processed_dir"]) / "_internal" / "fred_series_attrs"
+    t = read_table(SERIES_ATTRS, root, source="fred")
+    if not t.num_rows:
+        return {}
+    return dict(
+        zip(t.column("series_id").to_pylist(), t.column("release_ids").to_pylist(), strict=True)
+    )
+
+
+def _flag_duplicates(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    keyed: list[tuple[str, str]],
+    rho: Any,
+    info: dict[tuple[str, str], SeriesInfo],
+) -> None:
+    """Marca "posible mismo origen" entre agencias distintas y unifica su identidad (ADR 0010)."""
+    oc = cfg["rank"]["origin"]
+    levels = {
+        (p.source, p.series_id): (
+            p.grid,
+            {p.first_index + i: float(v) for i, v in enumerate(p.level)},
+        )
+        for p in load_series(con, cfg, ids=keyed)
+    }
+    ident = {k: info[k].agencies for k in keyed}
+    pairs = origin_mod.find_duplicates(
+        keyed,
+        rho,
+        levels,
+        ident,
+        origin_mod.DuplicateParams(oc["duplicate_rho"], oc["level_tol"], oc["min_overlap"]),
+    )
+    origin_mod.merge_identities(ident, pairs)
+    for a, b, r in pairs:
+        for x, y in ((a, b), (b, a)):
+            info[x].duplicates = (*info[x].duplicates, f"{y[0]}|{y[1]}")
+            info[x].duplicate_rho = max(r, info[x].duplicate_rho or 0.0)
+    for k in keyed:
+        info[k].agencies = ident[k]
 
 
 def _fred_agencies(cfg: dict[str, Any]) -> dict[str, list[str]]:
@@ -366,6 +435,7 @@ def rank_run(
     if keyed:
         vec = emb.embed([f"{info[k].title} | {info[k].units}" for k in keyed])
         rho = growth_correlation([growth[k] for k in keyed], cp.min_overlap)
+        _flag_duplicates(con, cfg, keyed, rho, info)
         s = similarity(rho, vec @ vec.T, cp)
         labels = cluster_labels(s, cp.threshold)
         groups: dict[int, list[int]] = defaultdict(list)
@@ -585,11 +655,35 @@ def rank_run(
     _write("series_term_links", link_rows, cfg)
     _write("rank_candidates", cand_rows, cfg)
     _write("rank_evidence", ev_rows, cfg)
+    _write("rank_origin", origin_rows(run_id, candidates, info), cfg)
     _write("rank_context", context_rows, cfg)
     _write("rank_runs", [run_row], cfg)
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
+
+
+def origin_rows(
+    run_id: str, candidates: list[Candidate], info: dict[tuple[str, str], SeriesInfo]
+) -> list[dict[str, Any]]:
+    """Origen, cadena y posibles duplicados de cada serie que es evidencia."""
+    rows = {}
+    for c in candidates:
+        for e in c.evidence:
+            si = info.get((e.source, e.object_id))
+            if e.kind != "series" or si is None:
+                continue
+            rows[(e.source, e.object_id)] = {
+                "run_id": run_id,
+                "source": e.source,
+                "object_id": e.object_id,
+                "origin_json": json.dumps(sorted(si.agencies)),
+                "chain_json": json.dumps(list(si.chain)),
+                "rule_id": si.rule_id,
+                "possible_same_origin_json": json.dumps(sorted(si.duplicates)),
+                "duplicate_rho": si.duplicate_rho,
+            }
+    return [rows[k] for k in sorted(rows)]
 
 
 def _write(table: str, rows: list[dict[str, Any]], cfg: dict[str, Any]) -> None:

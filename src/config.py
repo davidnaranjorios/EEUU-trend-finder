@@ -314,6 +314,14 @@ def _validate_rank(r: dict[str, Any]) -> None:
         raise ConfigError("rank.weights: al menos un peso positivo")
     if (r.get("embeddings") or {}).get("backend") not in EMBEDDING_BACKENDS:
         raise ConfigError(f"rank.embeddings.backend debe ser uno de {EMBEDDING_BACKENDS}")
+    o = r.get("origin") or {}
+    if not isinstance(o.get("table"), str) or not o["table"]:
+        raise ConfigError("rank.origin.table debe ser la ruta de la tabla data_origin")
+    for key in ("duplicate_rho", "level_tol"):
+        if not isinstance(o.get(key), int | float) or not 0 <= o[key] <= 1:
+            raise ConfigError(f"rank.origin.{key} debe estar en [0, 1]")
+    if not isinstance(o.get("min_overlap"), int) or o["min_overlap"] < 2:
+        raise ConfigError("rank.origin.min_overlap debe ser un entero >= 2")
     c = r.get("cluster") or {}
     for key in ("alpha", "threshold", "duplicate_rho", "duplicate_cos"):
         if not isinstance(c.get(key), int | float) or not 0 <= c[key] <= 1:

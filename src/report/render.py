@@ -204,6 +204,20 @@ def _legend(has_window: bool, pelt: Any) -> str:
     return f'<p class="legend">{" · ".join(items)}</p>' if items else ""
 
 
+def _origin_rows(s: dict[str, Any]) -> str:
+    out = ""
+    if s.get("origin_chain"):
+        out += f"<dt>Origen del dato</dt><dd>{esc(s['origin_chain'])}</dd>\n"
+    if s.get("possible_same_origin"):
+        names = ", ".join(s["possible_same_origin"])
+        out += (
+            '<dt>Posible mismo origen</dt><dd class="muted">Serie de otra agencia con crecimiento '
+            f"y nivel casi idénticos ({esc(names)}): cuenta como una sola fuente; pendiente de "
+            "revisión humana.</dd>\n"
+        )
+    return out
+
+
 def _series_block(s: dict[str, Any]) -> str:
     dets = ", ".join(DETECTOR_NAMES.get(d, d) for d in s["detectors"])
     w = s["window"]
@@ -218,7 +232,8 @@ def _series_block(s: dict[str, Any]) -> str:
 <div><h3>{esc(s["title"])}</h3>{sentences}
 <dl><dt>Fuente</dt><dd>{esc(src_name(s["source"]))} · {esc(s["id"])}</dd>
 <dt>Agencia</dt><dd>{esc(agencies)}</dd>
-<dt>Unidades</dt><dd>{esc(s["units"])} ({esc(s["frequency"])}, {esc(s["seasonal_adjustment"])})</dd>
+{_origin_rows(s)}<dt>Unidades</dt>
+<dd>{esc(s["units"])} ({esc(s["frequency"])}, {esc(s["seasonal_adjustment"])})</dd>
 <dt>Detector</dt><dd>{esc(dets)}</dd>
 <dt>{tip("q (BH)", "q")}</dt><dd>{fq(s["q_value"])}</dd>
 <dt>{tip("Efecto", "efecto_sd")}</dt><dd>{fnum(s["effect_size"])} sd</dd>
@@ -482,6 +497,7 @@ def ranking_page(data: dict[str, Any]) -> str:
     rr = data["rank_run"]
     det = data["status"]["detectors"]
     tiles = concat(
+        f'<p class="muted" id="rank-run">Corrida: <code>{esc(rr.get("run_id"))}</code></p>',
         '<div class="tiles">',
         _tile("Series con señal", fnum(rr.get("n_signal_series"))),
         _tile("Términos con señal", fnum(rr.get("n_signal_terms"))),

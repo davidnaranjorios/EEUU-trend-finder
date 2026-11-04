@@ -102,6 +102,7 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
         category=None,
         sa="SA",
         detect=True,
+        release_ids=None,
     ):
         level = 100 * np.exp(np.cumsum(growth))
         series_rows.extend(
@@ -151,7 +152,7 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
                     "series_id": sid,
                     "geo_types": [],
                     "is_usa": True,
-                    "release_ids": [1],
+                    "release_ids": release_ids or [1],
                     "agencies": agencies or [],
                     "popularity": 1,
                 }
@@ -236,6 +237,35 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
         signal=True,
         copyrighted=True,
         agencies=["Third Party Publisher"],
+    )
+    # Distintas agencias y el mismo dato (ρ ≈ 1, nivel igual): "posible mismo origen" (ADR 0010).
+    mir_title, mir_growth = phrase(rng), trend()
+    add_series(
+        "mirror_a", "fred", "MIRA", mir_title, mir_growth, signal=True, agencies=["Agency One"]
+    )
+    add_series(
+        "mirror_b", "fred", "MIRB", mir_title, mir_growth, signal=True, agencies=["Agency Two"]
+    )
+    # Republicaciones de la tabla data_origin: Z.1 (bancos) y FDIC QBP -> Call Reports.
+    add_series(
+        "z1_bank",
+        "fred",
+        "BOGZ1FL763065105Q",
+        phrase(rng),
+        trend(),
+        signal=True,
+        agencies=["Board of Governors of the Federal Reserve System"],
+        release_ids=[52],
+    )
+    add_series(
+        "fdic_bank",
+        "fred",
+        "FDICQ1",
+        phrase(rng),
+        trend(),
+        signal=True,
+        agencies=["Federal Deposit Insurance Corporation"],
+        release_ids=[482],
     )
     add_series("noagency", "fred", "NOAG", phrase(rng), trend(), signal=True, agencies=[])
     for k in range(400):

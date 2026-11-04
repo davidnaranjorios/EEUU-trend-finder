@@ -225,7 +225,8 @@ Hecho: detectores numéricos sobre las 4 fuentes en una familia, identidad de fu
 de crecimientos + embeddings de títulos), cruces término–serie con embeddings locales
 (fastembed + bge-small-en-v1.5, umbral nulo por término desde `term_freq`), triangulación,
 score con pesos en `config.yaml` y sitio estático con ranking, dashboard y explorador, con
-barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009.
+barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009. Independencia por ORIGEN del
+dato (`config/data_origin.yaml` + detector de duplicados, `src/rank/origin.py`): ADR 0010.
 Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
 build`; en Actions, `.github/workflows/reporte.yml` (publica en GitHub Pages; otro destino con la
 variable `PUBLISH_TARGET`: cloudflare_pages o none). Tablas en `processed/rank/`:

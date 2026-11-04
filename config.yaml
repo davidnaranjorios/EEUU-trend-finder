@@ -220,6 +220,11 @@ federal_register:
 # parámetros: ningún tema, término ni serie.
 rank:
   min_sources: 2                  # fuentes independientes mínimas (principio 4; nunca < 2)
+  origin:                         # ADR 0010: independencia por ORIGEN del dato
+    table: config/data_origin.yaml  # republicaciones conocidas (esquema validado)
+    duplicate_rho: 0.98           # ρ de crecimientos > esto, de agencias distintas...
+    level_tol: 0.02               # ...y nivel casi igual (mediana de |a−b|/media ≤ tol): mismo origen
+    min_overlap: 12               # periodos comunes mínimos para comparar niveles
   max_candidates: 50              # tope por tipo de candidato y corrida
   embeddings:
     backend: fastembed            # fastembed (uv sync --group embed) | hashing (tests, sin red)
