@@ -25,9 +25,15 @@ rules:
       source: fred
       release_id: 52
       series_id_regex: "^BOGZ1[A-Z]{2}075"
-      title_regex: "(?i)chain weights"
+      title_regex: "(?i)chain weights|price index|price deflator"
     origin: bureau of economic analysis
     chain: [BEA, Fed Z.1]
+  - id: h8_call_reports
+    # H.8 (Assets and Liabilities of Commercial Banks): muestra semanal con benchmark a los
+    # Call Reports. No es independiente de ellos (ADR 0010, revisión 702b8ff3).
+    match: {source: fred, release_id: 22}
+    origin: call_reports
+    chain: [Call Reports (FFIEC), Fed H.8 (benchmark)]
   - id: oecd_mei_wages_bls
     # OECD MEI (release 205), series de remuneración (prefijo LC) y empleo/paro (LR, LF):
     # los valores de EE. UU. vienen de BLS.

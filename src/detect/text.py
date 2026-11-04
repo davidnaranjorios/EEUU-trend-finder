@@ -35,10 +35,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import multiprocessing
 import random
 import sys
 import zlib
+from collections import Counter
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
@@ -437,12 +439,34 @@ def priority_scores(
 # --- Corrida -----------------------------------------------------------------------------------
 
 
+_PER_YEAR = {"A": 1, "Q": 4, "M": 12, "W": 52, "D": 365}
+
+
+def break_year_histogram(signals: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Años de quiebre (inicio de la ventana) de las señales BH y bandera de artefacto.
+
+    Si más de la mitad de las señales (con al menos 10) cae en un solo año, el quiebre no es
+    de los términos sino del corpus (cobertura, cambio de formato): investigar antes de leerlas.
+    """
+    hist = Counter(s["window_start"].year for s in signals)
+    n = sum(hist.values())
+    year, top = hist.most_common(1)[0] if hist else (None, 0)
+    return {
+        "by_year": {str(y): hist[y] for y in sorted(hist)},
+        "n": n,
+        "artifact_suspect": bool(n >= 10 and top / n > 0.5),
+        "modal_year": year,
+    }
+
+
 def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: datetime) -> dict:
     """Prueba una fuente, cierra su familia (BH/BY) y escribe tests, signals y detector_runs."""
     td = cfg["text_detect"]
     grid = td["grid"][source]
     window = td["window"][grid]
     persistence = cfg["persistence"]["min_consecutive_periods"][grid]
+    # Persistencia mínima en años de calendario: la señal debe sostenerse >= min_signal_years.
+    persistence = max(persistence, math.ceil(td.get("min_signal_years", 0) * _PER_YEAR[grid]))
     recent = max(td["recent"][grid], persistence)
     cal = cfg["fdr"]["calibration"]
     q = float(cfg["fdr"]["q"])
@@ -457,7 +481,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         td["min_mean_share"],
         td["max_median_share"],
         min_entities=td["min_entities"].get(source, 0),
-        recent=max(td["recent"][grid], persistence),
+        recent=recent,
         boilerplate=td["boilerplate"],
         unigram_max_share=td["unigram_max_share"],
         min_industries=td["min_sic2"].get(source, 0),
@@ -573,6 +597,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "min_doc_count": cfg["text"]["min_doc_count"],
         "calibration": cal,
         "prefiltro": m.excluded,
+        "break_years": break_year_histogram(signals),
     }
     runs = [
         {
@@ -607,6 +632,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "prefiltro": m.excluded,
         "bh_rate": len(signals) / len(results) if results else 0.0,
         "approval_alert": alert,
+        "break_years": break_year_histogram(signals),
         "top": [(s["object_id"], round(s["effect_size"], 3), s["q_value"]) for s in top],
         "top_priority": [
             {

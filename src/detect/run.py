@@ -567,9 +567,12 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"{dd['series_after']} después ({len(dd['groups'])} grupos de variables repetidas).\n",
         )
     for det, s in report["detectors"].items():
+        flags = (" ⚠" if s.get("approval_alert") else "") + (
+            " ❓ posible falla" if s.get("possible_failure") else ""
+        )
         lines.append(
             f"| {det} | {s['n_tests']} | {s['n_bh']} | {s['bh_rate']:.2%}"
-            f"{' ⚠' if s.get('approval_alert') else ''}{' ❓ posible falla' if s.get('possible_failure') else ''} | {s['n_by']} | {s['bh_increase']} | "
+            f"{flags} | {s['n_by']} | {s['bh_increase']} | "
             f"{s['bh_decrease']} | {s['bh_copyrighted']} | "
             + ", ".join(f"{k} {v}" for k, v in sorted(s["p_method"].items()))
             + " |"

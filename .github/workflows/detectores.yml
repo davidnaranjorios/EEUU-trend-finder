@@ -88,6 +88,8 @@ jobs:
             cat data/logs/detectores.md 2>/dev/null || echo "sin reporte"
             cat data/logs/entrega_d.md 2>/dev/null || echo "Entrega D: sin ejemplos (el paso falló)"
             echo '```'
+            uv run python -m src.detect.summary 2>/dev/null || echo "sin histograma de quiebres"
+            echo '```'
             tail -n 1 data/logs/runs.jsonl 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

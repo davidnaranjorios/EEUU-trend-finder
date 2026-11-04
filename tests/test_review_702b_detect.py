@@ -62,3 +62,23 @@ def test_summarize_reports_when_p_floor_blocks_bh():
     ]
     s = summarize(rows, 0.05)
     assert s["p_floor_blocks_bh"] and s["n_bh"] == 0
+
+
+def test_score_uses_fixed_scale_under_five_candidates():
+    from src.rank.triangulate import _fixed_scale, _percentile
+
+    assert list(_percentile([5.0])) == [1.0]  # el percentil no distingue con 1 candidato
+    out = _fixed_scale("strength", [2.0, 5.0, 50.0])
+    assert list(out) == [0.2, 0.5, 1.0]
+
+
+def test_break_year_histogram_flags_single_year_artifact():
+    from datetime import date
+
+    from src.detect.text import break_year_histogram
+
+    sig = [{"window_start": date(2023, 1, 1)}] * 12 + [{"window_start": date(2019, 1, 1)}] * 2
+    h = break_year_histogram(sig)
+    assert h["by_year"] == {"2019": 2, "2023": 12} and h["artifact_suspect"]
+    spread = [{"window_start": date(2010 + i, 1, 1)} for i in range(12)]
+    assert not break_year_histogram(spread)["artifact_suspect"]
