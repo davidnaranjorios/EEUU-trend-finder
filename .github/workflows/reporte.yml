@@ -115,3 +115,5 @@ jobs:
     steps:
       - id: deploy
         uses: actions/deploy-pages@v5
+        with:
+          timeout: 1800000 # 30 min: el despliegue del 2026-11-04 superó los 10 min por defecto
