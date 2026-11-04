@@ -25,7 +25,7 @@ rules:
       source: fred
       release_id: 52
       series_id_regex: "^BOGZ1[A-Z]{2}075"
-      title_regex: "(?i)chain weights|price index|price deflator"
+      title_regex: "(?i)chain weights|price deflator"
     origin: bureau of economic analysis
     chain: [BEA, Fed Z.1]
   - id: h8_call_reports

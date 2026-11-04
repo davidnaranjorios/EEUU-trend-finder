@@ -59,9 +59,9 @@ La primera versión no casaba el lado Z.1: HELOC `BOGZ1FL703065125Q` es sector 7
 
 ## Revisión 702b8ff3 (2026-11-04)
 
-- **Z.1 ← BEA:** la regla `z1_price_indices_bea` ahora casa también títulos "price index" y
-  "price deflator" (índices de precios de equipo y similares del sector 07, instrumento 075),
-  además de "chain weights". Las series de BEA (`source: bea`) ya tienen origen BEA por su agencia.
+- **Z.1 ← BEA:** la regla `z1_price_indices_bea` ahora casa también títulos "price deflator"
+  (sector 07, instrumento 075), además de "chain weights". "Price index" a secas NO casa: el
+  índice de precios de inmuebles comerciales de la Z.1 no viene de BEA (test_origin). Las series de BEA (`source: bea`) ya tienen origen BEA por su agencia.
 - **H.8 = benchmark a Call Reports (no independiente):** la H.8 (FRED release 22) se estima con una
   muestra semanal y se ajusta a los Call Reports trimestrales; se trata como origen
   `call_reports` (regla `h8_call_reports`). Un candidato con H.8 más FDIC QBP o Z.1 de bancos cuenta
