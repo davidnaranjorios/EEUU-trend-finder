@@ -102,6 +102,8 @@ fdr:
   q: 0.05
   method: bh                    # único método que decide el ranking
   comparison_method: by         # solo se reporta como comparación
+  # Alerta: un detector con tasa BH (n_bh/n_tests) > factor × la mediana de los demás.
+  approval_alert: {factor: 3.0, min_rate: 0.001}
   family: detector_run          # una familia por detector y por corrida
   calibration:
     method: stationary_bootstrap  # block bootstrap; no permutación simple
@@ -189,6 +191,43 @@ text_detect:
   min_entities: {edgar: 0, federal_register: 3}   # medido en FR 2016–2026 (ADR 0008)
   block_sample: 5000              # términos para la mediana de la longitud de bloque automática
   workers: 4
+  # Punto de quiebre estimado por término (revisión 2a02c981): el inicio del crecimiento es el
+  # largo de segmento L en [persistencia, recent] que maximiza T; el máximo también está en el
+  # nulo. `recent` es solo el tope de L, no un corte fijo.
+  # Deriva del corpus: cada término se mide contra la mediana de cambio de los términos con
+  # prevalencia base parecida (cuantiles de la línea base); el nulo se arma sobre esa serie corregida.
+  drift: {bins: 20, min_bin: 30}
+  # Especificidad: unigramas con prevalencia media >= esto se excluyen (prevalencia base alta),
+  # y todo n-grama debe tener al menos un token con forma de sustantivo (heurística de
+  # sufijos, sin modelos ni licencias externas; src/detect/text_filters.py).
+  unigram_max_share: 0.05
+  # Prioridad en la entrega D: efecto × (1 + bonus por palabra extra) / (1 + prevalencia/ref).
+  priority: {ngram_bonus: 0.25, base_share_ref: 0.05}
+  top_n: 20                       # términos de la entrega D
+  # Frases de boilerplate (aprobadas por David el 2026-11-04). Un n-grama que las contiene
+  # (secuencia contigua de tokens) se excluye. Única lista de frases admitida por el guard.
+  boilerplate:
+    - send written
+    - written comments
+    - submit comments
+    - comments must be
+    - for further information
+    - further information contact
+    - supplementary information
+    - federal register
+    - forward looking statements
+    - form 10 k
+    - annual report
+    - table of contents
+    - securities and exchange commission
+    - securities exchange act
+    - not applicable
+    - item 1a
+    - risk factors
+    - results of operations
+  # Amplitud entre grupos SIC de 2 dígitos (EDGAR): n_industries mediana en la ventana
+  # reciente. 0 = no se excluye por esto; sí penaliza el score (src/rank/triangulate.py).
+  min_sic2: {edgar: 0, federal_register: 0}
 
 edgar:
   base_url: https://www.sec.gov
@@ -201,7 +240,7 @@ edgar:
   timeout_s: 120
   min_chars: 2000                 # secciones más cortas (p. ej. "no aplica") -> muy_corta
   closed_grace_days: 7            # un trimestre se congela 7 días después de terminar
-  reprocess_below_schema: 1       # n_entities ≈ doc_count (un 10-K por empresa): no se re-baja
+  reprocess_below_schema: 4       # v4: n_industries (SIC) obliga a volver a bajar los periodos cerrados
   submissions_api_max_ciks: 500   # más CIK que esto: se usa submissions.zip (una descarga)
   submissions_zip_max_age_hours: 20
 
@@ -246,6 +285,11 @@ rank:
     null_sample: 2000
     top_k: 20                     # series por término, como máximo
     require_overlap: true         # la ventana del término alcanza la de la señal numérica
+    # El coseno de títulos solo SUGIERE pares. Un par cuenta como vínculo (y el término como
+    # segunda fuente) si pasa la prueba de co-movimiento: Δ logit anual del término contra el
+    # crecimiento anual de la serie, rezagos ±max_lag, stationary bootstrap por bloques con
+    # índices compartidos y su propia familia BH (q = fdr.q).
+    comove: {max_lag: 2, min_overlap: 8, n_resamples: 999, block_length: auto, seed: 20261104}
     seed: 20261103
   text_only:
     enabled: true                 # términos parecidos emergentes en ≥ 2 fuentes de texto

@@ -18,6 +18,8 @@ El sistema propone candidatos. La interpretación final la hace un humano.
      población y recesiones;
    - tiene exactamente esas claves, y el guard no acepta ids de serie en ninguna otra parte;
    - esas series no entran a los detectores ni al ranking.
+   Segunda excepción, aprobada por David el 2026-11-04 (ADR 0011): `text_detect.boilerplate` es una
+   lista de frases de boilerplate que el detector de texto excluye; solo esa clave la admite.
 2. **El set de evaluación está aislado.** Los eventos históricos conocidos viven solo en
    `eval/known_events.yaml` y solo los lee `eval/`. Un test debe fallar si algún módulo de
    `src/` importa o lee algo de `eval/` (`tests/test_isolation.py`).

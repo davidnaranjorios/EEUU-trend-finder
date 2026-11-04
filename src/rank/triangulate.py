@@ -30,7 +30,7 @@ class Components:
     n_sources: float = 0.0
     effect: float = 0.0  # |efecto| mediano de las series (o de los términos, si no hay series)
     agreement: float = 0.0  # fracción de detectores numéricos presentes
-    breadth: float = 0.0  # log(1 + entidades) del término más amplio
+    breadth: float = 0.0  # dispersión entre industrias (SIC) menos prevalencia base; ver abajo
     size: float = 0.0  # log(1 + miembros)
 
 
@@ -52,6 +52,11 @@ class Evidence:
     link_score: float | None = None
     linked_series: str | None = None  # "fuente|serie" del miembro al que se enlazó el término
     n_entities: int | None = None
+    n_industries: float | None = None  # dispersión entre industrias (SIC); None = no medida
+    base_share: float | None = None  # prevalencia base del término
+    link_validated: bool | None = None  # co-movimiento validado (None: no aplica)
+    link_q: float | None = None
+    link_lag: int | None = None
 
 
 @dataclass
@@ -86,6 +91,16 @@ def assess(c: Candidate, min_sources: int) -> Candidate:
     return c
 
 
+def _breadth(e: Evidence) -> float | None:
+    """Amplitud del término: log(1 + industrias distintas), o de entidades si no hay SIC, con
+    una penalización por prevalencia base (una palabra común no es amplia por ser común): se
+    divide por 1 + prevalencia / 0,05 (misma referencia que `text_detect.priority`)."""
+    n = e.n_industries if e.n_industries is not None else e.n_entities
+    if not n:
+        return None
+    return math.log1p(n) / (1.0 + (e.base_share or 0.0) / 0.05)
+
+
 def raw_components(c: Candidate, detectors: Sequence[str]) -> dict[str, float]:
     """Componentes del score antes de normalizar."""
     strength = []
@@ -95,14 +110,16 @@ def raw_components(c: Candidate, detectors: Sequence[str]) -> dict[str, float]:
     series = [e for e in c.evidence if e.kind == "series"]
     effects = [abs(e.effect_size) for e in (series or c.evidence)]
     dets = {d for e in series for d in e.detectors}
-    ents = [e.n_entities for e in c.evidence if e.kind == "term" and e.n_entities]
+    terms = [e for e in c.evidence if e.kind == "term"]
+    ents = [_breadth(e) for e in terms]
+    ents = [v for v in ents if v is not None]
     return asdict(
         Components(
             strength=float(np.median(strength)) if strength else 0.0,
             n_sources=float(c.n_sources),
             effect=float(np.median(effects)) if effects else 0.0,
             agreement=len(dets & set(detectors)) / max(len(detectors), 1),
-            breadth=math.log1p(max(ents)) if ents else 0.0,
+            breadth=max(ents) if ents else 0.0,
             size=math.log1p(c.n_members),
         )
     )

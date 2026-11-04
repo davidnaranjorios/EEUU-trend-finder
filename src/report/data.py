@@ -15,6 +15,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
+from src.detect.approval import alert_flags
 from src.detect.run import REFERENCE_SOURCE, RUNS_PARTITION, _resolve, table_root
 from src.detect.text import grid_start
 from src.ingest.store import read_table
@@ -471,6 +472,15 @@ def system_status(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dict[
                     "q": r["q"],
                 }
             )
+    ac = cfg["fdr"]["approval_alert"]
+    flags = alert_flags(
+        [{**d, "detector": f"{d['family']}/{d['detector']}"} for d in detectors],
+        ac["factor"],
+        ac["min_rate"],
+    )
+    for d in detectors:
+        d["bh_rate"] = d["n_bh"] / d["n_tests"] if d["n_tests"] else 0.0
+        d["alert"] = flags[f"{d['family']}/{d['detector']}"]
     return {
         "generated_at": datetime.now(UTC).replace(microsecond=0),
         "runs": dict(sorted(last.items())),

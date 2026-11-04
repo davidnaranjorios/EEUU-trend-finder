@@ -83,10 +83,19 @@ class PeriodCounter:
         self._chunks: dict[str, list[np.ndarray]] = defaultdict(list)
         self._entities: dict[str, list[int]] = defaultdict(list)
         self._entity_ids: dict[str | None, int] = {}
+        self._groups: dict[str, list[int]] = defaultdict(list)
+        self._group_ids: dict[str | None, int] = {}
         self.total_docs: dict[str, int] = defaultdict(int)
 
-    def add(self, section: str, hashes: np.ndarray, entity: str | None = None) -> None:
+    def add(
+        self,
+        section: str,
+        hashes: np.ndarray,
+        entity: str | None = None,
+        group: str | None = None,
+    ) -> None:
         self._chunks[section].append(hashes)
+        self._groups[section].append(self._group_ids.setdefault(group, len(self._group_ids)))
         # Sin entidad (p. ej. documentos presidenciales) cuenta como una entidad más.
         self._entities[section].append(self._entity_ids.setdefault(entity, len(self._entity_ids)))
         self.total_docs[section] += 1
@@ -97,11 +106,20 @@ class PeriodCounter:
         Documento por documento se guardan solo los aciertos como código (posición, entidad);
         los pares repetidos son documentos de una misma entidad y cuentan una vez.
         """
+        return self._distinct(section, hashes, self._entities[section], len(self._entity_ids))
+
+    def n_groups(self, section: str, hashes: np.ndarray) -> np.ndarray | None:
+        """Industrias distintas (SIC) por hash; None si ningún documento trae industria."""
+        if set(self._group_ids) <= {None}:
+            return None
+        return self._distinct(section, hashes, self._groups[section], len(self._group_ids))
+
+    def _distinct(self, section: str, hashes: np.ndarray, ids: list[int], n_ids: int) -> np.ndarray:
         if hashes.size == 0:
             return np.zeros(0, dtype=np.int64)
-        n_ent = max(len(self._entity_ids), 1)
+        n_ent = max(n_ids, 1)
         codes = []
-        for chunk, ent in zip(self._chunks.get(section, []), self._entities[section], strict=True):
+        for chunk, ent in zip(self._chunks.get(section, []), ids, strict=True):
             idx = np.searchsorted(hashes, chunk)
             ok = idx < hashes.size
             ok[ok] = hashes[idx[ok]] == chunk[ok]

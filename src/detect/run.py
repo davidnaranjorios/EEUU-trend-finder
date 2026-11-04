@@ -35,6 +35,7 @@ import pyarrow as pa
 
 from src.catalog import connect
 from src.config import REPO_ROOT, load_config
+from src.detect.approval import annotate
 from src.detect.family import FamilyParams, Item, run_family
 from src.detect.numeric import locate_break
 from src.ingest.store import bucket_of, read_table, upsert
@@ -447,9 +448,17 @@ def finalize(
             }
         )
         report["detectors"][detector] = summarize(rows, q)
+    ac = cfg["fdr"]["approval_alert"]
+    for r, a in zip(runs, annotate(runs, ac["factor"], ac["min_rate"]), strict=True):
+        extra = {"bh_rate": a["bh_rate"], "approval_alert": a["alert"]}
+        r["params_json"] = json.dumps({**json.loads(r["params_json"]), **extra}, sort_keys=True)
     write_by_source(DETECTOR_TESTS, tests, table_root(cfg, "detector_tests"), "object_id")
     write_by_source(SIGNALS, signals, table_root(cfg, "signals"), "object_id")
     write(DETECTOR_RUNS, runs, table_root(cfg, "detector_runs"), RUNS_PARTITION, "run_id")
+    for det, a in zip(
+        report["detectors"], annotate(runs, ac["factor"], ac["min_rate"]), strict=False
+    ):
+        report["detectors"][det]["approval_alert"] = a["alert"]
     save_report(cfg, report)
     if log is not None:
         log.info("familias cerradas", extra={"fields": {"run_id": run_id, "signals": len(signals)}})
@@ -493,6 +502,7 @@ def summarize(rows: list[dict[str, Any]], q: float) -> dict[str, Any]:
         "n_tests": len(rows),
         "n_bh": len(bh),
         "n_by": sum(r["q_by"] <= q for r in rows),
+        "bh_rate": len(bh) / len(rows) if rows else 0.0,
         "by_frequency": dict(sorted(by_freq.items())),
         "by_source": dict(sorted(by_src.items())),
         "p_method": dict(Counter(r["p_method"] for r in rows)),
@@ -508,12 +518,13 @@ def to_markdown(report: dict[str, Any]) -> str:
         "",
         f"Fecha: {report['run_date']} · q = {report['q']} · BH decide; BY es solo comparación.",
         "",
-        "| Detector | Pruebas | BH | BY | Suben | Bajan | Con copyright (BH) | Método del p |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Detector | Pruebas | BH | % BH | BY | Suben | Bajan | Con copyright | Método del p |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for det, s in report["detectors"].items():
         lines.append(
-            f"| {det} | {s['n_tests']} | {s['n_bh']} | {s['n_by']} | {s['bh_increase']} | "
+            f"| {det} | {s['n_tests']} | {s['n_bh']} | {s['bh_rate']:.2%}"
+            f"{' ⚠' if s.get('approval_alert') else ''} | {s['n_by']} | {s['bh_increase']} | "
             f"{s['bh_decrease']} | {s['bh_copyrighted']} | "
             + ", ".join(f"{k} {v}" for k, v in sorted(s["p_method"].items()))
             + " |"
