@@ -194,6 +194,8 @@ class EdgarSource:
         self.data = data
         self.raw_dir = raw_dir
         self.forms = set(cfg["forms"])
+        self.sic: dict[int, str] = {}  # CIK -> SIC de 2 dígitos (de submissions)
+        self.names: dict[int, str] = {}  # CIK -> nombre del emisor (de submissions)
 
     @classmethod
     def from_config(
@@ -280,6 +282,8 @@ class EdgarSource:
 
         failed: list[DocResult] = []
         analyzed = list(ctx.run_tasks(analyze_filing, tasks()))
+        for d in analyzed:
+            d.group = self.sic.get(int(d.entity)) if d.entity and d.entity.isdigit() else None
         return docs + analyzed + failed
 
     # Documento principal
@@ -295,6 +299,7 @@ class EdgarSource:
                     if exc.status == 404:
                         continue
                     raise
+                self._note_sic(cik, sub)
                 out.update(_primary_from(sub, wanted))
                 for extra in sub.get("filings", {}).get("files", []):
                     if wanted <= out.keys():
@@ -310,8 +315,18 @@ class EdgarSource:
                 by_cik.setdefault(name[3:13], []).append(name)
             for cik in ciks:
                 for name in sorted(by_cik.get(f"{cik:010d}", [])):
-                    out.update(_primary_from(json.loads(zf.read(name)), wanted))
+                    sub = json.loads(zf.read(name))
+                    self._note_sic(cik, sub)
+                    out.update(_primary_from(sub, wanted))
         return out
+
+    def _note_sic(self, cik: int, sub: dict[str, Any]) -> None:
+        """Industria: primeros 2 dígitos del SIC del emisor (el archivo extra no lo trae)."""
+        if sub.get("name"):
+            self.names[cik] = str(sub["name"])
+        sic = str(sub.get("sic") or "").strip()
+        if sic.isdigit() and len(sic) >= 2:
+            self.sic[cik] = sic.zfill(4)[:2]
 
     def _submissions_zip(self) -> Path:
         path = self.raw_dir / SOURCE / "submissions.zip"

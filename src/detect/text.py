@@ -18,6 +18,12 @@ el par (sección, término) de `term_freq`. Todo sale de los datos: no hay lista
    periodos (persistencia de config) menos la media de los `W` periodos previos a la ventana
    reciente `R` (R >= k): solo es grande si todos los últimos k periodos están elevados, así
    que un salto aislado no cuenta.
+4b. **Quiebre y deriva** (revisión 2a02c981). El inicio del crecimiento de cada término se estima:
+   T es el máximo sobre el largo de segmento L en [persistencia, `recent`] (`emerging_stat_break`),
+   y la ventana del término empieza en el periodo `G - L`; el máximo también está en el nulo.
+   Antes, cada término se corrige por la deriva del corpus (mediana de cambio de los términos de
+   prevalencia base parecida, `drift_adjust`); estadístico y nulo usan la serie corregida.
+   La ventana nunca termina después del último documento (`text_docs`).
 5. **Nulo.** Post-blackening AR(1) de la historia previa a la ventana reciente R (si el
    crecimiento empezó dentro de R no contamina el nulo; medido: con el inicio en la línea base,
    φ subía de 0,2 a 0,6 y el p de un término inyectado pasaba de 1e-10 a 4e-4)
@@ -35,7 +41,7 @@ import sys
 import zlib
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -44,7 +50,9 @@ import duckdb
 import numpy as np
 
 from src.config import REPO_ROOT, load_config
+from src.detect.approval import alert_flags, latest_runs
 from src.detect.run import signal_id, table_root, write
+from src.detect.text_filters import drift_adjust, emerging_stat_break, specific_mask
 from src.log import get_logger, run
 from src.schemas import DETECTOR_RUNS, DETECTOR_TESTS, SIGNALS
 from src.stats.bootstrap import (
@@ -111,6 +119,9 @@ class TermMatrix:
     counts: np.ndarray  # (K, G) documentos con el término (censura imputada)
     totals: np.ndarray  # (K, G) documentos de la sección
     excluded: dict[str, int]
+    mean_share: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (K,) prevalencia base
+    industries: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (K,) NaN = no medido
+    last_doc_date: date | None = None
 
 
 def load_matrix(
@@ -121,6 +132,10 @@ def load_matrix(
     max_median_share: float,
     min_entities: int = 0,
     recent: int = 0,
+    boilerplate: Sequence[str] = (),
+    unigram_max_share: float = 1.0,
+    min_industries: int = 0,
+    docs_files: Sequence[Path] = (),
 ) -> TermMatrix:
     """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla.
 
@@ -131,9 +146,11 @@ def load_matrix(
     """
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
+    ind_col = "n_industries" if _has_column(files, "n_industries") else "NULL::BIGINT"
     con.execute(
         "CREATE TEMP TABLE tf AS SELECT section, period, term, doc_count, total_docs, "
-        "n_entities FROM read_parquet(?, union_by_name = true)",
+        f"n_entities, {ind_col} AS n_industries "
+        "FROM read_parquet(?, union_by_name = true)",
         [[str(f) for f in files]],
     )
     # Totales por sección y subperiodo (una fila por subperiodo con documentos).
@@ -179,7 +196,8 @@ def load_matrix(
         WITH share AS (
           SELECT tf.section, tf.term, sum(tf.doc_count) AS c FROM tf GROUP BY 1, 2),
         tot AS (SELECT section, sum(total_docs) AS n FROM sp GROUP BY 1)
-        SELECT share.section, share.term FROM share JOIN tot USING (section)
+        SELECT share.section, share.term, share.c / tot.n AS mean_share
+        FROM share JOIN tot USING (section)
         WHERE share.c / tot.n >= ?
           AND NOT EXISTS (SELECT 1 FROM stop s WHERE s.section = share.section AND (
                 s.term = split_part(share.term, ' ', 1)
@@ -213,17 +231,64 @@ def load_matrix(
     n_all = con.execute("SELECT count(*) FROM (SELECT DISTINCT section, term FROM tf)").fetchone()[
         0
     ]
-    keys = con.execute("SELECT section, term FROM keep ORDER BY 1, 2").fetchall()
+    rows = con.execute("SELECT section, term, mean_share FROM keep ORDER BY 1, 2").fetchall()
+    n_prefilter = len(rows)
+    function_words = {r[0] for r in con.execute("SELECT DISTINCT term FROM stop").fetchall()}
+    ok = specific_mask(
+        [r[1] for r in rows],
+        np.array([r[2] for r in rows]),
+        function_words,
+        list(boilerplate),
+        unigram_max_share,
+    )
+    rows = [r for r, good in zip(rows, ok, strict=True) if good]
+    n_specific = n_prefilter - len(rows)
+    keys = [(r[0], r[1]) for r in rows]
+    mean_share = np.array([r[2] for r in rows])
+    industries = np.full(len(keys), np.nan)
+    n_few_ind = 0
+    if keys and complete and recent > 0:
+        recent_grid = set(complete[-recent:])
+        recent_subs = sorted({p for _, p, _ in tot if to_grid(p, grid) in recent_grid})
+        got = {
+            (sec, term): amp
+            for sec, term, amp in con.execute(
+                "SELECT section, term, median(n_industries) FROM tf "
+                "WHERE period IN (SELECT unnest(?)) AND n_industries IS NOT NULL GROUP BY 1, 2",
+                [recent_subs],
+            ).fetchall()
+        }
+        industries = np.array([got.get(k, np.nan) for k in keys], dtype=float)
+        if min_industries > 0:
+            few = np.nan_to_num(industries, nan=np.inf) < min_industries
+            n_few_ind = int(few.sum())
+            keys = [k for k, f in zip(keys, few, strict=True) if not f]
+            mean_share, industries = mean_share[~few], industries[~few]
+    last_doc = None
+    if docs_files:
+        last_doc = con.execute(
+            "SELECT max(date) FROM read_parquet(?, union_by_name = true)",
+            [[str(f) for f in docs_files]],
+        ).fetchone()[0]
     excluded = {
         "candidatos": int(n_all),
         "palabras_funcionales": int(n_stop),
         "excluidos_prefiltro": int(n_all - len(keys)),
+        "excluidos_especificidad": int(n_specific),
+        "excluidos_pocas_industrias": n_few_ind,
         "excluidos_amplitud": int(n_narrow),
         "sin_medida_amplitud": int(n_unmeasured),
     }
     if not keys or not complete:
         con.close()
-        return TermMatrix(complete, [], np.zeros((0, len(complete))), np.zeros((0, 0)), excluded)
+        return TermMatrix(
+            complete,
+            [],
+            np.zeros((0, len(complete))),
+            np.zeros((0, 0)),
+            excluded,
+            last_doc_date=last_doc,
+        )
 
     # Celdas (término × subperiodo) con la censura imputada en el tope, agregadas a la grilla.
     cells = con.execute(
@@ -243,10 +308,18 @@ def load_matrix(
         j = col.get(to_grid(period, grid))
         if j is None:
             continue
-        i = row[(section, term)]
+        i = row.get((section, term))
+        if i is None:  # excluido por especificidad o amplitud
+            continue
         counts[i, j] += min(c, n)
         totals[i, j] += n
-    return TermMatrix(complete, keys, counts, totals, excluded)
+    return TermMatrix(complete, keys, counts, totals, excluded, mean_share, industries, last_doc)
+
+
+def _has_column(files: Sequence[Path], name: str) -> bool:
+    import pyarrow.parquet as pq
+
+    return any(name in pq.read_schema(f).names for f in files)
 
 
 def logit_share(counts: np.ndarray, totals: np.ndarray) -> np.ndarray:
@@ -275,18 +348,24 @@ class TermTestParams:
     tail: TailConfig
 
 
-def term_test(x: np.ndarray, idx: np.ndarray, params: TermTestParams) -> tuple[float, float, str]:
-    """(T, p, método) de un término; `idx` (B, W + R + burn-in) sobre la historia previa a la
-    ventana reciente R: así un crecimiento que empezó dentro de R no contamina el nulo."""
+def term_test(
+    x: np.ndarray, idx: np.ndarray, params: TermTestParams
+) -> tuple[float, float, str, int]:
+    """(T, p, método, L) de un término; `idx` (B, W + R + burn-in) sobre la historia previa a la
+    ventana reciente R: así un crecimiento que empezó dentro de R no contamina el nulo.
+
+    L es el quiebre estimado (largo del segmento elevado). El máximo sobre L se calcula igual en
+    el nulo, de modo que la selección del quiebre no infla el p."""
     k, r = params.persistence, params.recent
-    t_obs = float(emerging_stat(x, params.window, k, r))
+    t_arr, l_arr = emerging_stat_break(x, params.window, k, r)
+    t_obs, length = float(t_arr), int(l_arr)
     if t_obs <= 0:
-        return t_obs, 1.0, "empirical"
+        return t_obs, 1.0, "empirical", length
     base = x[:-r]
     null = ar_null(base, idx, fit_ar1(base, params.phi_margin))
-    t_null = emerging_stat(null, params.window, k, r)
+    t_null = emerging_stat_break(null, params.window, k, r)[0]
     p, method = bootstrap_p(t_obs, t_null, params.tail)
-    return t_obs, float(p), method
+    return t_obs, float(p), method, length
 
 
 _IDX: np.ndarray | None = None
@@ -298,7 +377,7 @@ def _init_worker(idx: np.ndarray, params: TermTestParams) -> None:
     _IDX, _PARAMS = idx, params
 
 
-def _test_chunk(xs: np.ndarray) -> list[tuple[float, float, str]]:
+def _test_chunk(xs: np.ndarray) -> list[tuple[float, float, str, int]]:
     return [term_test(x, _IDX, _PARAMS) for x in xs]
 
 
@@ -311,7 +390,7 @@ def run_family(
     source: str,
     workers: int = 1,
     block_sample: int = 5000,
-) -> tuple[list[tuple[float, float, str]], float]:
+) -> tuple[list[tuple[float, float, str, int]], float]:
     """Prueba todas las filas de `x` (K, G) con una sola matriz de índices compartida."""
     k = params.recent
     base_len = x.shape[1] - k
@@ -331,6 +410,28 @@ def run_family(
     with ProcessPoolExecutor(workers, ctx, _init_worker, (idx, params)) as pool:
         out = [r for chunk in pool.map(_test_chunk, chunks) for r in chunk]
     return out, block
+
+
+def priority_scores(
+    keys: list[tuple[str, str]],
+    effect: np.ndarray,
+    mean_share: np.ndarray,
+    industries: np.ndarray,
+    cfg: dict[str, float],
+) -> np.ndarray:
+    """Prioridad para la entrega: efecto, con bonus por palabras extra (2–3 palabras antes que
+    unigramas), penalizada por la prevalencia base (las palabras comunes no ganan por común) y
+    ponderada por la dispersión entre industrias cuando se midió (log relativo al máximo)."""
+    if not keys:
+        return np.zeros(0)
+    n_tok = np.array([len(term.split()) for _, term in keys], dtype=float)
+    pr = np.maximum(effect, 0.0) * (1 + cfg["ngram_bonus"] * (n_tok - 1))
+    pr = pr / (1 + mean_share / cfg["base_share_ref"])
+    if np.isfinite(industries).any():
+        top = np.log1p(np.nanmax(industries))
+        wide = np.log1p(np.nan_to_num(industries, nan=0.0)) / top if top > 0 else 1.0
+        pr = np.where(np.isfinite(industries), pr * (0.5 + 0.5 * wide), pr)
+    return pr
 
 
 # --- Corrida -----------------------------------------------------------------------------------
@@ -357,6 +458,10 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         td["max_median_share"],
         min_entities=td["min_entities"].get(source, 0),
         recent=max(td["recent"][grid], persistence),
+        boilerplate=td["boilerplate"],
+        unigram_max_share=td["unigram_max_share"],
+        min_industries=td["min_sic2"].get(source, 0),
+        docs_files=sorted((processed / "text_docs" / source).glob("*/*.parquet")),
     )
     g = len(m.periods)
     if g < window + recent + 3:
@@ -365,6 +470,9 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
             f"{window + recent + 3} (ventana previa + reciente + línea base)"
         )
     x = logit_share(m.counts, m.totals)
+    # Deriva del corpus: cada término contra la mediana de los de prevalencia base parecida.
+    if td["drift"]["bins"] > 0:  # bins = 0 desactiva la corrección (solo para comparar)
+        x, _ = drift_adjust(x, slice(0, g - recent), td["drift"]["bins"], td["drift"]["min_bin"])
     params = TermTestParams(
         window,
         persistence,
@@ -384,12 +492,17 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
     )
     p = np.array([r[1] for r in results])
     q_bh, q_by = bh_adjust(p), by_adjust(p)
-    w_start = grid_start(m.periods[-recent])
+    # La ventana nunca termina después del último documento de la fuente.
     w_end = grid_end(m.periods[-1])
+    if m.last_doc_date is not None:
+        w_end = min(w_end, m.last_doc_date)
     run_date = datetime.now(UTC).date()
     tests, signals = [], []
-    for (section, term), (t, pv, method), a, b in zip(m.keys, results, q_bh, q_by, strict=True):
+    for (section, term), (t, pv, method, length), a, b in zip(
+        m.keys, results, q_bh, q_by, strict=True
+    ):
         object_id = f"{section}|{term}"
+        w_start = min(grid_start(m.periods[g - length]), w_end)  # quiebre estimado por término
         tests.append(
             {
                 "run_id": run_id,
@@ -431,7 +544,25 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
                 }
             )
     n_by = int(np.sum(q_by <= q))
+    n_ind = {k: v for k, v in zip(m.keys, m.industries, strict=True)} if len(m.keys) else {}
+    prio = priority_scores(
+        m.keys,
+        np.array([r[0] for r in results]),
+        m.mean_share,
+        m.industries,
+        td["priority"],
+    )
+    ac = cfg["fdr"]["approval_alert"]
+    others = [
+        {"detector": f"{r['family']}/{r['detector']}", "n_bh": r["n_bh"], "n_tests": r["n_tests"]}
+        for r in latest_runs(cfg, ["numeric", "fred", *td["grid"]])
+        if r["family"] != source
+    ]
+    me = {"detector": f"{source}/{DETECTOR}", "n_bh": len(signals), "n_tests": len(results)}
+    alert = alert_flags([me, *others], ac["factor"], ac["min_rate"])[me["detector"]]
     params_json = {
+        "approval_alert": alert,
+        "bh_rate": len(signals) / len(results) if results else 0.0,
         "grid": grid,
         "window": window,
         "persistence": persistence,
@@ -461,7 +592,9 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
     if signals:
         write(SIGNALS, signals, table_root(cfg, "signals"), source, "object_id")
     write(DETECTOR_RUNS, runs, table_root(cfg, "detector_runs"), source, "run_id")
+    by_key = {f"{sec}|{term}": float(pr) for (sec, term), pr in zip(m.keys, prio, strict=True)}
     top = sorted(signals, key=lambda s: s["q_value"])[:20]
+    ranked = sorted(signals, key=lambda s: -by_key[s["object_id"]])[: td["top_n"]]
     return {
         "source": source,
         "run_id": run_id,
@@ -472,7 +605,23 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "n_by": n_by,
         "block_length": block,
         "prefiltro": m.excluded,
+        "bh_rate": len(signals) / len(results) if results else 0.0,
+        "approval_alert": alert,
         "top": [(s["object_id"], round(s["effect_size"], 3), s["q_value"]) for s in top],
+        "top_priority": [
+            {
+                "object_id": s["object_id"],
+                "effect_size": round(s["effect_size"], 3),
+                "priority": round(by_key[s["object_id"]], 3),
+                "q_value": s["q_value"],
+                "window_start": s["window_start"],
+                "window_end": s["window_end"],
+                "n_industries": None
+                if np.isnan(n_ind.get(tuple(s["object_id"].split("|", 1)), np.nan))
+                else float(n_ind[tuple(s["object_id"].split("|", 1))]),
+            }
+            for s in ranked
+        ],
     }
 
 

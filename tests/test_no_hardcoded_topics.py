@@ -75,3 +75,23 @@ def test_yaml_guard_allows_only_the_reference_series_exception(tmp_path):
         encoding="utf-8",
     )
     assert hardcoded_topic_violations_yaml(path) == []
+
+
+BOILERPLATE_LIST = "\n".join(f"    - frase numero{i}" for i in range(8))
+
+
+def test_boilerplate_exception_is_limited_to_its_key(tmp_path):
+    ok = tmp_path / "ok.yaml"
+    ok.write_text(f"text_detect:\n  boilerplate:\n{BOILERPLATE_LIST}\n", encoding="utf-8")
+    assert hardcoded_topic_violations_yaml(ok) == []
+    # La misma lista bajo cualquier otra clave sigue fallando.
+    for where in ("text_detect:\n  otra_lista", "text:\n  boilerplate", "rank:\n  boilerplate"):
+        bad = tmp_path / f"bad_{abs(hash(where))}.yaml"
+        bad.write_text(
+            f"{where}:\n{BOILERPLATE_LIST}\n".replace("\n  ", "\n  ", 1), encoding="utf-8"
+        )
+        assert hardcoded_topic_violations_yaml(bad), where
+    # Y en su clave solo admite frases, no ids de serie.
+    series = tmp_path / "series.yaml"
+    series.write_text("text_detect:\n  boilerplate:\n    - UNRATE\n", encoding="utf-8")
+    assert hardcoded_topic_violations_yaml(series)

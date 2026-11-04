@@ -497,6 +497,7 @@ def ranking_page(data: dict[str, Any]) -> str:
             DETECTOR_NAMES.get(d["detector"], d["detector"]),
             d["n_tests"],
             d["n_bh"],
+            f"{d['bh_rate']:.2%}" + (" ⚠ más de 3× la mediana de los demás" if d["alert"] else ""),
             d["n_by"],
             d["q"],
         ]
@@ -512,7 +513,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         tiles,
         guide(data["weights"], data["q"], data["min_sources"], data.get("recent")),
         "<h2>Señales por detector</h2>",
-        _table(det_rows, {2, 3, 4, 5}, "Familia", "Detector", "Pruebas", "BH", "BY", "q"),
+        _table(det_rows, {2, 3, 5, 6}, "Familia", "Detector", "Pruebas", "BH", "% BH", "BY", "q"),
         '<p class="muted">BH decide; BY se reporta solo como comparación.</p>',
         f"<h2>Ranking ({len(series)})</h2>",
         '<div class="controls" id="rank-controls"><label>Últimos 12 meses '
@@ -556,6 +557,7 @@ def dashboard_page(data: dict[str, Any]) -> str:
             ts(d["finished_at"]),
             d["n_tests"],
             d["n_bh"],
+            f"{d['bh_rate']:.2%}" + (" ⚠" if d["alert"] else ""),
             d["n_by"],
         ]
         for d in st["detectors"]
@@ -614,7 +616,18 @@ def dashboard_page(data: dict[str, Any]) -> str:
         "<h2>Estado del sistema</h2>",
         _table(runs, {4}, "Corrida", "Estado", "Inicio", "Fin", "Segundos"),
         "<h2>Detectores (última corrida)</h2>",
-        _table(det_rows, {4, 5, 6}, "Familia", "Detector", "Corrida", "Fin", "Pruebas", "BH", "BY"),
+        _table(
+            det_rows,
+            {4, 5, 7},
+            "Familia",
+            "Detector",
+            "Corrida",
+            "Fin",
+            "Pruebas",
+            "BH",
+            "% BH",
+            "BY",
+        ),
         "<h2>Embudo de elegibilidad</h2>",
         '<p class="muted">Última decisión de cada serie del catálogo, por grupo.</p>',
         _table(funnel_rows, set(range(1, len(groups) + 2)), "Fuente", *groups, "Total"),

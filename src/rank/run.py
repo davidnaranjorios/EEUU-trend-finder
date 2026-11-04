@@ -52,6 +52,13 @@ from src.rank.cluster import (
     growth_correlation,
     similarity,
 )
+from src.rank.comove import (
+    ComoveParams,
+    comove_family,
+    on_axis,
+    series_annual_growth,
+    term_annual_change,
+)
 from src.rank.context import select_related
 from src.rank.embed import CachedEmbedder, Embedder, make_embedder
 from src.rank.links import LinkParams, null_threshold, sample_null, top_links
@@ -282,6 +289,138 @@ def term_entities(
     return out
 
 
+def term_industries(
+    con: duckdb.DuckDBPyConnection, signals: list[dict[str, Any]]
+) -> dict[tuple[str, str], float]:
+    """Mediana de `n_industries` (SIC) del término en su ventana (ausente si no se midió)."""
+    if not signals:
+        return {}
+    con.register(
+        "_iterms",
+        pa.table(
+            {
+                "source": [s["source"] for s in signals],
+                "section": [s["object_id"].split("|", 1)[0] for s in signals],
+                "term": [term_text(s["object_id"]) for s in signals],
+            }
+        ),
+    )
+    rows = con.execute(
+        "SELECT t.source, t.section, t.term, f.period, f.n_industries FROM term_freq f "
+        "JOIN _iterms t USING (source, section, term) WHERE f.n_industries IS NOT NULL"
+    ).fetchall()
+    start = {(s["source"], s["object_id"]): s["window_start"] for s in signals}
+    vals: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for src, section, term, period, n in rows:
+        key = (src, f"{section}|{term}")
+        if grid_start(period) >= start[key]:
+            vals[key].append(int(n))
+    return {k: float(np.median(v)) for k, v in vals.items()}
+
+
+def term_base_share(
+    con: duckdb.DuckDBPyConnection, signals: list[dict[str, Any]]
+) -> dict[tuple[str, str], float]:
+    """Prevalencia base: documentos con el término / documentos, en toda la historia anterior a
+    su ventana (la que se usa para penalizar a las palabras comunes)."""
+    if not signals:
+        return {}
+    start = {(s["source"], s["object_id"]): s["window_start"] for s in signals}
+    con.register(
+        "_bterms",
+        pa.table(
+            {
+                "source": [s["source"] for s in signals],
+                "section": [s["object_id"].split("|", 1)[0] for s in signals],
+                "term": [term_text(s["object_id"]) for s in signals],
+            }
+        ),
+    )
+    rows = con.execute(
+        "SELECT t.source, t.section, t.term, f.period, f.doc_count, f.total_docs FROM term_freq f "
+        "JOIN _bterms t USING (source, section, term)"
+    ).fetchall()
+    num: dict[tuple[str, str], float] = defaultdict(float)
+    den: dict[tuple[str, str], float] = defaultdict(float)
+    for src, section, term, period, c, n in rows:
+        key = (src, f"{section}|{term}")
+        if grid_start(period) < start[key]:
+            num[key] += c
+            den[key] += n
+    return {k: num[k] / den[k] for k in num if den[k] > 0}
+
+
+def term_annual_counts(
+    con: duckdb.DuckDBPyConnection, signals: list[dict[str, Any]], min_doc_count: int
+) -> dict[tuple[str, str], dict[int, tuple[float, float]]]:
+    """(c, n) anuales de cada término con señal; solo años con todos los subperiodos de la
+    sección. Un subperiodo sin fila del término se imputa en el tope de la censura."""
+    if not signals:
+        return {}
+    srcs = sorted({s["source"] for s in signals})
+    tot = con.execute(
+        "SELECT source, section, substr(period, 1, 4)::INT y, count(*) n_sub, sum(total_docs) n "
+        "FROM (SELECT DISTINCT source, section, period, total_docs FROM term_freq "
+        "WHERE list_contains(?, source)) GROUP BY ALL",
+        [srcs],
+    ).fetchall()
+    full = {}
+    for src, sec, y, n_sub, n in tot:
+        full.setdefault((src, sec), {})[y] = (n_sub, n)
+    need = {k: max(v[0] for v in d.values()) for k, d in full.items()}
+    con.register(
+        "_cterms",
+        pa.table(
+            {
+                "source": [s["source"] for s in signals],
+                "section": [s["object_id"].split("|", 1)[0] for s in signals],
+                "term": [term_text(s["object_id"]) for s in signals],
+            }
+        ),
+    )
+    rows = con.execute(
+        "SELECT t.source, t.section, t.term, substr(f.period, 1, 4)::INT, sum(f.doc_count), "
+        "count(*) FROM term_freq f JOIN _cterms t USING (source, section, term) GROUP BY ALL"
+    ).fetchall()
+    out: dict[tuple[str, str], dict[int, tuple[float, float]]] = {}
+    for src, sec, term, y, c, n_present in rows:
+        n_sub, n = full[(src, sec)][y]
+        if n_sub != need[(src, sec)]:
+            continue
+        c = min(c + (n_sub - n_present) * (min_doc_count - 1), n)
+        out.setdefault((src, f"{sec}|{term}"), {})[y] = (float(c), float(n))
+    return out
+
+
+def comove_validate(
+    cfg: dict[str, Any],
+    counts: dict[tuple[str, str], dict[int, tuple[float, float]]],
+    growth: dict[tuple[str, str], GrowthSeries],
+    pairs: list[tuple[tuple[str, str], tuple[str, str]]],
+) -> dict[tuple[tuple[str, str], tuple[str, str]], dict[str, Any]]:
+    """Prueba de co-movimiento de los pares sugeridos por títulos: una sola familia BH."""
+    cm = cfg["rank"]["links"]["comove"]
+    usable = [(t, s) for t, s in pairs if t in counts and s in growth]
+    if not usable:
+        return {}
+    term_ch = {t: term_annual_change(counts[t]) for t, _ in usable}
+    ser_gr = {
+        s: series_annual_growth(growth[s].growth, growth[s].last_index, growth[s].grid)
+        for _, s in usable
+    }
+    years = sorted(
+        {y for d in term_ch.values() for y in d} | {y for d in ser_gr.values() for y in d}
+    )
+    axis = list(range(years[0], years[-1] + 1))
+    params = ComoveParams(
+        cm["max_lag"], cm["min_overlap"], cm["n_resamples"], cm["block_length"], cm["seed"]
+    )
+    res = comove_family(
+        [(on_axis(term_ch[t], axis), on_axis(ser_gr[s], axis)) for t, s in usable], params
+    )
+    return dict(zip(usable, res, strict=True))
+
+
 # --- corrida -------------------------------------------------------------------------------------
 
 
@@ -427,13 +566,35 @@ def rank_run(
                     "term": terms[ti][1],
                     "score": cos,
                     "method": method,
+                    "comove_q": None,
+                    "comove_lag": None,
+                    "validated": False,
                 }
             )
 
     # 3. Evidencia y triangulación de clusters de series.
     tsig = {(s["source"], s["object_id"]): s for s in txt_signals}
     ents = term_entities(con, txt_signals)
+    inds = term_industries(con, txt_signals)
     require_overlap = rk["links"]["require_overlap"]
+    q_link = float(cfg["fdr"]["q"])
+    suggested = [
+        (tkey, skey)
+        for tkey, linked in links_by_term.items()
+        for skey, _ in linked
+        if skey in cluster_of and (not require_overlap or _overlaps(tsig[tkey], by_series[skey]))
+    ]
+    comove = comove_validate(
+        cfg, term_annual_counts(con, txt_signals, cfg["text"]["min_doc_count"]), growth, suggested
+    )
+    for lr in link_rows:
+        res = comove.get(((lr["text_source"], lr["term"]), (lr["source"], lr["series_id"])))
+        if res is not None:
+            lr["comove_q"], lr["comove_lag"] = res["q_bh"], res["lag"]
+            lr["validated"] = res["q_bh"] <= q_link
+        else:
+            lr["validated"] = False
+    shares = term_base_share(con, txt_signals)
     term_evidence_by_cluster: dict[str, dict[tuple[str, str], Evidence]] = defaultdict(dict)
     for tkey, linked in links_by_term.items():
         t = tsig[tkey]
@@ -443,11 +604,17 @@ def rank_run(
                 continue
             if require_overlap and not _overlaps(t, by_series[skey]):
                 continue
+            res = comove.get((tkey, skey))
+            ok = bool(res and res["q_bh"] <= q_link)
+            rank_key = (ok, cos)
             prev = term_evidence_by_cluster[cid].get(tkey)
-            if prev is None or cos > (prev.link_score or 0):
-                term_evidence_by_cluster[cid][tkey] = _term_evidence(
-                    t, ents.get(tkey), cos, f"{skey[0]}|{skey[1]}"
+            if prev is None or rank_key > (bool(prev.link_validated), prev.link_score or 0):
+                ev = _term_evidence(
+                    t, ents.get(tkey), cos, f"{skey[0]}|{skey[1]}", validated=ok, comove=res
                 )
+                ev.base_share = shares.get(tkey)
+                ev.n_industries = inds.get(tkey)
+                term_evidence_by_cluster[cid][tkey] = ev
     min_sources = rk["min_sources"]
     candidates: list[Candidate] = []
     for cid, members in zip(cids, clusters, strict=True):
@@ -634,13 +801,23 @@ def _series_evidence(
 
 
 def _term_evidence(
-    t: dict[str, Any], n_entities: int | None, cos: float | None, linked: str | None
+    t: dict[str, Any],
+    n_entities: int | None,
+    cos: float | None,
+    linked: str | None,
+    *,
+    validated: bool | None = None,
+    comove: dict[str, Any] | None = None,
 ) -> Evidence:
+    """Evidencia de un término. Con un vínculo a una serie (`cos` no nulo) el término solo es una
+    fuente independiente si el co-movimiento lo validó: la similitud de títulos nunca basta, y
+    sin validar queda como contexto, con `agencies` vacío (no cuenta en la triangulación)."""
+    counts = cos is None or bool(validated)
     return Evidence(
         kind="term",
         source=t["source"],
         object_id=t["object_id"],
-        agencies=text_agencies(t["source"]),
+        agencies=text_agencies(t["source"]) if counts else frozenset(),
         q_value=float(t["q_value"]),
         effect_size=float(t["effect_size"]),
         detectors=(t["detector"],),
@@ -650,6 +827,9 @@ def _term_evidence(
         link_score=cos,
         linked_series=linked,
         n_entities=n_entities,
+        link_validated=validated if cos is not None else None,
+        link_q=comove["q_bh"] if comove else None,
+        link_lag=comove["lag"] if comove else None,
     )
 
 

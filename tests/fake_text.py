@@ -97,6 +97,11 @@ class FakeEdgar:
         self.index = form_index(rows)
         self.subs = subs
 
+    @staticmethod
+    def company(cik: int) -> dict[str, str]:
+        """Nombre y SIC del emisor (el CIK 101 es de una industria y los demás de otra)."""
+        return {"name": f"Company {cik} Inc", "sic": "2834" if cik == 101 else "7372"}
+
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.requests.append(path)
@@ -109,14 +114,19 @@ class FakeEdgar:
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as zf:
                 for cik, recent in self.subs.items():
-                    doc = {"cik": cik, "filings": {"recent": recent, "files": []}}
+                    doc = {
+                        "cik": cik,
+                        "filings": {"recent": recent, "files": []},
+                        **self.company(cik),
+                    }
                     zf.writestr(f"CIK{cik:010d}.json", json.dumps(doc))
             return httpx.Response(200, content=buf.getvalue())
         if path.startswith("/submissions/CIK"):
             cik = int(path.removeprefix("/submissions/CIK").removesuffix(".json"))
             if cik not in self.subs:
                 return httpx.Response(404, json={})
-            return httpx.Response(200, json={"cik": cik, "filings": {"recent": self.subs[cik]}})
+            body = {"cik": cik, "filings": {"recent": self.subs[cik]}, **self.company(cik)}
+            return httpx.Response(200, json=body)
         if path in self.docs:
             if self.fail_after is not None:
                 if self.fail_after <= 0:

@@ -48,10 +48,11 @@ from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
 
 EXIT_PENDING = 10
 # Versión del esquema de las particiones que escribe la ingesta (ADR 0008):
-#   2: term_freq.n_entities;  3: entidad del Federal Register normalizada.
+#   2: term_freq.n_entities;  3: entidad del Federal Register normalizada;
+#   4: term_freq.n_industries (SIC de EDGAR).
 # Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se vuelve a
 # procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DOC_LEVEL = "*"  # `section` de las decisiones sobre el documento entero
 TABLE_DIRS = {
     TEXT_DOCS.name: "text_docs",
@@ -80,6 +81,7 @@ class DocResult:
     date: date
     entity: str | None
     sections: list[SectionResult] = field(default_factory=list)
+    group: str | None = None  # industria (SIC de 2 dígitos) cuando la fuente la tiene
 
 
 def analyze_section(
@@ -187,7 +189,7 @@ def finalize_period(
                     status, detail = "duplicado", f"duplicado_de={seen_hash[key]}"
                 else:
                     seen_hash[key] = doc.doc_id
-                    counter.add(sec.section, sec.hashes, doc.entity)
+                    counter.add(sec.section, sec.hashes, doc.entity, doc.group)
                     tmp_by_section.setdefault(sec.section, []).append(sec.tmp_path)
                     text_rows.append(
                         {
@@ -217,10 +219,14 @@ def finalize_period(
     for section in counter.sections():
         hashes, counts = counter.retained(section, min_doc_count)
         entities = counter.n_entities(section, hashes)
+        industries = counter.n_groups(section, hashes)
         texts = (read_temp_text(Path(p)) for p in tmp_by_section[section])
         strings = resolve_strings(hashes, texts, n_max)
         total = counter.total_docs[section]
-        for h, c, e in zip(hashes.tolist(), counts.tolist(), entities.tolist(), strict=True):
+        ind = industries.tolist() if industries is not None else [None] * len(hashes)
+        for h, c, e, n_ind in zip(
+            hashes.tolist(), counts.tolist(), entities.tolist(), ind, strict=True
+        ):
             freq_rows.append(
                 {
                     "source": source,
@@ -230,6 +236,7 @@ def finalize_period(
                     "doc_count": c,
                     "total_docs": total,
                     "n_entities": e,
+                    "n_industries": n_ind,
                 }
             )
 
@@ -389,11 +396,13 @@ def migrate(processed_dir: Path) -> dict[str, int]:
         if not files:
             continue
         out["particiones"] += 1
-        if all("n_entities" in pq.read_schema(f).names for f in files):
+        if all({"n_entities", "n_industries"} <= set(pq.read_schema(f).names) for f in files):
             continue
         table = pa.concat_tables([pq.read_table(f) for f in files], promote_options="default")
         if "n_entities" not in table.column_names:
             table = table.append_column("n_entities", pa.nulls(table.num_rows, pa.int64()))
+        if "n_industries" not in table.column_names:
+            table = table.append_column("n_industries", pa.nulls(table.num_rows, pa.int64()))
         store.replace_partition(
             table.select(TERM_FREQ.schema.names).cast(TERM_FREQ.schema),
             TERM_FREQ,

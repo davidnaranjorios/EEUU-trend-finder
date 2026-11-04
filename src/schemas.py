@@ -84,6 +84,9 @@ TERM_FREQ = TableSpec(
         # Entidades distintas (agencia, empresa) entre esos documentos; NULL = no medido
         # (particiones anteriores a la versión 2 del esquema de texto, ADR 0008).
         ("n_entities", pa.int64(), True),
+        # Industrias distintas (SIC de 2 dígitos, EDGAR) entre esos documentos; NULL = no medido
+        # (otras fuentes y particiones anteriores a la versión 4 del esquema de texto).
+        ("n_industries", pa.int64(), True),
     ),
     key=("source", "section", "period", "term"),
 )
@@ -202,6 +205,11 @@ SERIES_TERM_LINKS = TableSpec(
         ("term", pa.string(), False),
         ("score", pa.float64(), False),
         ("method", pa.string(), False),
+        # Prueba de co-movimiento (src/rank/comove.py): q de su propia familia BH y rezago.
+        # `validated` = q <= fdr.q; solo un vínculo validado cuenta como fuente independiente.
+        ("comove_q", pa.float64(), True),
+        ("comove_lag", pa.int64(), True),
+        ("validated", pa.bool_(), True),
     ),
     key=("run_id", "source", "series_id", "text_source", "term"),
 )
@@ -382,7 +390,8 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
     if spec is TERM_FREQ:
         bad = con.execute(
             "SELECT count(*) FROM t WHERE doc_count < 0 OR total_docs <= 0 "
-            "OR doc_count > total_docs OR n_entities < 1 OR n_entities > doc_count"
+            "OR doc_count > total_docs OR n_entities < 1 OR n_entities > doc_count "
+            "OR n_industries < 1 OR n_industries > doc_count"
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"term_freq: {bad[0]} filas con doc_count/total_docs inconsistentes")

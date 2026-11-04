@@ -119,7 +119,25 @@ def _reference_violations(node: Any) -> Iterator[str]:
             yield f"'{REFERENCE_PATH}.{key}' debe ser un único id de serie"
 
 
+# Segunda excepción (aprobada por David el 2026-11-04, revisión de la corrida 2a02c981): frases de
+# BOILERPLATE de los documentos (p. ej. fórmulas de instrucciones de un aviso), que el detector de
+# texto excluye por no ser contenido. Solo en esta ruta, como lista de frases de varias palabras.
+BOILERPLATE_PATH = "text_detect.boilerplate"
+
+
+def _boilerplate_violations(node: Any) -> Iterator[str]:
+    if not isinstance(node, list) or not all(isinstance(v, str) and v.strip() for v in node):
+        yield f"'{BOILERPLATE_PATH}' debe ser una lista de frases (strings)"
+        return
+    for phrase in node:
+        if _looks_like_series_id(phrase) or not re.fullmatch(r"[a-z0-9' -]+", phrase):
+            yield f"'{BOILERPLATE_PATH}': frase no admitida {phrase!r}"
+
+
 def _walk_yaml(node: Any, where: str) -> Iterator[str]:
+    if where == BOILERPLATE_PATH:
+        yield from _boilerplate_violations(node)
+        return
     if where == REFERENCE_PATH:
         yield from _reference_violations(node)
         return
