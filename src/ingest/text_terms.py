@@ -14,8 +14,8 @@ periodos a la vez, para no crear saltos artificiales entre periodos.
 from __future__ import annotations
 
 import gzip
-import json
 import hashlib
+import json
 import re
 import unicodedata
 from collections import defaultdict
@@ -144,7 +144,9 @@ class PeriodCounter:
         for p, s, c in zip(
             np.split(pos, bounds), np.split(sid, bounds), np.split(cnt, bounds), strict=True
         ):
-            out[int(p[0])] = json.dumps({names[int(a)]: int(b) for a, b in zip(s[:k], c[:k])})
+            out[int(p[0])] = json.dumps(
+                {names[int(a)]: int(b) for a, b in zip(s[:k], c[:k], strict=True)}
+            )
         return out
 
     def _distinct(self, section: str, hashes: np.ndarray, ids: list[int], n_ids: int) -> np.ndarray:

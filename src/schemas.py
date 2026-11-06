@@ -330,6 +330,22 @@ RANK_CONTEXT = TableSpec(
     key=("run_id", "candidate_id"),
 )
 
+# Anclaje a industria (ADR 0012): una fila por (objeto, NAICS). `peso` suma 1 por objeto y método.
+NAICS_METHODS = ("codigo_en_metadatos", "heredado_cluster", "sic_concordancia")
+NAICS_LINKS = TableSpec(
+    name="naics_links",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("source", pa.string(), False),
+        ("object_id", pa.string(), False),
+        ("naics", pa.string(), False),
+        ("naics_name", pa.string(), True),
+        ("peso", pa.float64(), False),
+        ("metodo", pa.string(), False),
+    ),
+    key=("run_id", "source", "object_id", "naics", "metodo"),
+)
+
 RANK_RUNS = TableSpec(
     name="rank_runs",
     schema=_schema(
@@ -371,6 +387,7 @@ ALL_SPECS = {
         RANK_ORIGIN,
         RANK_RUNS,
         RANK_CONTEXT,
+        NAICS_LINKS,
     )
 }
 
@@ -416,6 +433,13 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"term_freq: {bad[0]} filas con doc_count/total_docs inconsistentes")
+    if spec is NAICS_LINKS:
+        allowed = ", ".join(f"'{x}'" for x in NAICS_METHODS)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE metodo NOT IN ({allowed}) OR peso <= 0 OR peso > 1"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(f"naics_links: {bad[0]} filas con método o peso fuera de dominio")
     if spec is RANK_CANDIDATES:
         allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
         bad = con.execute(

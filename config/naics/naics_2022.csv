@@ -269,6 +269,7 @@ naics,name
 238910,Site Preparation Contractors
 23899,All Other Specialty Trade Contractors
 238990,All Other Specialty Trade Contractors
+31-33,Manufacturing
 311,Food Manufacturing
 3111,Animal Food Manufacturing
 31111,Animal Food Manufacturing
@@ -1059,6 +1060,7 @@ naics,name
 4251,Wholesale Trade Agents and Brokers
 42512,Wholesale Trade Agents and Brokers
 425120,Wholesale Trade Agents and Brokers
+44-45,Retail Trade
 441,Motor Vehicle and Parts Dealers
 4411,Automobile Dealers
 44111,New Car Dealers
@@ -1197,6 +1199,7 @@ naics,name
 45999,All Other Miscellaneous Retailers
 459991,"Tobacco, Electronic Cigarette, and Other Smoking Supplies Retailers"
 459999,All Other Miscellaneous Retailers
+48-49,Transportation and Warehousing
 481,Air Transportation
 4811,Scheduled Air Transportation
 48111,Scheduled Air Transportation
