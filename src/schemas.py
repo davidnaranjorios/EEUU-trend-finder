@@ -87,6 +87,9 @@ TERM_FREQ = TableSpec(
         # Industrias distintas (SIC de 2 dígitos, EDGAR) entre esos documentos; NULL = no medido
         # (otras fuentes y particiones anteriores a la versión 4 del esquema de texto).
         ("n_industries", pa.int64(), True),
+        # SIC de 4 dígitos (EDGAR) de las empresas que mencionan el término: JSON {sic: documentos},
+        # solo los `top_sic` más frecuentes. NULL = no medido (versión del esquema < 5; ADR 0012).
+        ("sic_top_json", pa.string(), True),
     ),
     key=("source", "section", "period", "term"),
 )

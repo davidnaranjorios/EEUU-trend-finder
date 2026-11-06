@@ -170,6 +170,7 @@ sources:
 text:
   ngram_max: 3                    # n-gramas de 1 a 3 tokens
   min_doc_count: 5                # un n-grama entra a term_freq si aparece en >= N documentos
+  top_sic: 5                      # SIC de 4 dígitos por término que se guardan (sic_top_json, ADR 0012)
   workers: 4                      # procesos de análisis (HTML -> secciones -> n-gramas)
   seed: 20261103                  # muestras de medición (--sample)
   open_refresh_hours: 20          # un periodo abierto se reprocesa como mucho una vez por corrida
@@ -245,7 +246,7 @@ edgar:
   timeout_s: 120
   min_chars: 2000                 # secciones más cortas (p. ej. "no aplica") -> muy_corta
   closed_grace_days: 7            # un trimestre se congela 7 días después de terminar
-  reprocess_below_schema: 4       # v4: n_industries (SIC) obliga a volver a bajar los periodos cerrados
+  reprocess_below_schema: 5       # v5: sic_top_json (SIC de 4 dígitos; v4: n_industries) obliga a volver a bajar los periodos cerrados
   submissions_api_max_ciks: 500   # más CIK que esto: se usa submissions.zip (una descarga)
   submissions_zip_max_age_hours: 20
 

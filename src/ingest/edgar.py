@@ -195,6 +195,7 @@ class EdgarSource:
         self.raw_dir = raw_dir
         self.forms = set(cfg["forms"])
         self.sic: dict[int, str] = {}  # CIK -> SIC de 2 dígitos (de submissions)
+        self.sic4: dict[int, str] = {}  # CIK -> SIC de 4 dígitos
         self.names: dict[int, str] = {}  # CIK -> nombre del emisor (de submissions)
 
     @classmethod
@@ -283,7 +284,9 @@ class EdgarSource:
         failed: list[DocResult] = []
         analyzed = list(ctx.run_tasks(analyze_filing, tasks()))
         for d in analyzed:
-            d.group = self.sic.get(int(d.entity)) if d.entity and d.entity.isdigit() else None
+            cik = int(d.entity) if d.entity and d.entity.isdigit() else None
+            d.group = self.sic.get(cik) if cik is not None else None
+            d.sic = self.sic4.get(cik) if cik is not None else None
         return docs + analyzed + failed
 
     # Documento principal
@@ -327,6 +330,7 @@ class EdgarSource:
         sic = str(sub.get("sic") or "").strip()
         if sic.isdigit() and len(sic) >= 2:
             self.sic[cik] = sic.zfill(4)[:2]
+            self.sic4[cik] = sic.zfill(4)[:4]
 
     def _submissions_zip(self) -> Path:
         path = self.raw_dir / SOURCE / "submissions.zip"
