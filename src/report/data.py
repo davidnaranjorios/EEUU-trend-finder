@@ -27,6 +27,7 @@ from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
 from src.schemas import (
     DETECTOR_RUNS,
+    NAICS_LINKS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
@@ -60,6 +61,27 @@ def _rank_rows(cfg: dict[str, Any], spec: Any, table: str, run_id: str) -> list[
     return read_table(
         spec, rank_root(cfg, table), source=PARTITION, where="run_id = ?", params=[run_id]
     ).to_pylist()
+
+
+def candidate_naics(
+    links: list[dict[str, Any]], objects: list[tuple[str, str]], top: int = 3
+) -> list[dict[str, Any]]:
+    """NAICS del candidato: pesos de sus objetos promediados (los sin NAICS no suman peso)."""
+    by_obj: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for r in links:
+        by_obj[(r["source"], r["object_id"])].append(r)
+    have = [o for o in set(objects) if o in by_obj]
+    acc: dict[str, dict[str, Any]] = {}
+    for o in have:
+        for r in by_obj[o]:
+            a = acc.setdefault(
+                r["naics"],
+                {"naics": r["naics"], "name": r["naics_name"], "weight": 0.0, "methods": set()},
+            )
+            a["weight"] += r["peso"] / len(have)
+            a["methods"].add(r["metodo"])
+    best = sorted(acc.values(), key=lambda a: (-a["weight"], a["naics"]))[:top]
+    return [{**a, "methods": sorted(a["methods"])} for a in best]
 
 
 def candidates_data(
@@ -98,6 +120,10 @@ def candidates_data(
         r["candidate_id"]: json.loads(r["payload_json"])
         for r in _rank_rows(cfg, RANK_CONTEXT, "rank_context", run_id)
     }
+    try:
+        naics_links = _rank_rows(cfg, NAICS_LINKS, "naics_links", run_id)
+    except (FileNotFoundError, OSError):  # corridas anteriores al anclaje NAICS
+        naics_links = []
     refs = _reference_data(con, cfg)
     # Valores de las relacionadas descargadas (panel apilado), sin copyright.
     related_keys = {
@@ -249,6 +275,9 @@ def candidates_data(
                 )
                 if c["kind"] == "series"
                 else None,
+                "naics": candidate_naics(
+                    naics_links, [(e["source"], e["object_id"]) for e in items]
+                ),
                 "hidden_series": hidden,
                 "terms": sorted(terms, key=lambda t: t["q_value"]),
             }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import math
 from collections import defaultdict
 from typing import Any
@@ -459,6 +460,35 @@ def _phenomenon(p: dict[str, Any] | None) -> str:
     )
 
 
+def _naics_line(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return '<p class="muted">Industria (NAICS): sin anclaje.</p>'
+    txt = "; ".join(
+        f"{i['naics']} {i['name'] or ''} ({i['weight']:.0%}, {'/'.join(i['methods'])})"
+        for i in items
+    )
+    return f'<p class="plain naics">Industria (NAICS): {esc(txt)}</p>'
+
+
+def _naics_coverage(rr: dict[str, Any]) -> str:
+    try:
+        cov = json.loads(rr.get("params_json") or "{}")["summary"]["naics_coverage"]
+    except (KeyError, ValueError, TypeError):
+        return ""
+    return (
+        "<details><summary>Cobertura NAICS (señales con industria)</summary>"
+        + _table(
+            [[s, v["n"], v["with_naics"], f"{v['pct']:.1f}%"] for s, v in cov.items()],
+            {1, 2, 3},
+            "Fuente",
+            "Señales",
+            "Con NAICS",
+            "%",
+        )
+        + "</details>"
+    )
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -476,6 +506,7 @@ def _candidate(c: dict[str, Any]) -> str:
         if c["kind"] == "series"
         else ""
     )
+    naics = _naics_line(c.get("naics") or [])
     return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
  data-state="{esc(state)}">
 <header><span class="rank">#{c["rank"]}</span>{badge}
@@ -483,6 +514,7 @@ def _candidate(c: dict[str, Any]) -> str:
 <span>score {fnum(c["score"], 3)}</span>
 <span class="muted">{c["n_members"]} miembro(s) · {len(c["terms"])} término(s)</span></header>
 <div>{_sources_chips(c["sources"])}</div>
+{naics}
 <p class="plain">{esc(_why_sources(c["sources"]))}</p>
 <details><summary>Componentes del score</summary><p class="muted">{esc(comp)}</p></details>
 {hidden}{ev}{_phenomenon(c.get("phenomenon"))}
@@ -506,6 +538,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         _tile("Publicados", fnum(rr.get("n_published"))),
         _tile("Una sola fuente (descartados)", fnum(rr.get("n_single_source"))),
         "</div>",
+        _naics_coverage(rr),
     )
     det_rows = [
         [

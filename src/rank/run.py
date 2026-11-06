@@ -29,7 +29,7 @@ import numpy as np
 import pyarrow as pa
 
 from src.catalog import connect
-from src.config import load_config
+from src.config import REPO_ROOT, load_config
 from src.detect.run import (
     _resolve,
     detect_sources,
@@ -43,6 +43,7 @@ from src.detect.text import grid_start
 from src.ingest.fred import SERIES_ATTRS
 from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
+from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
@@ -67,6 +68,7 @@ from src.rank.triangulate import Candidate, Evidence, assess, score
 from src.schemas import (
     CLUSTERS,
     DETECTOR_RUNS,
+    NAICS_LINKS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
@@ -88,6 +90,7 @@ RANK_TABLES = {
     "rank_origin": RANK_ORIGIN,
     "rank_runs": RANK_RUNS,
     "rank_context": RANK_CONTEXT,
+    "naics_links": NAICS_LINKS,
 }
 
 
@@ -390,6 +393,60 @@ def term_industries(
         if grid_start(period) >= start[key]:
             vals[key].append(int(n))
     return {k: float(np.median(v)) for k, v in vals.items()}
+
+
+def meta_texts(
+    con: duckdb.DuckDBPyConnection, keys: list[tuple[str, str]]
+) -> dict[tuple[str, str], str]:
+    """Título y ruta de categoría de cada serie (donde puede venir un código NAICS explícito)."""
+    if not keys:
+        return {}
+    con.register(
+        "_nkeys", pa.table({"source": [k[0] for k in keys], "series_id": [k[1] for k in keys]})
+    )
+    return {
+        (s, i): f"{t or ''} | {c or ''}"
+        for s, i, t, c in con.execute(
+            "SELECT k.source, k.series_id, any_value(m.title), any_value(m.category_path) "
+            "FROM _nkeys k JOIN series_meta m USING (source, series_id) GROUP BY ALL"
+        ).fetchall()
+    }
+
+
+def term_sics(
+    con: duckdb.DuckDBPyConnection, signals: list[dict[str, Any]]
+) -> dict[tuple[str, str], dict[str, int]]:
+    """SIC (4 dígitos) de las empresas que mencionan cada término en su ventana, por documentos.
+
+    Vacío mientras las particiones de `term_freq` no traigan `sic_top_json` (esquema < 5):
+    el anclaje de esos términos queda pendiente de datos y no se inventa.
+    """
+    if not signals:
+        return {}
+    cols = {r[0] for r in con.execute("DESCRIBE term_freq").fetchall()}
+    if "sic_top_json" not in cols:
+        return {}
+    con.register(
+        "_sterms",
+        pa.table(
+            {
+                "source": [s["source"] for s in signals],
+                "section": [s["object_id"].split("|", 1)[0] for s in signals],
+                "term": [term_text(s["object_id"]) for s in signals],
+            }
+        ),
+    )
+    rows = con.execute(
+        "SELECT t.source, t.section, t.term, f.period, f.sic_top_json FROM term_freq f "
+        "JOIN _sterms t USING (source, section, term) WHERE f.sic_top_json IS NOT NULL"
+    ).fetchall()
+    start = {(s["source"], s["object_id"]): s["window_start"] for s in signals}
+    acc: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for src, section, term, period, payload in rows:
+        key = (src, f"{section}|{term}")
+        if key in start and grid_start(period) >= start[key]:
+            acc[key].append(payload)
+    return {k: naics_mod.parse_sic_top(v) for k, v in acc.items()}
 
 
 def term_base_share(
@@ -742,6 +799,15 @@ def rank_run(
         for c in candidates
         if c.kind == "series" and c.status == "candidato"
     ]
+    # 4b. Anclaje a industria NAICS (ADR 0012).
+    tables = naics_mod.load_tables(cfg, REPO_ROOT)
+    own = naics_mod.series_links(meta_texts(con, signal_keys), tables)
+    naics_links = {
+        **own,
+        **naics_mod.inherit_in_clusters(clusters, own),
+        **naics_mod.term_links(term_sics(con, txt_signals), tables),
+    }
+    naics_cov = naics_mod.coverage([*signal_keys, *terms], naics_links)
     con.close()
 
     # 5. Escritura.
@@ -805,6 +871,7 @@ def rank_run(
         "n_over_cap": sum(c.status == "fuera_del_tope" for c in candidates),
         "n_published": sum(c.published for c in candidates),
         "embeddings": {"model": emb.name, "computed": emb.computed, "reused": emb.reused},
+        "naics_coverage": naics_cov,
         "adapter_agencies_unmatched": unmatched_adapter_agencies(fred_names),
     }
     run_row = {
@@ -829,6 +896,7 @@ def rank_run(
     _write("rank_evidence", ev_rows, cfg)
     _write("rank_origin", origin_rows(run_id, candidates, info), cfg)
     _write("rank_context", context_rows, cfg)
+    _write("naics_links", naics_mod.rows(run_id, naics_links, tables), cfg)
     _write("rank_runs", [run_row], cfg)
     if log is not None:
         log.info("ranking", extra={"fields": summary})

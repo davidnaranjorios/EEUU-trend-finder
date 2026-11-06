@@ -427,6 +427,7 @@ def test_migrate_adds_null_n_entities_without_download(tmp_path):
             "total_docs": 9,
             "n_entities": None,
             "n_industries": None,
+            "sic_top_json": None,
         }
     ]
     assert migrate(processed) == {"particiones": 1, "migradas": 0}
@@ -443,6 +444,6 @@ def test_old_schema_periods_are_reprocessed_only_where_configured(cfg, tmp_path)
     assert state.needs_run("2024-01", 20, now, min_schema=3)  # FR: se re-procesa
     assert not state.needs_run("2024-01", 20, now, min_schema=1)  # EDGAR: no
     assert cfg["federal_register"]["reprocess_below_schema"] == 3
-    assert cfg["edgar"]["reprocess_below_schema"] == 4
+    assert cfg["edgar"]["reprocess_below_schema"] == 5
     state.mark("2024-01", closed=True, run_id="r2", stats={"docs": 1, "rows": {}})
     assert not state.needs_run("2024-01", 20, now, min_schema=3)

@@ -49,10 +49,10 @@ from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
 EXIT_PENDING = 10
 # Versión del esquema de las particiones que escribe la ingesta (ADR 0008):
 #   2: term_freq.n_entities;  3: entidad del Federal Register normalizada;
-#   4: term_freq.n_industries (SIC de EDGAR).
+#   4: term_freq.n_industries (SIC de EDGAR);  5: term_freq.sic_top_json (SIC de 4 dígitos).
 # Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se vuelve a
 # procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DOC_LEVEL = "*"  # `section` de las decisiones sobre el documento entero
 TABLE_DIRS = {
     TEXT_DOCS.name: "text_docs",
@@ -82,6 +82,7 @@ class DocResult:
     entity: str | None
     sections: list[SectionResult] = field(default_factory=list)
     group: str | None = None  # industria (SIC de 2 dígitos) cuando la fuente la tiene
+    sic: str | None = None  # SIC de 4 dígitos (para la concordancia oficial SIC → NAICS)
 
 
 def analyze_section(
@@ -164,6 +165,7 @@ def finalize_period(
     processed_dir: Path,
     run_id: str,
     min_doc_count: int,
+    top_sic: int,
     n_max: int,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -189,7 +191,7 @@ def finalize_period(
                     status, detail = "duplicado", f"duplicado_de={seen_hash[key]}"
                 else:
                     seen_hash[key] = doc.doc_id
-                    counter.add(sec.section, sec.hashes, doc.entity, doc.group)
+                    counter.add(sec.section, sec.hashes, doc.entity, doc.group, doc.sic)
                     tmp_by_section.setdefault(sec.section, []).append(sec.tmp_path)
                     text_rows.append(
                         {
@@ -220,12 +222,13 @@ def finalize_period(
         hashes, counts = counter.retained(section, min_doc_count)
         entities = counter.n_entities(section, hashes)
         industries = counter.n_groups(section, hashes)
+        sic_top = counter.sic_top(section, hashes, top_sic)
         texts = (read_temp_text(Path(p)) for p in tmp_by_section[section])
         strings = resolve_strings(hashes, texts, n_max)
         total = counter.total_docs[section]
         ind = industries.tolist() if industries is not None else [None] * len(hashes)
-        for h, c, e, n_ind in zip(
-            hashes.tolist(), counts.tolist(), entities.tolist(), ind, strict=True
+        for h, c, e, n_ind, st in zip(
+            hashes.tolist(), counts.tolist(), entities.tolist(), ind, sic_top, strict=True
         ):
             freq_rows.append(
                 {
@@ -237,6 +240,7 @@ def finalize_period(
                     "total_docs": total,
                     "n_entities": e,
                     "n_industries": n_ind,
+                    "sic_top_json": st,
                 }
             )
 
@@ -358,6 +362,7 @@ def run_source(
                     processed_dir=processed_dir,
                     run_id=run_id,
                     min_doc_count=text_cfg["min_doc_count"],
+                    top_sic=text_cfg["top_sic"],
                     n_max=text_cfg["ngram_max"],
                 )
             finally:
@@ -396,13 +401,15 @@ def migrate(processed_dir: Path) -> dict[str, int]:
         if not files:
             continue
         out["particiones"] += 1
-        if all({"n_entities", "n_industries"} <= set(pq.read_schema(f).names) for f in files):
+        if all(set(TERM_FREQ.schema.names) <= set(pq.read_schema(f).names) for f in files):
             continue
         table = pa.concat_tables([pq.read_table(f) for f in files], promote_options="default")
         if "n_entities" not in table.column_names:
             table = table.append_column("n_entities", pa.nulls(table.num_rows, pa.int64()))
         if "n_industries" not in table.column_names:
             table = table.append_column("n_industries", pa.nulls(table.num_rows, pa.int64()))
+        if "sic_top_json" not in table.column_names:
+            table = table.append_column("sic_top_json", pa.nulls(table.num_rows, pa.string()))
         store.replace_partition(
             table.select(TERM_FREQ.schema.names).cast(TERM_FREQ.schema),
             TERM_FREQ,

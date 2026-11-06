@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -38,6 +39,8 @@ def test_ingest_stores_distinct_industries_from_sic(cfg, tmp_path):
     # CIK 101 (SIC 28xx) y CIK 102 (SIC 73xx): dos industrias, dos empresas.
     assert (inj["n_entities"], inj["n_industries"]) == (2, 2)
     assert all(r["n_industries"] <= r["doc_count"] for r in freq.values())
+    # SIC de 4 dígitos por término (insumo de la concordancia oficial SIC → NAICS).
+    assert json.loads(inj["sic_top_json"]) == {"2834": 1, "7372": 1}
 
 
 def test_examples_give_company_name_and_cik_of_recent_docs(cfg, tmp_path):

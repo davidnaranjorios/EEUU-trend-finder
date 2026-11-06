@@ -260,7 +260,7 @@ def _validate_text(cfg: dict[str, Any]) -> None:
     text = _section(cfg, "text")
     if text.get("ngram_max") not in (1, 2, 3):
         raise ConfigError("text.ngram_max debe ser 1, 2 o 3")
-    for key in ("min_doc_count", "seed"):
+    for key in ("min_doc_count", "seed", "top_sic"):
         if not isinstance(text.get(key), int) or text[key] < 1:
             raise ConfigError(f"text.{key} debe ser un entero positivo")
     if (

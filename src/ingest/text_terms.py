@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import re
 import unicodedata
 from collections import defaultdict
@@ -85,6 +86,8 @@ class PeriodCounter:
         self._entity_ids: dict[str | None, int] = {}
         self._groups: dict[str, list[int]] = defaultdict(list)
         self._group_ids: dict[str | None, int] = {}
+        self._sics: dict[str, list[int]] = defaultdict(list)
+        self._sic_ids: dict[str | None, int] = {}
         self.total_docs: dict[str, int] = defaultdict(int)
 
     def add(
@@ -93,7 +96,9 @@ class PeriodCounter:
         hashes: np.ndarray,
         entity: str | None = None,
         group: str | None = None,
+        sic: str | None = None,
     ) -> None:
+        self._sics[section].append(self._sic_ids.setdefault(sic, len(self._sic_ids)))
         self._chunks[section].append(hashes)
         self._groups[section].append(self._group_ids.setdefault(group, len(self._group_ids)))
         # Sin entidad (p. ej. documentos presidenciales) cuenta como una entidad más.
@@ -113,6 +118,36 @@ class PeriodCounter:
         if set(self._group_ids) <= {None}:
             return None
         return self._distinct(section, hashes, self._groups[section], len(self._group_ids))
+
+    def sic_top(self, section: str, hashes: np.ndarray, k: int) -> list[str | None]:
+        """JSON {sic: documentos} con los `k` SIC más frecuentes por hash (None si no hay SIC)."""
+        out: list[str | None] = [None] * hashes.size
+        if hashes.size == 0 or k <= 0 or set(self._sic_ids) <= {None}:
+            return out
+        names = {i: s for s, i in self._sic_ids.items()}
+        n_ids = len(self._sic_ids)
+        codes = []
+        for chunk, sid in zip(self._chunks.get(section, []), self._sics[section], strict=True):
+            if names[sid] is None:
+                continue
+            idx = np.searchsorted(hashes, chunk)
+            ok = idx < hashes.size
+            ok[ok] = hashes[idx[ok]] == chunk[ok]
+            codes.append(idx[ok].astype(np.int64) * n_ids + sid)
+        if not codes:
+            return out
+        uniq, cnt = np.unique(np.concatenate(codes), return_counts=True)
+        pos, sid = uniq // n_ids, uniq % n_ids
+        order = np.lexsort((-cnt, pos))
+        pos, sid, cnt = pos[order], sid[order], cnt[order]
+        bounds = np.flatnonzero(np.diff(pos)) + 1
+        for p, s, c in zip(
+            np.split(pos, bounds), np.split(sid, bounds), np.split(cnt, bounds), strict=True
+        ):
+            out[int(p[0])] = json.dumps(
+                {names[int(a)]: int(b) for a, b in zip(s[:k], c[:k], strict=True)}
+            )
+        return out
 
     def _distinct(self, section: str, hashes: np.ndarray, ids: list[int], n_ids: int) -> np.ndarray:
         if hashes.size == 0:
