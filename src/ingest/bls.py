@@ -169,6 +169,29 @@ def parse_code_table(lines: list[list[str]], column: str) -> dict[str, str]:
     return {r[key]: r[text] for r in rows if len(r) > max(key, text)}
 
 
+NAICS_SUFFIX = "#naics"  # clave auxiliar en `maps`: código de la dimensión -> "NAICS x;NAICS y"
+_NAICS_COL = "naics_code"
+_NAICS_TOKEN_RE = re.compile(r"\d{2}-\d{2}|\d{2,6}")
+
+
+def parse_naics_column(lines: list[list[str]], column: str) -> dict[str, str]:
+    """código -> "NAICS x;NAICS y" desde la columna `naics_code` de una tabla de industrias
+    (p. ej. ce.industry). Solo se copian los códigos que BLS publica; se validan contra la
+    tabla oficial NAICS al anclar (src/rank/naics.py)."""
+    if not lines or _NAICS_COL not in lines[0]:
+        return {}
+    head = lines[0]
+    key = head.index(column) if column in head else 0
+    col = head.index(_NAICS_COL)
+    out = {}
+    for r in lines[1:]:
+        if len(r) > max(key, col):
+            tokens = _NAICS_TOKEN_RE.findall(r[col])
+            if tokens:
+                out[r[key]] = ";".join(f"NAICS {t}" for t in tokens)
+    return out
+
+
 def geo_classify(codes: dict[str, str], maps: dict[str, dict[str, str]]) -> tuple[str, str]:
     """(geo_level, geo_detail) de una serie según sus dimensiones geográficas.
 
@@ -458,7 +481,16 @@ class BlsAdapter:
             "copyrighted": False,  # dominio público federal
             "geo_level": geo_level,
             "geo_detail": geo_detail,
-            "category_path": unit.extra.get("name") or unit.unit_id,
+            "category_path": ";".join(
+                [
+                    unit.extra.get("name") or unit.unit_id,
+                    *(
+                        maps[c + NAICS_SUFFIX][get(c)]
+                        for c in title_cols
+                        if get(c) in maps.get(c + NAICS_SUFFIX, {})
+                    ),
+                ]
+            ),
         }
 
     def _load_maps(
@@ -486,6 +518,9 @@ class BlsAdapter:
                 continue
             lines = list(_tsv(self._text(f"{code}/{name}").splitlines()))
             maps[col] = parse_code_table(lines, col)
+            naics = parse_naics_column(lines, col)
+            if naics:
+                maps[col + NAICS_SUFFIX] = naics
         return maps
 
     def _last_updated(self, unit: Unit) -> datetime | None:

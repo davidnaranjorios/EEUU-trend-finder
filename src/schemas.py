@@ -331,7 +331,13 @@ RANK_CONTEXT = TableSpec(
 )
 
 # Anclaje a industria (ADR 0012): una fila por (objeto, NAICS). `peso` suma 1 por objeto y método.
-NAICS_METHODS = ("codigo_en_metadatos", "heredado_cluster", "sic_concordancia")
+NAICS_METHODS = (
+    "codigo_en_metadatos",
+    "nombre_oficial",
+    "heredado_origen",
+    "heredado_cluster",
+    "sic_concordancia",
+)
 NAICS_LINKS = TableSpec(
     name="naics_links",
     schema=_schema(

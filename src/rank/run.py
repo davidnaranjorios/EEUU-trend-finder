@@ -802,12 +802,19 @@ def rank_run(
     # 4b. Anclaje a industria NAICS (ADR 0012).
     tables = naics_mod.load_tables(cfg, REPO_ROOT)
     own = naics_mod.series_links(meta_texts(con, signal_keys), tables)
+    by_origin = naics_mod.inherit_by_origin(
+        {k: [tuple(d.split("|", 1)) for d in info[k].duplicates] for k in signal_keys if k in info},
+        own,
+    )
+    own = {**own, **by_origin}
     naics_links = {
         **own,
         **naics_mod.inherit_in_clusters(clusters, own),
         **naics_mod.term_links(term_sics(con, txt_signals), tables),
     }
-    naics_cov = naics_mod.coverage([*signal_keys, *terms], naics_links)
+    naics_cov = naics_mod.coverage(
+        [*signal_keys, *terms], naics_links, rk["naics"]["not_applicable_sources"]
+    )
     con.close()
 
     # 5. Escritura.
