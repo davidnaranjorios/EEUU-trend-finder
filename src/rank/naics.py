@@ -23,7 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-CODE_RE = re.compile(r"NAICS(?:\s+codes?)?\s*[:#]?\s*(\d{2}(?:-\d{2})?|\d{3,6})\b", re.IGNORECASE)
+# "NAICS 3361", "NAICS code: 3361", "NAICS2017: 31-33", "2017 NAICS code 3361".
+CODE_RE = re.compile(
+    r"NAICS(?:\s*(?:19|20)\d\d)?(?:\s+(?:industry\s+)?codes?)?\s*[:#=]?\s*"
+    r"(\d{2}-\d{2}|\d{2,6})\b",
+    re.IGNORECASE,
+)
+NAME_SPLIT_RE = re.compile(r"\s*(?:\||;|:|,|\s-\s|\s–\s)\s*")
 
 Link = tuple[str, float, str]  # (naics, peso, metodo)
 
@@ -31,6 +37,7 @@ Link = tuple[str, float, str]  # (naics, peso, metodo)
 @dataclass(frozen=True)
 class NaicsTables:
     names: dict[str, str]  # código NAICS 2022 -> nombre oficial
+    by_name: dict[str, str]  # nombre oficial normalizado -> código (el más amplio si se repite)
     concordance: dict[str, list[tuple[str, float]]]  # SIC (4 dígitos) -> [(NAICS 2022, peso)]
 
 
@@ -42,7 +49,27 @@ def load_tables(cfg: Mapping[str, Any], root: Path) -> NaicsTables:
     with (root / paths["concordance_table"]).open(encoding="utf-8", newline="") as fh:
         for r in csv.DictReader(fh):
             conc[r["sic"]].append((r["naics"], float(r["weight"])))
-    return NaicsTables(names, dict(conc))
+    by_name: dict[str, str] = {}
+    for code, name in sorted(names.items(), key=lambda kv: (len(kv[0]), kv[0])):
+        by_name.setdefault(normalize_name(name), code)
+    return NaicsTables(names, by_name, dict(conc))
+
+
+def normalize_name(text: str) -> str:
+    """Minúsculas, sin paréntesis ni puntuación: para comparar contra nombres oficiales."""
+    text = re.sub(r"\([^)]*\)", " ", text.lower())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+
+
+def names_in_text(text: str, tables: NaicsTables) -> list[str]:
+    """Códigos cuyo nombre oficial NAICS es exactamente un segmento del texto (título/ruta)."""
+    out: list[str] = []
+    for seg in NAME_SPLIT_RE.split(text or ""):
+        key = normalize_name(seg)
+        code = tables.by_name.get(key) if key else None
+        if code and code not in out:
+            out.append(code)
+    return out
 
 
 def codes_in_text(text: str, tables: NaicsTables) -> list[str]:
@@ -62,8 +89,29 @@ def series_links(
     out = {}
     for key, text in meta_text.items():
         codes = codes_in_text(text, tables)
+        method = "codigo_en_metadatos"
+        if not codes:
+            codes, method = names_in_text(text, tables), "nombre_oficial"
         if codes:
-            out[key] = [(c, 1 / len(codes), "codigo_en_metadatos") for c in codes]
+            out[key] = [(c, 1 / len(codes), method) for c in codes]
+    return out
+
+
+def inherit_by_origin(
+    duplicates: Mapping[tuple[str, str], Iterable[tuple[str, str]]],
+    own: Mapping[tuple[str, str], list[Link]],
+) -> dict[tuple[str, str], list[Link]]:
+    """`heredado_origen`: una serie sin NAICS que es copia de otra agencia (ADR 0010) hereda."""
+    out: dict[tuple[str, str], list[Link]] = {}
+    for key, copies in duplicates.items():
+        donors = [c for c in copies if c in own]
+        if key in own or not donors:
+            continue
+        acc: dict[str, float] = defaultdict(float)
+        for d in donors:
+            for naics, w, _ in own[d]:
+                acc[naics] += w / len(donors)
+        out[key] = [(n, w, "heredado_origen") for n, w in sorted(acc.items())]
     return out
 
 
@@ -115,12 +163,17 @@ def parse_sic_top(payloads: Iterable[str | None]) -> dict[str, int]:
 
 
 def coverage(
-    objects: Iterable[tuple[str, str]], links: Mapping[tuple[str, str], list[Link]]
+    objects: Iterable[tuple[str, str]],
+    links: Mapping[tuple[str, str], list[Link]],
+    not_applicable: Iterable[str] = (),
 ) -> dict[str, dict[str, float | int]]:
-    """% de objetos con señal que tienen NAICS, por fuente."""
+    """% de objetos con señal que tienen NAICS, por fuente (las no aplicables quedan fuera)."""
+    skip = set(not_applicable)
     tot: dict[str, int] = defaultdict(int)
     hit: dict[str, int] = defaultdict(int)
     for src, oid in objects:
+        if src in skip:
+            continue
         tot[src] += 1
         hit[src] += (src, oid) in links
     return {

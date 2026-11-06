@@ -99,3 +99,57 @@ def test_rank_run_writes_naics_links_and_coverage(tmp_path):
 
     con = connect(fx.cfg["paths"]["processed_dir"])
     con.execute("SELECT count(*) FROM naics_links").fetchone()  # la vista existe
+
+
+# --- S1b: formatos reales por fuente -----------------------------------------------------------
+
+from src.ingest.bls import NAICS_SUFFIX, parse_naics_column  # noqa: E402
+
+# Filas con el formato de ce.industry (BLS): industry_code, naics_code, ..., industry_name
+CE_INDUSTRY = [
+    ["industry_code", "naics_code", "publishing_status", "industry_name", "display_level"],
+    ["00000000", "-", "A", "Total nonfarm", "0"],
+    ["20000000", "23", "A", "Construction", "2"],
+    ["31000000", "31-33", "A", "Manufacturing", "2"],
+    ["42000000", "42", "A", "Wholesale trade", "2"],
+]
+
+
+def test_bls_naics_code_comes_from_the_industry_table(tables):
+    m = parse_naics_column(CE_INDUSTRY, "industry_code")
+    assert "00000000" not in m and m["31000000"] == "NAICS 31-33"
+    links = nx.series_links(
+        {("bls", "CES3100000001"): f"All employees | CES;{m['31000000']}"}, tables
+    )
+    assert links[("bls", "CES3100000001")][0][:3] == ("31-33", 1.0, "codigo_en_metadatos")
+    assert NAICS_SUFFIX == "#naics"
+
+
+REAL_SHAPES = {
+    (
+        "census",
+        "eits/qss:x",
+    ): "Quarterly Services Survey | 2017 NAICS code: 5411 | Seasonally adjusted",
+    ("bea", "GDPbyIndustry:1:RT"): "Value Added by Industry | Industry: Retail trade",
+    ("fred", "USCONS"): "All Employees, Construction",
+    ("fred", "XYZ"): "Real Gross Domestic Product",
+}
+
+
+def test_each_source_with_own_codes_has_nonzero_coverage(tables):
+    links = nx.series_links(REAL_SHAPES, tables)
+    cov = nx.coverage(REAL_SHAPES, links)
+    assert links[("census", "eits/qss:x")][0][0] == "5411"
+    assert links[("bea", "GDPbyIndustry:1:RT")][0][:3] == ("44-45", 1.0, "nombre_oficial")
+    assert links[("fred", "USCONS")][0][0] == "23"
+    for src in ("census", "bea"):
+        assert cov[src]["pct"] > 0, f"{src}: cobertura 0 % con códigos propios"
+    assert cov["fred"] == {"n": 2, "with_naics": 1, "pct": 50.0}
+
+
+def test_origin_inheritance_and_not_applicable_sources(tables):
+    own = nx.series_links({("bls", "A"): "NAICS 3361"}, tables)
+    got = nx.inherit_by_origin({("fred", "B"): [("bls", "A")], ("fred", "C"): []}, own)
+    assert got[("fred", "B")][0] == ("3361", 1.0, "heredado_origen") and ("fred", "C") not in got
+    cov = nx.coverage([("federal_register", "t"), ("bls", "A")], own, ["federal_register"])
+    assert set(cov) == {"bls"}
