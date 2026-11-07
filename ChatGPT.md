@@ -7,8 +7,9 @@ Base inspeccionada: main, commit 66ad33a7ae9f7b646ec9103422cc03b3c5ff1f3f.
 ## 1. Estado y alcance de la aprobación
 
 El propietario aprobó en esta conversación documentar con detalle el objetivo, el trabajo
-realizado y el plan aquí descrito. La aprobación autoriza esta documentación; no autoriza
-automáticamente implementar todas las etapas, fusionar PR, desplegar ni modificar datos de R2.
+realizado y el plan aquí descrito. La aprobación inicial autorizó la documentación. Una aprobación posterior autoriza ajustar
+este plan e iniciar la implementación del alcance descrito aquí, empezando por Parquet y EDGAR.
+No autoriza fusiones, despliegues ni operaciones sobre R2.
 
 Este documento complementa [CLAUDE.md](CLAUDE.md), [docs/plan.md](docs/plan.md) y los
 [ADR](docs/decisions/). No reemplaza sus decisiones técnicas ni declara terminadas sus fases.
@@ -67,7 +68,8 @@ Se añaden los acuerdos de esta sesión:
 - No descartar automáticamente mercados por concentración, capital necesario o barreras.
 - Investigar tanto entrada convencional como soluciones capaces de cambiar esas condiciones.
 - Auditar antes de ampliar funcionalidades. No relajar umbrales para producir más candidatos.
-- Proponer el diseño y obtener aprobación antes de iniciar una nueva implementación.
+- Implementar el diseño aprobado sin pedir aprobación repetida. Si cambia el alcance o diseño,
+  presentar la diferencia antes de implementarla. Avisar con PR y evidencia.
 - Trabajar en ramas separadas y presentar PR para revisión; no escribir directamente en main.
 - No fusionar, desplegar ni modificar datos de producción R2 sin autorización explícita.
 - No debilitar pruebas para hacerlas pasar.
@@ -170,144 +172,135 @@ No se creó AGENTS.md ni se alteraron CLAUDE.md, docs/plan.md o los ADR.
 
 No se fijan fechas arbitrarias. Cada etapa avanza por evidencia y criterios acordados.
 Las etapas 01–03 preparan la base; las 04–07 desarrollan comprensión, oportunidades y utilidad.
-Antes de implementar cada bloque se presentará su diseño para aprobación.
+El alcance siguiente está aprobado. Cambios de diseño o alcance requieren nueva aprobación.
 
-### 01. Auditoría inicial, estabilización e integridad
+### 01. Estabilización inmediata: dos correcciones
 
-Primero completar el diagnóstico de solo lectura y las pruebas locales seguras:
+Limitar el trabajo inmediato a los fallos que rompen el pipeline; no bloquearlo con una
+auditoría completa del repositorio.
 
-1. Leer los ADR restantes relevantes y conciliar documentación con código y ejecuciones.
-2. Construir una tabla de problemas confirmados, sospechas y aspectos no verificables.
-3. Revisar alcance, riesgos y pruebas del PR #37, incluida compatibilidad de particiones
-   mixtas, conservación de registros, interrupciones e idempotencia.
-4. Analizar el manejo de errores HTTP de EDGAR y diseñar una prueba de respuesta comprimida
-   defectuosa, reintentos acotados y continuidad sin pérdida silenciosa.
-5. Identificar datos y accesos necesarios para reproducir una corrida sin tocar producción.
-6. Presentar correcciones por separado y obtener aprobación antes de implementarlas.
+- Parquet, PR #37: comprobar que la prueba existente reproduce el caso real del Reporte
+  42235624537: series_term_links antigua sin comove_q y upsert nuevo con esa columna.
+  Reforzar solo si falta cobertura; no duplicar pruebas. Comprobar conservación, NULL
+  para validación desconocida, inserción, reemplazo e idempotencia.
+- EDGAR, run 42218050161: reintentos acotados ante httpx.DecodingError. Si un documento
+  persiste en fallar, conservar linaje con motivo error_descarga y continuar con los demás.
+  Usar el estado existente excluido y su detalle si es compatible; no inventar un dominio.
+  No ocultar fallos masivos: registrar intentados, descargados y fallidos, marcar el periodo
+  incompleto y mantener posibilidad de reintento. Errores sistémicos de red/acceso deben
+  seguir siendo visibles, sin presentar cobertura incompleta como éxito integral.
+- Probar una respuesta comprimida defectuosa real en transporte simulado, recuperación,
+  agotamiento, linaje, continuación y condición incompleta.
+- Un PR por corrección y CI verde, con alcance, archivos, salida real y limitaciones.
 
-Tras aprobar correcciones: verificar ingesta → detección → ranking → reporte con un manifiesto
-de versiones de código, configuración, datos, periodos y ejecución. Conciliar conteos de
-entrada y salida, exclusiones y artefactos; verificar linaje, copyright e idempotencia.
+Después de revisión y merge aprobado por el propietario: solicitar autorización antes de
+re-correr flujos que accedan a R2 o publiquen. Reportar cobertura NAICS real por fuente y
+método, denominadores y ambigüedad; CI no sustituye esa verificación.
 
-Entregable: diagnóstico y plan de corrección por dependencia y riesgo; posteriormente,
-corrida completa reproducible con logs y conteos conciliados.
-Aceptación: explicar discrepancias y comprobar que repetir la ejecución no duplica ni pierde
-filas. CI verde es necesaria, pero no suficiente.
-Dependencia: aprobación explícita antes de operaciones sobre R2 o despliegues.
+### 02. Inventario automático y etiquetado humano liviano
 
-### 02. Auditoría semántica, independencia y anclaje industrial
+Generar por cluster miembros, fuentes publicadoras, origen económico, NAICS y método,
+vínculos, estado y regla exacta de exclusión. Identificar la corrida y separar ausencia de
+datos de exclusión metodológica. Explicar por qué queda un solo candidato sin bajar umbrales.
 
-1. Recuperar los clusters de una corrida identificada; si se usa la corrida histórica, verificar
-   primero los 119 registros atribuidos a ella.
-2. Crear inventario completo con miembros, señales, fechas, vínculos, fuentes, origen,
-   clasificación y motivo de exclusión.
-3. Revisar una muestra estratificada de clusters y vínculos y el candidato publicado.
-   Acordar el muestreo y la rúbrica antes de etiquetar; ampliar revisión según los errores.
-4. Medir coherencia del fenómeno, falsas asociaciones y duplicados. La similitud de títulos
-   por sí sola no prueba relación económica ni independencia.
-5. Descomponer por qué queda un solo candidato: evidencia disponible, cobertura de texto,
-   validación de vínculos, origen compartido, copyright y demás reglas realmente aplicadas.
-6. Validar NAICS después de actualizar metadatos y reprocesar lo necesario. Separar códigos
-   explícitos, nombres oficiales, herencia y concordancias; declarar ambigüedad y cobertura
-   por fuente con denominador, exclusiones y método.
+Preparar una muestra reproducible de 20 clusters, estratificada por estado y cobertura
+(incluir el candidato publicado si existe). Si hay menos de 20, entregar todos y declarar
+el total. El propietario etiqueta; el agente no sustituye esa evaluación.
+Rúbrica simple: coherencia del fenómeno, pertinencia texto–serie, independencia de origen,
+anclaje NAICS, con opciones correcto / dudoso / incorrecto / no evaluable y una justificación.
+Conservar ids y evidencia para poder revisar las etiquetas.
 
-Entregable: tabla auditable, rúbrica, etiquetas, errores y cobertura industrial.
-Aceptación: causa de exclusión trazable, métricas de coherencia y errores, fuentes derivadas
-no contadas dos veces. Umbrales de calidad se acuerdan antes de medir.
-No bajar umbrales estadísticos o semánticos para inflar el número de candidatos.
+Entregable: inventario completo automático, muestra y formulario; sin auditoría manual
+exhaustiva. No presentar una muestra como precisión demostrada de todo el sistema.
 
-### 03. Validación estadística y temporal
+### 03. Controles ligeros ahora; backtest estricto después
 
-Corresponde a revisar la Fase 2 y desarrollar la Fase 6 de CLAUDE.md:
+Tras estabilizar y antes de generar fichas: controles negativos y sensibilidad a ventanas
+de 3/5/7 años. Definir qué ventana cambia, mantener fecha final, universo comparable,
+configuración y semilla documentados; declarar series sin historia suficiente.
+Medir falsos positivos, persistencia y estabilidad de señales/ranking sin seleccionar después
+la ventana que produzca más candidatos. No cambiar umbrales para mejorar resultados.
 
-- Auditar calibración de p-values, FDR bajo dependencia, potencia, persistencia, piso de p,
-  sensibilidad a ventanas y estabilidad del ranking.
-- Combinar simulaciones, controles negativos y eventos históricos; reportar sus límites.
-- Proponer eventos con fechas y referencias en eval/ y aprobarlos antes de la evaluación.
-- Fijar de antemano umbrales, métricas, ventanas y líneas base. No ajustar criterios después
-  de ver el resultado para declararlo exitoso.
-- Reconstruir información disponible en cada fecha. ALFRED no resuelve por sí solo el
-  historial de BLS, BEA, Census y texto: documentar publicación, revisiones y cobertura.
-- Si una fuente no permite reconstrucción fiable, declarar la limitación y separar ese
-  experimento de un backtest estricto.
-- Medir recuperación, anticipación, volumen de candidatos y comparación con líneas base.
-  No llamar «precisión» al recall de un conjunto incompleto de eventos conocidos.
+El backtest histórico estricto se posterga y su alcance inicial será solo FRED/ALFRED.
+No se ha verificado ni implementado reconstrucción temporal equivalente para BLS, BEA,
+Census y texto; esto no afirma que esas fuentes carezcan universalmente de vintages.
+Conservar evaluación aislada en eval/, eventos y criterios fijados previamente y líneas base.
 
-Entregable: reporte reproducible con manifiesto de datos, métricas y limitaciones.
-Aceptación: ausencia de fuga temporal, aislamiento de eval/, comparación con criterios previos
-y resultados reales. Un resultado inferior al objetivo se informa como tal.
+### 03b. Fuentes de mercado, después de estabilizar
 
-### 04. Interpretación económica
+Unidad de análisis: industria NAICS conforme ADR 0012; conservar granularidad, fechas,
+método de correspondencia, ambigüedad y cobertura.
 
-Convertir fenómenos validados en fichas explicativas:
+Antes de crear adaptadores, comprobar cobertura de los existentes y documentación oficial:
 
-- Qué cambió, magnitud, unidades, horizonte, persistencia y revisiones.
-- Industrias y geografía cuando existan datos adecuados; método y confianza del anclaje.
-- Actores afectados, precios, cantidades, costos, capacidad y productividad cuando sean medibles.
-- Mecanismos plausibles y explicaciones alternativas, sin convertir correlación en causalidad.
-- Relaciones entre indicadores, evidencia contradictoria y datos aún necesarios.
-- Concentración y barreras como contexto económico; límites de cobertura de cada medida.
+| Fuentes previstas | Pregunta que pueden ayudar a investigar |
+| --- | --- |
+| Census SUSB, CBP, BDS y Economic Census | Estructura empresarial, tamaño, competencia y entrada |
+| BLS PPI y JOLTS; BEA PCE | Precios, presiones de capacidad y contexto de demanda |
+| USAspending | Flujos de contratación/gasto público y actores receptores |
 
-Cada afirmación tendrá evidencia, fecha, fuente y etiqueta: hecho, inferencia o hipótesis.
-La falta de datos se mostrará como desconocida, no como cero o ausencia del fenómeno.
+Implementar sobre src/ingest/common.py cuando aplique su contrato, con pruebas de esquema
+e idempotencia y linaje. Si un dataset exige otro contrato, proponer esa diferencia.
+No asumir que conteos de establecimientos prueban concentración de ventas ni que precios,
+vacantes, gasto agregado o contratación pública demuestran demanda por una solución.
+Documentar población, unidades, frecuencia, restricciones, licencias, revisiones y límites
+de correspondencia NAICS. No inventar barreras o dinero a partir de proxies insuficientes.
 
-Entregable: ficha económica trazable y revisión de interpretaciones alternativas.
-Aceptación: ningún enunciado causal o de demanda sin soporte suficiente; incertidumbre visible.
-Esta etapa explica el fenómeno; la siguiente investiga qué podría hacerse frente a él.
+### 04–05. Una ficha de oportunidad con dos partes
 
-### 05. Motor de descubrimiento empresarial
+No construir productos separados para interpretación y oportunidad. Una ficha estructurada
+por oportunidad enlazada a una o más industrias NAICS, con evidencia trazable.
 
-Para cada fenómeno suficientemente validado, investigar:
+**Parte A — Comprender:** qué cambió, magnitud/unidades/periodo, mecanismos plausibles,
+explicaciones alternativas y evidencia contradictoria. Separar hechos, inferencias e hipótesis.
 
-1. Qué problemas provoca o revela y cómo podrían evolucionar.
-2. Quién los sufre, quién soporta sus costos y quién podría decidir o pagar una solución.
-3. Qué evidencia mide la frecuencia, severidad y costo del problema.
-4. Qué soluciones, proveedores, sustitutos y prácticas internas existen.
-5. Dónde presentan limitaciones: desempeño, costo, acceso, tiempo, regulación u otras
-   restricciones sustentadas en evidencia.
-6. Qué soluciones convencionales podrían mejorar la situación.
-7. Qué alternativas radicalmente distintas podrían eliminar procesos, sustituir tecnologías
-   o cambiar la estructura de mercado.
-8. Qué capacidades, capital, restricciones físicas y regulatorias necesita cada alternativa.
-9. Qué contradice la hipótesis, qué falta saber y qué experimento podría refutarla.
+**Parte B — Oportunidad:** incluir las nueve dimensiones siguientes:
 
-Crecimiento, concentración, barreras, precios y demanda serán dimensiones separadas.
-La concentración no supone automáticamente inviabilidad; las barreras pueden motivar una
-hipótesis transformadora, pero no garantizan que sea técnicamente posible.
-Distinguir necesidad observada, interés declarado, disposición a pagar y demanda comprobada.
+| Dimensión | Contenido requerido |
+| --- | --- |
+| Fenómeno | Cambio observado y vínculo con la Parte A |
+| Evidencia | Fuentes, fechas, calidad, procedencia y contradicciones |
+| Demanda | Necesidad, usuario, comprador y disposición a pagar; distinguir proxies |
+| Brecha | Problema, costo para el afectado y limitaciones de soluciones actuales |
+| Competencia | Actores, sustitutos y concentración cuando sea medible |
+| Dinero | Quién paga, por qué, costos e ingresos hipotéticos y evidencia disponible |
+| Entrada | Capital, capacidades, regulación y rutas de entrada |
+| Riesgo | Supuestos críticos, restricciones y explicaciones adversas |
+| Confianza | Respaldo y dudas por afirmación, sin probabilidad ficticia |
 
-Entregable: hipótesis de oportunidades con evidencia favorable, contraargumentos, alternativas,
-preguntas pendientes, supuestos críticos y siguiente experimento.
-Aceptación: problema y actor concretos, trazabilidad al fenómeno y condiciones de refutación.
-No producir probabilidades de éxito sin una base empírica y un método de calibración.
-El ranking de oportunidades será distinto del ranking estadístico; cualquier priorización
-deberá justificar criterios y mostrar incertidumbre y sensibilidad.
+Por fila y, si contiene afirmaciones distintas, por afirmación: ✅ demostrado /
+🟡 indicio / ⚪ hipótesis / ❔ desconocido, con evidencia y limitación.
+Un hecho de crecimiento no convierte la demanda comercial en demostrada.
+Nunca un score único de oportunidad; preservar el score estadístico como dato separado.
 
-### 06. Evaluación y visualización para decisiones
+Añadir soluciones convencionales y radicales, condiciones que refutarían cada hipótesis y
+un experimento concreto con criterio de éxito o rechazo fijado antes de ejecutarlo.
+Investigar qué problema revela cada fenómeno, quién soporta sus costos, soluciones existentes
+y alternativas que podrían eliminar procesos o transformar la estructura económica.
 
-Diseñar un tablero que permita navegar:
+Concentración o capital no descartan: se clasifican. Interesa especialmente
+«industria concentrada + entrada barata o vía disruptiva», sin presuponer que esa combinación
+existe ni que una tecnología propuesta es viable.
 
-Oportunidad → problema → fenómeno → señales/series/texto → fuentes y fechas,
-y también desde oportunidad → supuestos → contradicciones → experimentos → resultados.
+### 06. Resumen sin LLM y fichas completas a demanda
 
-Las fichas comparables incluirán:
+1. Resumen semanal de todas las oportunidades identificadas, calculado sin LLM y con
+   reglas y evidencia deterministas; datos faltantes explícitos.
+2. Fichas completas solo para las oportunidades que seleccione el propietario.
+3. Navegar oportunidad → fenómeno → series/texto → fuentes/fechas y
+   oportunidad → supuestos → contradicciones → experimentos → resultados.
+4. Respetar copyright y no ocultar incertidumbre en las comparaciones.
 
-- Problema, actores, soluciones existentes y alternativas propuestas.
-- Evidencia de crecimiento, concentración, barreras, precios y demanda; unidades y periodo.
-- Procedencia, fecha de consulta y disponibilidad histórica cuando corresponda.
-- Supuestos, contraargumentos, datos faltantes e incertidumbre por dimensión.
-- Experimento recomendado, criterio previo de éxito o rechazo y resultado cuando exista.
-- Diferenciación visible entre señal estadística, interpretación y validación comercial.
+La redacción de la ficha se generará vía OpenRouter con el modelo elegido por el propietario
+en config.yaml. Solo recibirá datos de la ficha; no completará ausencias con conocimiento
+no documentado. Credenciales fuera de config.yaml, límites de costo y tratamiento visible
+de errores; ninguna llamada pagada en pruebas normales.
 
-Evitar un único score que oculte compensaciones o convierta datos faltantes en malos resultados.
-El usuario debe poder abrir la evidencia que sostiene cada afirmación y comparar hipótesis
-con distinta cobertura sin atribuirles certezas equivalentes.
-El contenido publicado conservará la barrera de copyright.
-
-Entregable: diseño aprobado y, después, tablero con fichas comparables.
-Aceptación: recorridos verificables hasta la evidencia, incertidumbre visible y ninguna
-confusión entre crecimiento y demanda comprobada. Validar utilidad de navegación con el
-propietario antes de ampliar la interfaz.
+Cada afirmación generada debe remitir a identificadores de evidencia. Validar cifras,
+unidades, periodo, población, fuente y atribución: una cifra presente pero aplicada al
+concepto equivocado también es un error. Rechazar o señalar texto sin respaldo, no publicarlo
+como demostrado. Probar con respuestas simuladas, incluidas cifras inventadas y atribuciones
+incorrectas. La revisión humana sigue siendo necesaria para conclusiones económicas.
 
 ### 07. Validación personal y mejora continua
 
@@ -340,26 +333,32 @@ intervención. Registrar duración, reanudación, fallos y cobertura.
 La automatización no sustituye evaluación histórica, coherencia económica ni utilidad personal.
 Despliegues y cambios en datos remotos requieren autorización dentro del alcance acordado.
 
-## 8. Próximo trabajo y puntos de aprobación
+## 8. Orden operativo aprobado y autorizaciones
 
-El siguiente trabajo propuesto es completar la auditoría de la etapa 01 y preparar la tabla de
-evidencia para la etapa 02. Prioridades de investigación:
+1. Verificar PR #37 y preparar corrección EDGAR en PR independiente.
+2. Con autorización del propietario para R2/despliegue, re-correr pipeline y medir NAICS.
+3. Inventario automático de exclusiones y muestra de 20 para etiquetado del propietario.
+4. Controles negativos y ventanas 3/5/7 antes de fichas; incorporar fuentes de mercado.
+5. Una ficha de dos partes y resumen semanal sin LLM; redacción completa a demanda.
+6. Registro personal simple.
+7. Backtest estricto FRED/ALFRED y automatización integral.
 
-1. Explicar la reducción de señales/clusters a un candidato triangulado.
-2. Verificar el estado real del anclaje NAICS tras S1b.
-3. Evaluar el PR #37 y el diseño de corrección HTTP de EDGAR.
-4. Identificar qué datos faltan para reproducir resultados de forma segura.
+Registro personal mínimo: fecha, oportunidad, qué investigué, evidencia, qué decidí,
+qué se refutó y siguiente paso; puede registrar omisiones del sistema sin construir
+un producto adicional.
 
-Este documento no inicia por sí solo esas implementaciones.
-Puntos de aprobación: diseño de cada bloque; eventos y criterios previos del backtest;
-cambios de principios o arquitectura; operaciones en producción; fusión y publicación.
+Avisar de cambios ya aprobados con PR, tests y salida real, run de Actions y limitaciones.
+No pedir aprobación repetida si el diseño permanece dentro del alcance.
+El propietario aprueba los merges. Pedir autorización antes de tocar R2 o desplegar.
+Cambios de principios o diseño, criterios del backtest y acceso a producción conservan
+sus puntos específicos de aprobación.
 
 ## 9. Registro de avance y evidencias futuras
 
 | Elemento | Estado al 2026-11-07 | Siguiente evidencia necesaria |
 | --- | --- | --- |
 | Plan y documentación | Aprobados para documentar en esta sesión | Revisión del PR documental |
-| Auditoría completa | Parcial | ADR restantes, artefactos y tabla de diagnóstico |
+| Estabilización inmediata | En curso, alcance acotado aprobado | Parquet y EDGAR, pruebas y CI |
 | Compatibilidad de esquema | PR #37 abierto, dos CI exitosas | Revisión y reproducción con datos representativos |
 | Error HTTP de EDGAR | Diagnosticado, sin corrección | Diseño y prueba de regresión |
 | Coherencia y candidato único | Pendiente de explicación | Inventario, muestra auditada y razones de exclusión |
@@ -383,3 +382,11 @@ No borrar antecedentes relevantes ni convertir «implementado» en «validado» 
 - [Reporte histórico exitoso](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42218054855).
 - [CI de main](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42235613190).
 - [Ingesta general](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42235613440).
+
+## 11. Revisión aprobada del plan
+
+El propietario aprobó incorporar el feedback de Claude con las precisiones del agente e
+iniciar el punto 1. Esta revisión sustituye la auditoría exhaustiva inicial por estabilización,
+reduce el etiquetado a 20 clusters a cargo del propietario, divide la validación temporal,
+incorpora fuentes de mercado y unifica la ficha con redacción OpenRouter a demanda.
+No se cambian umbrales ni se autoriza automáticamente merge, R2 o despliegue.
