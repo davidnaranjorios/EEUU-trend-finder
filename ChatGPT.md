@@ -359,8 +359,8 @@ sus puntos específicos de aprobación.
 | --- | --- | --- |
 | Plan y documentación | Aprobados para documentar en esta sesión | Revisión del PR documental |
 | Estabilización inmediata | En curso, alcance acotado aprobado | Parquet y EDGAR, pruebas y CI |
-| Compatibilidad de esquema | PR #37 abierto, dos CI exitosas | Revisión y reproducción con datos representativos |
-| Error HTTP de EDGAR | Diagnosticado, sin corrección | Diseño y prueba de regresión |
+| Compatibilidad de esquema | PR #37 abierto; fallo comove_q reproducido contra main, pruebas correctas con arreglo | Revisión y ejecución real autorizada |
+| Error HTTP de EDGAR | PR #39 preparado, pruebas locales correctas | CI completa y revisión |
 | Coherencia y candidato único | Pendiente de explicación | Inventario, muestra auditada y razones de exclusión |
 | NAICS tras S1b | Pendiente de validación real | Cobertura por fuente y método |
 | Backtest | Pendiente | Eventos, umbrales previos, datos temporales y reporte |
@@ -390,3 +390,71 @@ iniciar el punto 1. Esta revisión sustituye la auditoría exhaustiva inicial po
 reduce el etiquetado a 20 clusters a cargo del propietario, divide la validación temporal,
 incorpora fuentes de mercado y unifica la ficha con redacción OpenRouter a demanda.
 No se cambian umbrales ni se autoriza automáticamente merge, R2 o despliegue.
+
+## 12. Ejecución del punto 1 autorizado (2026-11-07)
+
+### Parquet: verificación del fallo observado
+
+Se ejecutó la prueba existente de series_term_links antiguas sin campos de co-movimiento
+contra store.py de main y se obtuvo BinderException por comove_q, igual que en el run
+42235624537. Con el almacén del PR #37, la prueba y las regresiones de almacenamiento pasan:
+
+```text
+BASELINE: reproduced BinderException: comove_q missing in historical series_term_links
+pytest tests/test_store_evolution.py tests/test_storage_export.py -q
+14 passed in 12.52s
+```
+
+No se duplicó la prueba ni se modificó código adicional en ese PR. Reproducción del esquema
+con datos sintéticos, no reproducción sobre los datos de R2. La evidencia está en la descripción
+actualizada del PR #37; ambas CI existentes siguen siendo la referencia de ese commit.
+
+### EDGAR: corrección independiente
+
+[PR #39](https://github.com/davidnaranjorios/EEUU-trend-finder/pull/39), rama
+codex/edgar-decoding-retry, commit 4be45feaf6280cd40de33d92d483b92d18820dcd.
+
+Archivos: src/ingest/http.py, src/ingest/edgar.py, src/ingest/text.py y tests/test_text_ingest.py.
+
+- Captura httpx.DecodingError con los reintentos acotados y rate limiter existentes.
+- Al agotarse, ApiDecodingError permite registrar el documento como excluido con
+  detail=error_descarga=DecodingError y continuar con los siguientes.
+- Expone download_attempted, download_succeeded y download_failed; un agotamiento de
+  descompresión marca el periodo incompleto, no cerrado, y lo deja elegible para reproceso.
+- La CLI devuelve 11 si hubo periodos incompletos, incluso si terminó de recorrer la lista.
+  run_texto.sh sincroniza antes de propagar ese código y no lo confunde con el 10 de más tramos.
+- Los 404 mantienen el tratamiento terminal anterior; red, acceso, índice o metadatos globales
+  siguen pudiendo abortar. No se omiten errores globales como si fueran documentos individuales.
+- El estado incompleto conserva resultados parciales explícitos y linaje; no equivale a un
+  universo completo apto para afirmar cobertura total. Un workflow independiente debe consultar
+  ese estado antes de usar datos parciales.
+
+Verificación local:
+
+```text
+ruff check: All checks passed!
+ruff format --check: 114 files already formatted
+git diff --check: sin errores
+pytest -k 'corrupt_http or all_document_decoding or incomplete_cli':
+4 passed, 16 deselected in 12.79s
+pytest tests/test_text_ingest.py tests/test_fred.py -k 'not parallel_workers' -q
+60 passed, 1 deselected in 163.45s
+```
+
+Pruebas con respuesta gzip defectuosa real en MockTransport: recuperación, agotamiento,
+linaje, continuación, todos los documentos fallidos, reproceso saludable y salida CLI no exitosa.
+Las primeras ejecuciones Windows fallaron por ausencia de tzdata y por crear forkserver
+incluso con workers=0. Se instaló tzdata solo en el entorno local y se difirió la creación
+del contexto al modo paralelo. No se modificaron dependencias del repositorio.
+La prueba paralela se excluyó únicamente en Windows; la CI de Ubuntu ejecuta toda la suite.
+
+CI EDGAR: [push 42415782626](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42415782626)
+y [PR 42415812090](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42415812090).
+Estado al registrar esta sección: lint y formato correctos; pytest en ejecución.
+
+Referencias consultadas: [excepciones HTTPX](https://www.python-httpx.org/exceptions/) y
+[acceso SEC](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data).
+Se mantuvieron límites y User-Agent; no se realizaron solicitudes de prueba a SEC.
+
+No se modificó R2, no se desplegó ni se fusionó ningún PR. El punto 2 requiere autorización
+para la ejecución real que use R2 o publique; las pruebas locales y CI no la sustituyen.
