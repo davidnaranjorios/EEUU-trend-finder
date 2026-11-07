@@ -465,3 +465,88 @@ Se mantuvieron límites y User-Agent; no se realizaron solicitudes de prueba a S
 
 No se modificó R2, no se desplegó ni se fusionó ningún PR. El punto 2 requiere autorización
 para la ejecución real que use R2 o publique; las pruebas locales y CI no la sustituyen.
+
+## 13. Plan operativo por fases y delegación autorizada
+
+El propietario autorizó planear acciones por fases, desplegar agentes e iniciar trabajo.
+Se asignaron tres tareas independientes: inventario local, diseño de validación ligera y
+revisión de fuentes de mercado. Los agentes no reciben permiso implícito de merge, R2 o despliegue.
+
+Posteriormente el propietario autorizó explícitamente fusionar #37 y #39. Ambos se fusionaron
+tras comprobar head SHA y CI verde. Commits de merge: #37 4a859ecfdbf3604a94c2a8394623eb5a9977fff6;
+#39 554eb62c017b6bf33594f159017896773a02d42d. Main queda en este último commit al registrar
+la sección. Son correcciones integradas; la verificación real de datos continúa pendiente.
+No se fusionó el PR documental #38. Los estados anteriores del registro son históricos.
+
+| Fase operativa | Acción concreta | Evidencia/condición de salida | Estado |
+| --- | --- | --- | --- |
+| 0. Integrar estabilización | Merge #37 y #39 aprobado por propietario | PR fusionados y CI de main posterior | Fusionados; CI posterior en curso |
+| 1. Verificación real acotada | Reporte en main con publish=false | Estado del run, tablas escritas, cobertura NAICS por fuente/método, exclusiones y limitaciones | Se pidió autorización específica R2; no ejecutado todavía |
+| 2. Inventario liviano | Herramienta local de solo lectura, manifiesto y muestra 20 | Tests, inventario por cluster y rúbrica sin etiquetas del agente | Implementación delegada en rama aislada |
+| 3. Controles ligeros | Universo común, corte fijo, 3+3/5+5/7+7 años de slope | Diseño reproducible y luego métricas/controles; no afirmar backtest | Diseño preparado; implementación posterior acotada |
+| 4. Fuentes de mercado | Comprobar cobertura antes de ampliar adaptadores | Fixtures oficiales, esquema/idempotencia/NAICS y límites | Investigación de código y fuentes oficiales realizada |
+| 5. Ficha y resumen | Una ficha A/B y resumen sin LLM | Nueve dimensiones, evidencia y experimentos; OpenRouter bajo demanda | Planificado, sin implementación |
+| 6. Registro personal | Tabla simple para propietario | Investigación, decisión, refutación y siguiente acción | Planificado |
+| 7. Evaluación histórica/automatización | FRED/ALFRED primero y corrida integral | Criterios previos, reproducibilidad, autorización de operaciones | Posterior |
+
+La fase 1 propuesta usa los datos actualmente almacenados y no demuestra reingesta completa.
+Cualquier ejecución de Ingesta, Ingesta texto, Detectores o Reporte que lea/escriba R2 requiere
+su autorización concreta. La lectura de artefactos de GitHub no equivale a acceso a R2.
+El artefacto público del Reporte histórico solo contiene el sitio; no permite reconstruir
+por sí solo el inventario privado completo de clusters/exclusiones. No inventar esas filas.
+
+### Diseño de validación ligera: alcance preciso
+
+- slope_window de 3/5/7 significa comparar 3+3, 5+5 y 7+7 años. No es la longitud total.
+- Preparar una sola vez con W7 y congelar Item.growth, escala, persistencia, grilla, universo,
+  fecha final y configuración. Después variar solo FamilyParams.window en memoria.
+- W7 exige al menos 168 crecimientos mensuales, 61 trimestrales y 40 anuales con las reglas
+  inspeccionadas. Declarar cobertura perdida; no reducir mínimos ni cambiar YAML productivo.
+- context.windows_years ya es descriptivo; no cuenta como validación del detector.
+- regime no usa slope_window: ejecutarlo como referencia fija no mide sensibilidad 3/5/7.
+- Reunir todas las fuentes/grillas antes de BH por detector y escenario; BY solo comparación.
+  La unión de señales de los tres escenarios no es una nueva familia controlada al mismo q.
+- Misma semilla no garantiza mismos bloques cuando cambia la forma de remuestreo. Documentar
+  hashes, librerías, parámetros y semilla, y recortar niveles antes de preparar.
+- Métricas: rechazos BH/BY, retención, Jaccard, signo y cambios de efecto/p/q. Si ambos conjuntos
+  están vacíos, marcar no evaluable: no afirmar estabilidad perfecta.
+- Esto mide señales sobre snapshot vigente, no estabilidad del ranking completo ni anticipación.
+  Un ranking requiere también clustering, texto y correspondencia por miembros.
+- Reutilizar controles iid/AR1/factor y salto aislado ya existentes; una campaña breve verifica
+  cableado, no certifica FDR. Incluir control positivo para no celebrar falta de potencia.
+- Antes de una campaña: fijar escenarios, réplicas, semillas, límites de cómputo y métricas.
+  El backtest estricto posterior queda FRED/ALFRED; las demás reconstrucciones no están verificadas.
+
+### Fuentes de mercado: diagnóstico previo a implementación
+
+El código inspeccionado puede descubrir familias genéricas sin demostrar cobertura real de
+producción. No crear adaptadores duplicados antes de probar los actuales.
+
+| Fuente | Brecha y siguiente comprobación | Límite económico |
+| --- | --- | --- |
+| BDS | Fixture timeseries con YEAR/time, filtros y dimensiones del adaptador Census | Aperturas/cierres no miden costo de entrada |
+| CBP | Releases anuales no entran en el filtro actual c_isTimeseries; diseñar ensamblado por años | Establecimientos no equivalen a firmas/cuotas de ventas |
+| SUSB | CSV/XLS requieren descubrimiento y normalización propios sobre contrato común | Estructura empresarial no prueba entrada barata |
+| Economic Census | Releases quinquenales como contexto fechado; investigar concentración oficial ecnsize | Mercado de una solución no equivale a toda la industria |
+| PPI | Comprobar familias pc/wp en BLS existente | Índices de precios no son precios absolutos ni márgenes; mercancía no es NAICS |
+| JOLTS | Comprobar jt y agregación industrial | Vacantes laborales no demuestran demanda de clientes |
+| PCE | Verificar tablas BEA existentes y puente producto–industria | Gasto nominal no prueba volumen ni disposición a pagar |
+| USAspending | API POST y datos de adjudicación requieren contrato/esquema apropiados | Separar obligaciones/desembolsos/techos; no sumarlos ni llamarlos mercado privado |
+
+Primero fixtures pequeños, documentados y sin red para BDS/JOLTS/PPI. Corregir solo brechas
+estructurales demostradas. Después CBP y concentración oficial; SUSB/USAspending requieren
+resolver contrato y trazabilidad. Preservar versión NAICS, supresión, firma/establecimiento,
+universo empleador, geografía y puentes muchos-a-muchos. No convertir supresión en cero,
+no sumar jerarquías superpuestas ni contar productos del mismo origen como fuentes independientes.
+
+Referencias oficiales consultadas por el agente:
+[BDS](https://www.census.gov/programs-surveys/bds/data.API.html),
+[CBP](https://www.census.gov/data/developers/data-sets/cbp-zbp/cbp-api.html),
+[SUSB](https://www.census.gov/programs-surveys/susb/data.html),
+[Economic Census](https://www.census.gov/data/developers/data-sets/economic-census.html),
+[concentración](https://www.census.gov/newsroom/press-releases/2025/establishment-and-firm-size-statistics.html),
+[PPI](https://www.bls.gov/opub/hom/ppi/concepts.htm),
+[JOLTS NAICS](https://www.bls.gov/jlt/jltnaics.htm),
+[PCE](https://www.bea.gov/data/consumer-spending/main),
+[USAspending](https://api.usaspending.gov/docs/endpoints).
+No se ejecutaron descargas de mercado ni se verificó catálogo de producción en esta investigación.
