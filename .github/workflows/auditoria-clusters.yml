@@ -1,0 +1,137 @@
+# Auditoría interna manual: nunca publica el inventario como artefacto de un repo público.
+name: Auditoría interna de clusters
+
+on:
+  workflow_dispatch:
+    inputs:
+      rank_run_id:
+        description: "Corrida de ranking (32 caracteres hexadecimales minúsculos)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reporte
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  auditar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RANK_RUN_ID: ${{ inputs.rank_run_id }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+    steps:
+      - name: Validar corrida y destino
+        id: validate
+        run: |
+          if [[ ! "$RANK_RUN_ID" =~ ^[0-9a-f]{32}$ ]] ||
+             [[ ! "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] ||
+             [[ ! "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Identificador de ejecución no válido"
+            exit 1
+          fi
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+      - name: Preparar dependencias
+        run: |
+          mkdir -p work/audit-logs
+          if ! uv sync --locked --quiet >work/audit-logs/dependencies.log 2>&1; then
+            echo "::error::No se pudieron preparar las dependencias"
+            exit 1
+          fi
+          if ! sudo infra/install_rclone.sh >work/audit-logs/install.log 2>&1; then
+            echo "::error::No se pudo preparar el cliente de almacenamiento"
+            exit 1
+          fi
+      - name: Leer copia local desde R2
+        id: pull
+        run: |
+          if ! infra/pull_r2.sh processed/rank processed/series_meta >work/audit-logs/pull.log 2>&1; then
+            echo "::error::No se pudo completar la lectura privada"
+            exit 1
+          fi
+      - name: Generar inventario interno
+        id: inventory
+        run: |
+          if ! uv run --quiet python eval/cluster_audit.py \
+            --rank-dir data/processed/rank --run-id "$RANK_RUN_ID" \
+            --meta-dir data/processed/series_meta --out work/audit-output \
+            >work/audit-logs/inventory.log 2>&1; then
+            echo "::error::No se pudo generar el inventario interno"
+            exit 1
+          fi
+      - name: Conservar copia privada sin sobrescribir
+        id: store
+        run: |
+          source infra/r2_env.sh >work/audit-logs/config.log 2>&1
+          destination="r2:$BUCKET/audits/$RANK_RUN_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"
+          if ! rclone copy work/audit-output "$destination" --immutable --checksum >work/audit-logs/copy.log 2>&1; then
+            echo "::error::No se pudo conservar la copia privada inmutable"
+            exit 1
+          fi
+          if ! rclone check work/audit-output "$destination" --one-way --checksum >work/audit-logs/check.log 2>&1; then
+            echo "::error::No se pudo verificar la copia privada"
+            exit 1
+          fi
+      - name: Mostrar solo diagnóstico agregado
+        id: summary
+        run: |
+          if ! uv run --quiet python - <<'PY' >work/audit-logs/summary.json 2>work/audit-logs/summary-error.log
+          import json
+          import math
+          from pathlib import Path
+
+          manifest = json.loads(Path("work/audit-output/manifest.json").read_text(encoding="utf-8"))
+          sources = {"fred", "bls", "bea", "census", "edgar", "federal_register"}
+          methods = {"codigo_en_metadatos", "nombre_oficial", "heredado_origen", "heredado_cluster", "sic_concordancia"}
+          statuses = {"candidato", "una_fuente", "fuera_del_tope", "sin_estado"}
+
+          def count(value):
+              return value if type(value) is int and value >= 0 else None
+
+          result = {k: count(manifest.get(k)) for k in ("n_inventory_records", "n_persisted_clusters", "sample_size")}
+          raw_status = manifest.get("counts_by_status", {})
+          result["counts_by_status"] = {k: count(v) for k, v in raw_status.items() if k in statuses}
+          result["unknown_statuses_present"] = bool(set(raw_status) - statuses)
+          coverage = manifest.get("naics_coverage", {})
+          raw_sources = coverage.get("sources", {})
+          for key in ("links_available", "stored_coverage_available"):
+              value = coverage.get(key)
+              result[key] = value if type(value) is bool else None
+          result["naics_coverage"] = {}
+          result["unknown_sources_present"] = bool(set(raw_sources) - sources)
+          for source in sorted(set(raw_sources) & sources):
+              row = raw_sources[source]
+              stored = row.get("stored_signal_coverage")
+              safe_stored = None
+              if stored is not None:
+                  pct = stored.get("pct")
+                  safe_stored = {"n": count(stored.get("n")), "with_naics": count(stored.get("with_naics")),
+                                 "pct": pct if type(pct) in (int, float) and math.isfinite(pct) and 0 <= pct <= 100 else None}
+              raw_methods = row.get("unique_objects_by_method")
+              result["naics_coverage"][source] = {
+                  "signal_denominator": count(row.get("signal_denominator")),
+                  "mapped_objects_in_links": count(row.get("mapped_objects_in_links")),
+                  "stored_signal_coverage": safe_stored,
+                  "unique_objects_by_method": {k: count(v) for k, v in raw_methods.items() if k in methods} if raw_methods is not None else None,
+                  "unknown_methods_present": bool(set(raw_methods or {}) - methods),
+              }
+          print(json.dumps(result, sort_keys=True, allow_nan=False))
+          PY
+          then
+            echo "::error::No se pudo resumir el inventario sin datos identificables"
+            exit 1
+          fi
+          cat work/audit-logs/summary.json
