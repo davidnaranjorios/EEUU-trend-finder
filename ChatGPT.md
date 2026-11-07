@@ -646,7 +646,9 @@ git diff --check: correcto
 La carga de pruebas no importa eval como dependencia de src. Se comprueban legado, tablas
 opcionales, reglas persistidas, muestreo hasta20 reproducible, datos faltantes, metadata,
 entradas/salidas separadas y denominadores/métodos NAICS sin dobles conteos.
-La CI completa está en curso al registrar esta sección.
+La CI del PR [42423108202](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42423108202)
+terminó en success; salida real: 482 passed in 381.84s (0:06:21). Lint y formato también
+correctos. El PR queda listo para revisión, sin fusionar.
 
 No se fusionó #40 ni se generó todavía la muestra de 20 reales. La autorización del Reporte
 no incluye por sí sola extraer archivos de R2 al equipo o publicar material de auditoría.
