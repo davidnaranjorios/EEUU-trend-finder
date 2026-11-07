@@ -98,6 +98,20 @@ def _upsert_bucket(
         _write_part(bucket_dir, new)
         return UpsertResult(inserted=new.num_rows)
 
+    # Migra campos opcionales nuevos antes de comparar o conservar filas históricas.
+    if any(set(spec.schema.names) - set(pq.read_schema(f).names) for f in files):
+        parts = []
+        for file in files:
+            part = pq.read_table(file)
+            for field in spec.schema:
+                if field.name not in part.column_names:
+                    if not field.nullable:
+                        raise ValueError(f"{spec.name}: falta columna obligatoria {field.name}")
+                    part = part.append_column(field, pa.nulls(part.num_rows, type=field.type))
+            parts.append(_conform(part, spec))
+        _swap_bucket(bucket_dir, pa.concat_tables(parts))
+        files = _parquet_files(bucket_dir)
+
     cols = spec.schema.names
     con.register("new_rows", new)
     con.execute(
