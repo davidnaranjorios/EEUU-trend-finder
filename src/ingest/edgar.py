@@ -31,7 +31,7 @@ from typing import Any
 
 from lxml import html as lhtml
 
-from src.ingest.http import ApiClient, ApiError, RateLimiter
+from src.ingest.http import ApiClient, ApiDecodingError, ApiError, RateLimiter
 from src.ingest.text import CollectContext, DocResult, SectionResult, analyze_section
 
 SOURCE = "edgar"
@@ -272,6 +272,10 @@ class EdgarSource:
                     url, kind = f"/{f.path}", "submission"
                 try:
                     payload = self.www.get_bytes(url)
+                except ApiDecodingError:
+                    excluded = [SectionResult("*", "excluido", "error_descarga=DecodingError")]
+                    failed.append(DocResult(f.accession, f.date_filed, f.cik, excluded))
+                    continue
                 except ApiError as exc:
                     if exc.status in (403, 429) or exc.status is None:
                         raise  # User-Agent rechazado o red caída: no seguir a ciegas
