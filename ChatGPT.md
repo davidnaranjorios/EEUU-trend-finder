@@ -761,3 +761,46 @@ el control de navegador ya había terminado por no poder verificar la URL. Por e
 lanzamiento debe hacerse manualmente desde Actions → Auditoría interna de clusters,
 seleccionando main y rank_run_id=f91893071f6041c3a4d980d659c697ab. La ejecución sigue
 autorizada y pendiente de ese lanzamiento; no se afirma que ya exista un run de auditoría.
+
+## 18. Resultado real de la auditoría interna
+
+El propietario lanzó la auditoría y avisó que estaba lista. Se verificó
+[run 42425193194](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42425193194),
+intento 1, commit 225edec4d0866e9e0de109db5cb6d1b867a8218b, resultado success.
+Todos los pasos terminaron correctamente: validación, lectura R2, generación, copia privada,
+verificación y resumen agregado. No se ejecutó despliegue ni se subió un artefacto público.
+
+El resumen real declara 119 registros de inventario y 119 clusters persistidos: 1 candidato
+y 118 una_fuente. sample_size=20. links_available y stored_coverage_available son true;
+no aparecen fuentes, métodos o estados desconocidos en el resumen.
+
+| Fuente | Con NAICS / denominador | Métodos: objetos únicos por método |
+| --- | --- | --- |
+| BEA | 0 / 12 | Sin links |
+| BLS | 25 / 168 (14,9 %) | codigo_en_metadatos: 13; heredado_cluster: 11; nombre_oficial: 1 |
+| Census | 0 / 8 | Sin links |
+| EDGAR | 0 / 306 | Sin links |
+| FRED | 25 / 146 (17,1 %) | nombre_oficial: 18; heredado_cluster: 7 |
+
+Los conteos son objetos con señal/links de esta corrida, no industrias distintas ni fuentes
+independientes. La cobertura heredada no demuestra por sí sola anclaje correcto. No se
+concluye la causa de los ceros sin examinar las filas y metadatos privados correspondientes.
+Tampoco se concluye que los 118 reflejen un defecto o una selectividad correcta solo por su
+estado agregado: el inventario permite revisar la evidencia persistida.
+
+Los cinco archivos internos quedaron bajo el prefijo privado del bucket configurado:
+
+```text
+audits/f91893071f6041c3a4d980d659c697ab/42425193194-1/
+```
+
+Contiene inventario.json, muestra.json, etiquetas.csv, rubrica.md y manifest.json, según la
+salida definida y los pasos de generación/copia/check que terminaron en success. No se ha
+hecho una segunda descarga independiente de esos objetos al entorno del agente.
+
+El siguiente paso humano acordado es que el propietario descargue esos archivos de R2,
+consulte muestra.json e inventario.json y complete etiquetas.csv usando rubrica.md:
+correcto / dudoso / incorrecto / no_evaluable para coherencia, vínculo texto–serie,
+independencia y NAICS, con motivo. El agente no preetiquetó la muestra.
+Conservar las respuestas editadas como copia personal, sin sobrescribir el material original.
+Las etiquetas permitirán priorizar correcciones; no cambiar umbrales para inflar candidatos.
