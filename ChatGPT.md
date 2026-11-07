@@ -450,7 +450,14 @@ La prueba paralela se excluyó únicamente en Windows; la CI de Ubuntu ejecuta t
 
 CI EDGAR: [push 42415782626](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42415782626)
 y [PR 42415812090](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42415812090).
-Estado al registrar esta sección: lint y formato correctos; pytest en ejecución.
+CI push terminada en success; salida real del job 128533440206:
+
+```text
+470 passed in 402.92s (0:06:42)
+```
+
+La ejecución pull_request seguía en curso al registrar este resultado. La CI push completa
+incluye la prueba paralela excluida solo de la ejecución local Windows.
 
 Referencias consultadas: [excepciones HTTPX](https://www.python-httpx.org/exceptions/) y
 [acceso SEC](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data).
