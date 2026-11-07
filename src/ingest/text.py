@@ -47,6 +47,7 @@ from src.log import get_logger, run
 from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
 
 EXIT_PENDING = 10
+EXIT_INCOMPLETE = 11
 # Versión del esquema de las particiones que escribe la ingesta (ADR 0008):
 #   2: term_freq.n_entities;  3: entidad del Federal Register normalizada;
 #   4: term_freq.n_industries (SIC de EDGAR);  5: term_freq.sic_top_json (SIC de 4 dígitos).
@@ -288,6 +289,8 @@ class TextState:
             return True
         if info.get("schema", 1) < min_schema:
             return True
+        if info.get("incomplete"):
+            return True
         if info.get("closed"):
             return False
         last = datetime.fromisoformat(info["processed_at"])
@@ -296,6 +299,7 @@ class TextState:
     def mark(self, period: str, *, closed: bool, run_id: str, stats: dict[str, Any]) -> None:
         self.periods[period] = {
             "closed": closed,
+            "incomplete": stats.get("incomplete", False),
             "schema": SCHEMA_VERSION,
             "run_id": run_id,
             "processed_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -337,8 +341,11 @@ def run_source(
     todo = candidates[:max_periods] if max_periods is not None else candidates
     n_workers = text_cfg["workers"] if workers is None else workers
     # forkserver: el proceso principal tiene hilos (httpx) y fork() con hilos puede bloquearse.
-    ctx_mp = multiprocessing.get_context("forkserver")
-    executor = ProcessPoolExecutor(n_workers, mp_context=ctx_mp) if n_workers > 0 else None
+    executor = (
+        ProcessPoolExecutor(n_workers, mp_context=multiprocessing.get_context("forkserver"))
+        if n_workers > 0
+        else None
+    )
     done: list[dict[str, Any]] = []
     try:
         for period in todo:
@@ -367,8 +374,29 @@ def run_source(
                 )
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+            if src.name == "edgar":
+                attempted = [
+                    d
+                    for d in docs
+                    if not any((sec.detail or "").startswith("formulario=") for sec in d.sections)
+                ]
+                failed = sum(
+                    any((sec.detail or "").startswith("error_descarga=") for sec in d.sections)
+                    for d in attempted
+                )
+                incomplete = any(
+                    sec.detail == "error_descarga=DecodingError"
+                    for d in attempted
+                    for sec in d.sections
+                )
+                stats.update(
+                    download_attempted=len(attempted),
+                    download_failed=failed,
+                    download_succeeded=len(attempted) - failed,
+                    incomplete=incomplete,
+                )
             # Una muestra nunca cierra un periodo: el universo completo queda pendiente.
-            closed = sample is None and src.is_closed(period, today)
+            closed = sample is None and src.is_closed(period, today) and not stats.get("incomplete")
             if sample is None:
                 state.mark(period, closed=closed, run_id=run_id, stats=stats)
             stats["seconds"] = round(time.perf_counter() - t0, 1)
@@ -383,6 +411,7 @@ def run_source(
         "source": src.name,
         "periods_done_now": done,
         "pending": 0 if only_periods else len(candidates) - len(todo),
+        "incomplete": any(p.get("incomplete", False) for p in done),
     }
 
 
@@ -516,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(stats, default=str, indent=2))
     finally:
         src.close()
+    if stats["incomplete"]:
+        return EXIT_INCOMPLETE
     return EXIT_PENDING if stats["pending"] else 0
 
 

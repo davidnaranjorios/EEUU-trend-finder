@@ -28,6 +28,10 @@ class ApiError(RuntimeError):
         self.status = status
 
 
+class ApiDecodingError(ApiError):
+    """Respuesta mal codificada incluso después de los reintentos acotados."""
+
+
 class RateLimiter:
     """Espaciado mínimo de 60/rpm segundos entre solicitudes (sin ráfagas)."""
 
@@ -151,7 +155,7 @@ class ApiClient:
             retry_after: float | None = None
             try:
                 resp, out = attempt_fn()
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 reason = type(exc).__name__
             else:
                 if resp.status_code == 200:
@@ -165,7 +169,8 @@ class ApiClient:
                 retry_after = _retry_after(resp)
 
             if attempt == self.max_retries:
-                raise ApiError(
+                error = ApiDecodingError if reason == "DecodingError" else ApiError
+                raise error(
                     f"{endpoint}: reintentos agotados ({self.max_retries}); último: {reason}"
                 )
             delay = self.backoff_base_s * 2**attempt + self._rng.uniform(0, self.backoff_base_s)
@@ -205,7 +210,7 @@ class ApiClient:
             try:
                 req = self._http.build_request(method, endpoint, params={**params, **self._auth})
                 resp = self._http.send(req, stream=stream)
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 reason = type(exc).__name__
             else:
                 if resp.status_code == 200:
@@ -221,7 +226,8 @@ class ApiClient:
                 reason = f"HTTP {resp.status_code}"
                 retry_after = _retry_after(resp)
             if attempt == self.max_retries:
-                raise ApiError(
+                error = ApiDecodingError if reason == "DecodingError" else ApiError
+                raise error(
                     f"{endpoint}: reintentos agotados ({self.max_retries}); último: {reason}"
                 )
             delay = self.backoff_base_s * 2**attempt + self._rng.uniform(0, self.backoff_base_s)

@@ -447,3 +447,139 @@ def test_old_schema_periods_are_reprocessed_only_where_configured(cfg, tmp_path)
     assert cfg["edgar"]["reprocess_below_schema"] == 5
     state.mark("2024-01", closed=True, run_id="r2", stats={"docs": 1, "rows": {}})
     assert not state.needs_run("2024-01", 20, now, min_schema=3)
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_corrupt_http_encoding_retries_then_recovers_or_records(cfg, tmp_path, recover):
+    from datetime import UTC, datetime
+
+    fake = FakeEdgar()
+    damaged = next(iter(fake.docs))
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        if request.url.path == damaged:
+            calls += 1
+            if not recover or calls == 1:
+                return httpx.Response(
+                    200,
+                    headers={"Content-Encoding": "gzip"},
+                    stream=httpx.ByteStream(b"invalid compressed response"),
+                )
+        return fake.handler(request)
+
+    cfg["edgar"]["max_retries"] = 2
+    src = EdgarSource.from_config(
+        cfg,
+        "Test test@example.com",
+        tmp_path / "raw",
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _: None,
+    )
+    processed = tmp_path / "processed"
+    try:
+        stats = run_source(
+            src,
+            cfg,
+            processed_dir=processed,
+            run_id="decode",
+            today=TODAY,
+            only_periods=["2024Q1"],
+        )
+    finally:
+        src.close()
+    assert calls == (2 if recover else 3)
+    assert stats["incomplete"] is (not recover)
+    period = stats["periods_done_now"][0]
+    assert period["download_attempted"] == 5
+    # One known 404, plus the malformed response when retries are exhausted.
+    assert period["download_failed"] == (1 if recover else 2)
+    assert period["download_succeeded"] + period["download_failed"] == 5
+    rows = read_all(processed, "edgar")
+    damaged_id = "0000000001-24-000001"
+    lineage = [r for r in rows["text_ingest"] if r["doc_id"] == damaged_id]
+    state = TextState(processed, "edgar")
+    if recover:
+        assert all(r["status"] == "ok" for r in lineage)
+        assert state.is_done("2024Q1")
+    else:
+        assert [(r["status"], r["detail"]) for r in lineage] == [
+            ("excluido", "error_descarga=DecodingError")
+        ]
+        assert not state.is_done("2024Q1")
+        assert state.needs_run("2024Q1", 20, datetime.now(UTC))
+        assert any(r["doc_id"].endswith("000002") for r in rows["text_docs"])
+        # A later healthy attempt replaces the incomplete partition, without duplicate lineage.
+        healthy = edgar(cfg, FakeEdgar(), tmp_path)
+        try:
+            result = run_source(
+                healthy,
+                cfg,
+                processed_dir=processed,
+                run_id="healthy",
+                today=TODAY,
+                only_periods=["2024Q1"],
+            )
+        finally:
+            healthy.close()
+        assert not result["incomplete"]
+        assert TextState(processed, "edgar").is_done("2024Q1")
+        assert len(read_all(processed, "edgar")["text_ingest"]) == 10
+
+
+def test_all_document_decoding_failures_are_visible_and_not_closed(cfg, tmp_path):
+    fake = FakeEdgar()
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        if request.url.path in fake.docs:
+            calls += 1
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=httpx.ByteStream(b"broken gzip"),
+            )
+        return fake.handler(request)
+
+    cfg["edgar"]["max_retries"] = 1
+    src = EdgarSource.from_config(
+        cfg,
+        "Test test@example.com",
+        tmp_path / "raw",
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _: None,
+    )
+    try:
+        stats = run_source(
+            src,
+            cfg,
+            processed_dir=tmp_path,
+            run_id="all",
+            today=TODAY,
+            only_periods=["2024Q1"],
+        )
+    finally:
+        src.close()
+    period = stats["periods_done_now"][0]
+    assert calls == 8  # Four available documents, two attempts each; fifth is a known 404.
+    assert period["download_succeeded"] == 0
+    assert period["download_failed"] == period["download_attempted"] == 5
+    assert stats["incomplete"] and not period["closed"]
+    assert not TextState(tmp_path, "edgar").is_done("2024Q1")
+    assert len(read_all(tmp_path, "edgar")["text_ingest"]) == 6
+
+
+def test_incomplete_cli_returns_non_success(cfg, tmp_path, monkeypatch):
+    from src.ingest import text
+
+    cfg["logging"]["runs_file"] = str(tmp_path / "runs.jsonl")
+    monkeypatch.setattr(text, "load_config", lambda: cfg)
+    monkeypatch.setattr(text, "build_source", lambda *args: edgar(cfg, FakeEdgar(), tmp_path))
+    monkeypatch.setattr(
+        text,
+        "run_source",
+        lambda *args, **kwargs: {"periods_done_now": [], "pending": 0, "incomplete": True},
+    )
+    assert text.main(["edgar", "--processed-dir", str(tmp_path)]) == text.EXIT_INCOMPLETE
