@@ -58,3 +58,63 @@ El denominador, cantidad de señales con NAICS y porcentaje se conservan desde
 desconocidos; no se estiman a partir del inventario. Los objetos de links pueden pertenecer
 a un universo distinto del de señales, por lo que no se divide su conteo por ese denominador.
 Si falta la tabla de links, sus conteos también permanecen desconocidos, no cero.
+
+## Ejecución manual en GitHub Actions y salida privada
+
+Workflow: `.github/workflows/auditoria-clusters.yml` (solo `workflow_dispatch`). Este cambio
+prepara la ejecución, **no la ejecuta ni autoriza automáticamente merge, lecturas/escrituras
+R2 o despliegues**. Antes de lanzarlo debe existir autorización para leer exclusivamente
+`processed/rank` y `processed/series_meta`, y para crear una nueva copia de resultados en
+`audits/`. No se leen credenciales localmente ni se solicitan en el chat: el runner usa los
+secrets del repositorio ya existentes.
+
+Una vez revisado e incorporado el workflow y autorizada esa operación, el propietario puede
+seleccionar Actions → Auditoría interna de clusters → Run workflow, elegir una referencia
+revisada y proporcionar `rank_run_id` (exactamente 32 caracteres hexadecimales minúsculos).
+El identificador entra mediante variable de entorno y se valida antes de checkout o lecturas.
+El workflow tiene permiso GitHub `contents: read`, no publica Pages y no sube artefactos.
+
+Comparte el grupo de concurrencia `reporte`: no se solapa con una mutación del ranking que
+respete ese grupo. **No es un snapshot transaccional entre carpetas**: la ingesta de metadatos
+puede correr en un grupo distinto. El manifiesto conserva hashes de los archivos locales
+leídos, pero no prueba que ranking y metadatos correspondan al mismo instante. Para una
+comparación estricta, coordinar una copia congelada con la ingesta fuera de esta herramienta.
+
+Se crean los cinco archivos internos en `work/audit-output` y se copian únicamente al prefijo:
+
+```text
+audits/<rank_run_id>/<github_run_id>-<github_run_attempt>/
+```
+
+Se usa `rclone copy --immutable --checksum` seguido de `rclone check --one-way --checksum`.
+`--immutable` impide que **ese comando** sobrescriba un objeto existente con contenido
+incompatible; no habilita Object Lock, retención ni inmutabilidad general en R2. No hay sync,
+borrado ni actualización de tablas de producción. Reintentos del workflow usan un prefijo
+nuevo mediante `github_run_attempt`; no se sobrescriben etiquetas del propietario.
+El workflow no cambia ACL ni habilita endpoints públicos: el bucket de destino debe conservar
+su configuración privada; no puede proteger datos si el mismo prefijo ya está expuesto por
+una configuración externa.
+
+Los logs de comandos e inventario quedan solo en el runner efímero y no se suben. Al fallar,
+se informa un mensaje genérico y código no exitoso; no se imprimen JSON detallados, títulos,
+ids de objetos, rutas de archivos de entrada ni credenciales. La salida visible incluye solo
+conteos por estado y cobertura NAICS agregada con nombres de fuente/método permitidos.
+Nombres desconocidos se omiten y se marca su existencia con un booleano. Se conservan flags
+de disponibilidad para distinguir desconocido de cero. Esto permite diagnosticar cobertura
+sin divulgar el inventario interno. Los logs visibles de GitHub no son el almacén de etiquetas.
+
+### Recuperación por el propietario
+
+Abrir el prefijo privado en el panel R2 con su cuenta autorizada y descargar los cinco archivos,
+o usar su propio terminal confiable con rclone ya configurado para ese bucket. Ejemplo
+orientativo (reemplazar las variables por la ejecución concreta, sin compartir credenciales):
+
+```bash
+rclone copy "r2:$BUCKET/audits/$RANK_RUN_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/" \
+  "audit-review-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --immutable --checksum
+```
+
+Usar un directorio de revisión nuevo. Mantener las etiquetas editadas como copia personal;
+no repetir descargas sobre una carpeta con respuestas editadas. El agente no crea credenciales
+locales, no utiliza gh ni descarga los resultados privados sin autorización específica.
+La existencia del workflow tampoco autoriza automáticamente reintentos con acceso a R2.
