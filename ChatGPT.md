@@ -456,7 +456,7 @@ CI push terminada en success; salida real del job 128533440206:
 470 passed in 402.92s (0:06:42)
 ```
 
-La ejecución pull_request seguía en curso al registrar este resultado. La CI push completa
+La ejecución pull_request 42415812090 también terminó en success. La CI completa
 incluye la prueba paralela excluida solo de la ejecución local Windows.
 
 Referencias consultadas: [excepciones HTTPX](https://www.python-httpx.org/exceptions/) y
