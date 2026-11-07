@@ -615,3 +615,40 @@ complementarias, no intercambiables.
 El siguiente paso de diagnóstico es el inventario de exclusiones con orígenes y NAICS por
 método, seguido de la muestra de hasta 20 para el propietario. No se cambian umbrales.
 La herramienta local tiene pruebas; todavía no se ha ejecutado sobre las tablas reales.
+
+## 15. Inventario preparado para revisión
+
+Se abrió [PR #40](https://github.com/davidnaranjorios/EEUU-trend-finder/pull/40), rama
+codex/cluster-audit, commit 1f083c832597b1b7d34ae8d6e9ffeedb06b0815e, sobre main con ambas
+correcciones de estabilización incorporadas.
+
+Archivos: eval/cluster_audit.py, tests/test_cluster_audit.py, docs/cluster-audit.md.
+La herramienta lee tablas Parquet locales de una corrida explícita y genera inventario.json,
+muestra.json, etiquetas.csv, rubrica.md y manifest.json. No consulta red/R2 ni modifica datos.
+La metadata local opcional añade títulos y conserva copyright; ausencias permanecen desconocidas.
+
+El manifiesto conserva cobertura registrada en rank_runs y calcula objetos únicos de toda
+naics_links por fuente/método, no solo miembros de clusters. No suma métodos superpuestos
+ni divide conteos de un universo por denominadores de otro. Si falta tabla, el conteo es
+unknown; una tabla disponible sin filas puede contener cero. Los umbrales proceden de los
+parámetros guardados de la corrida, no del YAML actual.
+
+Pruebas locales del agente, revisadas junto con el código por el agente principal:
+
+```text
+ruff check .: All checks passed!
+ruff format --check .: 117 files already formatted
+pytest tests/test_cluster_audit.py tests/test_isolation.py tests/test_no_hardcoded_topics.py -q
+38 passed in 10.23s
+git diff --check: correcto
+```
+
+La carga de pruebas no importa eval como dependencia de src. Se comprueban legado, tablas
+opcionales, reglas persistidas, muestreo hasta20 reproducible, datos faltantes, metadata,
+entradas/salidas separadas y denominadores/métodos NAICS sin dobles conteos.
+La CI completa está en curso al registrar esta sección.
+
+No se fusionó #40 ni se generó todavía la muestra de 20 reales. La autorización del Reporte
+no incluye por sí sola extraer archivos de R2 al equipo o publicar material de auditoría.
+El siguiente paso requiere una copia local autorizada de processed/rank y series_meta para
+la corrida f91893071f6041c3a4d980d659c697ab, conservando la salida como material interno.
