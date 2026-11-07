@@ -654,3 +654,93 @@ No se fusionó #40 ni se generó todavía la muestra de 20 reales. La autorizaci
 no incluye por sí sola extraer archivos de R2 al equipo o publicar material de auditoría.
 El siguiente paso requiere una copia local autorizada de processed/rank y series_meta para
 la corrida f91893071f6041c3a4d980d659c697ab, conservando la salida como material interno.
+
+## 16. Continuación: ejecución privada del inventario y evaluación local
+
+El propietario pidió continuar. Se comprobó presencia (sin revelar valores) de las variables
+AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY y CLOUDFLARE_ACCOUNT_ID en este entorno: ausentes.
+Tampoco se encontró rclone/gh configurados. No se solicitaron ni crearon credenciales locales.
+La copia privada no puede descargarse aquí con los medios disponibles.
+
+### PR #40 ampliado: workflow manual privado
+
+Head preparado: 8e7e347d3877b93b6243ffcbcd9b5b0b69b64e01. Además del inventario local,
+se añadieron .github/workflows/auditoria-clusters.yml y tests/test_cluster_audit_workflow.py,
+y se amplió docs/cluster-audit.md.
+
+- Solo workflow_dispatch, input rank_run_id de 32 hex minúsculas validado por variable de
+  entorno antes de checkout; sin interpolar expresiones de entrada en el shell.
+- contents:read, concurrencia reporte, timeout 30 min; sin triggers de PR/push/programación.
+- Usa secrets existentes de Actions para leer solo processed/rank y processed/series_meta.
+- Genera los cinco archivos del inventario y los copia a una ruta separada y por ejecución:
+  audits/<rank_run_id>/<github_run_id>-<github_run_attempt>/.
+- copy --immutable --checksum y check --one-way --checksum; sin sync, borrado, modificación
+  de tablas originales, publicación Pages ni upload de artefactos públicos.
+- --immutable limita sobrescrituras de ese comando; no activa Object Lock en R2. El bucket
+  debe seguir siendo privado. La copia entre carpetas no constituye un snapshot transaccional.
+- Detalles y logs de comandos permanecen en el runner efímero; errores visibles genéricos.
+  El resumen público imprime solo agregados con allowlist de fuentes, métodos y estados,
+  más flags de disponibilidad; omite nombres desconocidos y datos identificables.
+- Los títulos/ids/evidencia y la muestra quedan en R2 privado para revisión del propietario.
+  No se ejecutó todavía este workflow; preparación de código no autoriza ejecución R2.
+
+Verificación local de esta ampliación:
+
+```text
+ruff check .: All checks passed!
+ruff format --check .: 118 files already formatted
+pytest workflow+audit+isolation+no_hardcoded_topics
+48 passed in 12.58s
+git diff --check: correcto
+```
+
+Incluye Bash real (Git Bash en Windows) para sintaxis de todos los bloques y entradas
+adversariales; la prueba de resumen comprueba que marcadores en títulos, rutas y nombres
+no permitidos no se impriman. No ejecutó rclone contra un servicio real.
+CI del head 8e7e347 en [42424366974](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42424366974):
+success, con 492 passed in 345.05s (0:05:45). Lint/formato también correctos.
+El resultado anterior de 482 pruebas corresponde al head anterior.
+
+Referencias de comandos consultadas:
+[rclone copy](https://rclone.org/commands/rclone_copy/) y
+[rclone check](https://rclone.org/commands/rclone_check/).
+
+### PR #41: harness de sensibilidad sobre snapshots preparados
+
+[PR #41](https://github.com/davidnaranjorios/EEUU-trend-finder/pull/41), rama
+codex/window-sensitivity, commit 431b1b5d5c996edd29bbea10d4e74809686204f8.
+Archivos: eval/window_sensitivity.py, tests/test_window_sensitivity.py,
+docs/eval/window-sensitivity.md. Sin cambios en src/, config.yaml ni dependencias.
+
+Acepta JSON de Item ya preparados una vez para W7. Exige identidad única, declaración de
+base mínima 33, hash del manifiesto productor, corte y anclas comunes, escala positiva y
+crecimientos finitos suficientes. Copia arrays y los vuelve inmutables. Cambia solo W por
+grilla y aplica BH/BY tras reunir todas las fuentes y grillas de cada escenario 3+3/5+5/7+7.
+
+La salida registra p/q, efecto, persistencia, bloque, historia y ventana efectiva. Compara
+Jaccard, retención y signo con universo común; casos vacíos permanecen no evaluables.
+Conserva hashes del input/productor/evaluador, parámetros, semilla y versiones de librerías.
+Incluye controles iid, AR(1), factor común y positivo deterministas como pruebas smoke.
+
+```text
+ruff check .: All checks passed!
+ruff format --check .: 118 files already formatted
+pytest tests/test_window_sensitivity.py tests/test_isolation.py tests/test_no_hardcoded_topics.py -q
+44 passed in 10.24s
+git diff --check: correcto
+```
+
+No se implementó cargador raw/Parquet. El productor sigue siendo responsable de preparar
+historial/escala, recortar futuro y elegir periodos cerrados. El evaluador comprueba estructura
+y declaraciones, no demuestra esa procedencia desde los arrays; lo dice en el manifiesto.
+No ejecuta regime, no mide anticipación ni estabilidad del ranking completo y no certifica
+FDR con estos controles breves. No hay resultados sobre datos reales incluidos.
+CI completa [42424367559](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42424367559):
+success, con 488 passed in 360.47s (0:06:00). Lint y formato correctos; las CI de push y PR terminaron en success.
+
+### Siguiente autorización específica
+
+Tras CI verde y revisión, el propietario deberá autorizar merge #40 y la ejecución manual
+para rank_run_id f91893071f6041c3a4d980d659c697ab: lectura de ranking/metadatos y creación del
+prefijo privado audits/ de salida. Esa ejecución no publicará el sitio ni sobrescribirá
+etiquetas. El PR #41 se revisa por separado y no autoriza campañas con datos reales.
