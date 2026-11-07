@@ -744,3 +744,20 @@ Tras CI verde y revisión, el propietario deberá autorizar merge #40 y la ejecu
 para rank_run_id f91893071f6041c3a4d980d659c697ab: lectura de ranking/metadatos y creación del
 prefijo privado audits/ de salida. Esa ejecución no publicará el sitio ni sobrescribirá
 etiquetas. El PR #41 se revisa por separado y no autoriza campañas con datos reales.
+
+## 17. Autorización y merge del inventario
+
+El propietario autorizó explícitamente ambas acciones: fusionar #40 y ejecutar la auditoría
+para f91893071f6041c3a4d980d659c697ab, con lectura de ranking/metadatos y escritura en un nuevo
+prefijo privado audits/, sin modificar tablas ni publicar el sitio.
+
+Se comprobó que el head seguía siendo 8e7e347d3877b93b6243ffcbcd9b5b0b69b64e01 y ambas CI
+estaban en success. El PR #40 se fusionó en main: 225edec4d0866e9e0de109db5cb6d1b867a8218b.
+Se verificó que .github/workflows/auditoria-clusters.yml está disponible en main.
+La aprobación no incluye merge #41 ni #38.
+
+El conector disponible no expone workflow_dispatch y no hay gh autenticado localmente;
+el control de navegador ya había terminado por no poder verificar la URL. Por ello el
+lanzamiento debe hacerse manualmente desde Actions → Auditoría interna de clusters,
+seleccionando main y rank_run_id=f91893071f6041c3a4d980d659c697ab. La ejecución sigue
+autorizada y pendiente de ese lanzamiento; no se afirma que ya exista un run de auditoría.
