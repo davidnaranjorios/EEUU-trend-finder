@@ -550,3 +550,68 @@ Referencias oficiales consultadas por el agente:
 [PCE](https://www.bea.gov/data/consumer-spending/main),
 [USAspending](https://api.usaspending.gov/docs/endpoints).
 No se ejecutaron descargas de mercado ni se verificó catálogo de producción en esta investigación.
+
+## 14. Reporte real verificado tras las correcciones
+
+El propietario autorizó ejecutar Reporte en main con publish=false y posteriormente informó
+que lo había completado. Se verificó el run
+[42422615842](https://github.com/davidnaranjorios/EEUU-trend-finder/actions/runs/42422615842),
+commit 554eb62c017b6bf33594f159017896773a02d42d, resultado success.
+
+Ranking, construcción, verificación de copyright y sincronización R2 terminaron correctamente.
+Publicar en Cloudflare Pages y Preparar GitHub Pages quedaron skipped; el job pages también
+quedó skipped. El sitio solo se conservó en el artefacto sitio-42422615842 (id 13593604933).
+No se ejecutó un despliegue.
+
+### Salida real de ranking
+
+- rank_run_id: f91893071f6041c3a4d980d659c697ab.
+- numeric_run_id: c1529146f3e14c89b64b8083c6c7be6e.
+- Texto EDGAR: b6fa78e1ce5148a2b60e14093515d832.
+- Texto Federal Register: e76b68eac214400cbe2436c3d3406f23.
+- 334 series con señal, 505 términos con señal, 119 clusters (58 con varios miembros).
+- 63 vínculos, 1 candidato, 118 con estado una_fuente, 0 fuera del tope y 1 publicable.
+  Publicable en las tablas no significa desplegado: la publicación estuvo desactivada.
+
+### Cobertura NAICS observada
+
+| Fuente | Objetos evaluados | Con NAICS | Porcentaje registrado |
+| --- | ---: | ---: | ---: |
+| BEA | 12 | 0 | 0 % |
+| BLS | 168 | 25 | 14,9 % |
+| Census | 8 | 0 | 0 % |
+| EDGAR | 306 | 0 | 0 % |
+| FRED | 146 | 25 | 17,1 % |
+
+Estos denominadores son los objetos evaluados para el anclaje en esa corrida, no todos los
+catálogos ni todas las industrias estadounidenses. Federal Register queda fuera del denominador
+según el diseño. El log registra cobertura por fuente, pero no desglosa por método.
+No se atribuye el resultado a codigo_en_metadatos, nombre_oficial o herencia sin leer las
+filas naics_links de la misma corrida. Continúa pendiente ese desglose.
+
+La cobertura ya no es cero para todas las fuentes, pero sigue siendo baja y no demuestra
+cumplimiento del objetivo de cobertura ni corrección semántica de los enlaces.
+No se concluye la causa de los ceros sin revisar metadatos, esquema y linaje de cada fuente.
+
+### Verificación de publicación y almacenamiento
+
+La comprobación independiente de copyright recorrió 140 archivos y reportó leaks=0,
+con 74751 ids prohibidos y 49517 títulos prohibidos. El sitio construido tiene 140 archivos,
+66551453 bytes y 376084 fichas de explorador. No son métricas de precisión económica.
+
+Los logs de rclone reportan 0 differences found y 40 matching files en processed/rank,
+16 en caché de embeddings, 12 en reports y 4 en logs/reporte; sync_r2 terminó ok.
+Son resultados del workflow, no una segunda comparación independiente descargada localmente.
+
+### Qué quedó validado y qué no
+
+La corrección Parquet superó el caso real del reporte que antes abortaba por comove_q.
+Los dos merges también tienen CI de main en verde (runs 42421995597 y 42421999294).
+Esta ejecución no reingestó EDGAR, BLS u otras fuentes ni volvió a correr los detectores.
+Por tanto, no demuestra recuperación real de la ingesta EDGAR ni cobertura posterior a una
+reingesta completa. Las pruebas sintéticas/CI de EDGAR y esta verificación de Reporte son
+complementarias, no intercambiables.
+
+El siguiente paso de diagnóstico es el inventario de exclusiones con orígenes y NAICS por
+método, seguido de la muestra de hasta 20 para el propietario. No se cambian umbrales.
+La herramienta local tiene pruebas; todavía no se ha ejecutado sobre las tablas reales.
