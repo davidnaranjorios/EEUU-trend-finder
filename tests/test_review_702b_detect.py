@@ -82,3 +82,32 @@ def test_break_year_histogram_flags_single_year_artifact():
     assert h["by_year"] == {"2019": 2, "2023": 12} and h["artifact_suspect"]
     spread = [{"window_start": date(2010 + i, 1, 1)} for i in range(12)]
     assert not break_year_histogram(spread)["artifact_suspect"]
+
+
+def test_exact_duplicates_with_different_ids_keep_one_and_record_lineage(tmp_path):
+    from src.detect.dedup import dedup_exact
+
+    v = np.cumsum(np.arange(1, 40.0))
+    a, b = _s("fred", "ZZZ1", v, grid="M"), _s("fred", "AAA2", v.copy(), grid="M")
+    near = _s("fred", "NEAR", v + 1e-3, grid="M")  # casi igual: no es duplicado exacto
+    shifted = _s("fred", "SHIFT", v, first=1, grid="M")  # mismos valores en otras fechas
+    flat1, flat2 = _s("fred", "F1", np.ones(40), grid="M"), _s("fred", "F2", np.ones(40), grid="M")
+    original = _s("bls", "ORIG", v.copy(), grid="M")
+    reps, groups = dedup_exact([a, b, near, shifted, flat1, flat2, original])
+    ids = {r.series_id for r in reps}
+    assert {"NEAR", "SHIFT", "F1", "F2"} <= ids  # nada más se une
+    assert "ORIG" in ids and "ZZZ1" not in ids and "AAA2" not in ids  # gana la fuente original
+    assert groups == {("bls", "ORIG"): [("fred", "AAA2"), ("fred", "ZZZ1")]}
+
+
+def test_run_detectors_saves_exact_duplicate_lineage(tmp_path):
+    import json
+
+    from src.detect.run import load_dedup, save_dedup
+    from tests.fakes_rank import make_cfg
+
+    cfg = make_cfg(tmp_path)
+    save_dedup(cfg, "r1", 5, 3, {}, {("bls", "A"): [("fred", "B"), ("fred", "C")]})
+    doc = load_dedup(cfg, "r1")
+    assert doc["exact_groups"] == {"bls|A": ["fred|B", "fred|C"]}
+    assert json.dumps(doc)
