@@ -334,6 +334,7 @@ RANK_CONTEXT = TableSpec(
 NAICS_METHODS = (
     "codigo_en_metadatos",
     "nombre_oficial",
+    "codigo_en_id",
     "heredado_origen",
     "heredado_cluster",
     "sic_concordancia",

@@ -3,8 +3,14 @@
 Métodos (columna `metodo` de `naics_links`):
 - `codigo_en_metadatos`: código NAICS explícito ("NAICS 3361") en título o ruta de categoría de la
   serie; solo vale si el código existe en la tabla oficial NAICS 2022.
-- `heredado_cluster`: una serie sin código hereda los NAICS de los miembros de su cluster que sí
-  lo tienen (peso = promedio de sus pesos).
+- `codigo_en_id`: el código está en el id propio de la serie (PPI de BLS `PCU<naics><producto>`,
+  JOLTS `JT<S|U><industria>...`); solo vale si existe en la tabla oficial (los ceros de relleno a
+  la derecha se recortan: 524100 → 5241).
+- `nombre_oficial`: un tramo del título (limitado por comas, "and" o separadores) es el nombre
+  oficial NAICS 2022 COMPLETO. Un título que lista varios sectores reparte el peso entre todos los
+  que casan; los fragmentos de un nombre más largo no cuentan.
+- `heredado_cluster`: una serie sin código hereda del cluster solo los NAICS que reúnen más de
+  `rank.naics.cluster_majority` del peso de los miembros con código propio. Es una estimación.
 - `sic_concordancia`: un término de texto recibe los NAICS de las empresas que lo mencionan: SIC de
   4 dígitos (EDGAR, `term_freq.sic_top_json`) → NAICS con la concordancia oficial de Census,
   ponderado por documentos. Sin SIC medido (esquema < 5) no se inventa nada: queda pendiente.
@@ -29,7 +35,17 @@ CODE_RE = re.compile(
     r"(\d{2}-\d{2}|\d{2,6})\b",
     re.IGNORECASE,
 )
-NAME_SPLIT_RE = re.compile(r"\s*(?:\||;|:|,|\s-\s|\s–\s)\s*")
+# Separadores fuertes: parten el título en tramos independientes (la coma NO, porque los nombres
+# oficiales la llevan: "Arts, Entertainment, and Recreation").
+NAME_SPLIT_RE = re.compile(r"\s*(?:\||;|:|\s-\s|\s–\s)\s*")
+TOKEN_RE = re.compile(r"[a-z0-9]+|,")
+# Formatos de id de BLS con el código de industria dentro: (fuentes donde aplica, regex).
+# PPI industria: PCU + industria (2–6 dígitos, o "31-33" con guiones de relleno) + producto.
+# JOLTS: JT + S|U + industria (6 dígitos) + estado, área, tamaño, elemento y tasa.
+ID_FORMATS: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
+    (frozenset({"bls", "fred"}), re.compile(r"^PCU(\d{2}-\d{2}(?=-)|\d{2,6})")),
+    (frozenset({"bls"}), re.compile(r"^JT[SU](\d{6})\d{9}[A-Z]{2}[A-Z]$")),
+)
 
 Link = tuple[str, float, str]  # (naics, peso, metodo)
 
@@ -61,15 +77,70 @@ def normalize_name(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
 
 
+def _tokens(segment: str) -> tuple[list[str], list[bool]]:
+    """Palabras normalizadas del tramo y, por palabra, si una coma la sigue (sin paréntesis)."""
+    raw = TOKEN_RE.findall(re.sub(r"\([^)]*\)", " ", (segment or "").lower()))
+    words: list[str] = []
+    comma_after: list[bool] = []
+    for tok in raw:
+        if tok == ",":
+            if comma_after:
+                comma_after[-1] = True
+        else:
+            words.append(tok)
+            comma_after.append(False)
+    return words, comma_after
+
+
 def names_in_text(text: str, tables: NaicsTables) -> list[str]:
-    """Códigos cuyo nombre oficial NAICS es exactamente un segmento del texto (título/ruta)."""
-    out: list[str] = []
-    for seg in NAME_SPLIT_RE.split(text or ""):
-        key = normalize_name(seg)
-        code = tables.by_name.get(key) if key else None
-        if code and code not in out:
-            out.append(code)
-    return out
+    """Códigos cuyo nombre oficial NAICS COMPLETO aparece como tramo del título.
+
+    Un nombre casa si cubre palabras consecutivas del tramo que empiezan y terminan en un límite
+    (inicio/fin, coma o "and"), así "Accommodation" no casa dentro de "Accommodation and Food
+    Services" y el nombre más largo gana. Los tramos no se solapan: un título que lista varios
+    sectores devuelve todos los que casan, en orden de aparición."""
+    out: list[tuple[int, int, str]] = []  # (tramo, posición, código)
+    for si, seg in enumerate(NAME_SPLIT_RE.split(text or "")):
+        words, comma = _tokens(seg)
+        n = len(words)
+        cands: list[tuple[int, int]] = []
+        for i in range(n):
+            if i and words[i - 1] != "and" and not comma[i - 1]:
+                continue
+            for j in range(i + 1, min(n, i + 40) + 1):
+                if j < n and words[j] != "and" and not comma[j - 1]:
+                    continue
+                if " ".join(words[i:j]) in tables.by_name:
+                    cands.append((i, j))
+        taken = [False] * n
+        for i, j in sorted(cands, key=lambda c: (-(c[1] - c[0]), c[0])):
+            if any(taken[i:j]):
+                continue
+            for k in range(i, j):
+                taken[k] = True
+            out.append((si, i, tables.by_name[" ".join(words[i:j])]))
+    codes: list[str] = []
+    for _, _, code in sorted(out):
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def id_codes(source: str, series_id: str, tables: NaicsTables) -> list[str]:
+    """NAICS embebido en el id propio de la serie (ver ID_FORMATS), validado contra la tabla."""
+    for sources, pat in ID_FORMATS:
+        m = pat.match(series_id or "") if source in sources else None
+        if not m:
+            continue
+        code = m.group(1)
+        while len(code) >= 2:
+            if code in tables.names:
+                return [code]
+            if code.endswith("0") and "-" not in code:
+                code = code[:-1]  # relleno de ceros a la derecha: 524100 -> 5241
+            else:
+                break
+    return []
 
 
 def codes_in_text(text: str, tables: NaicsTables) -> list[str]:
@@ -85,11 +156,12 @@ def codes_in_text(text: str, tables: NaicsTables) -> list[str]:
 def series_links(
     meta_text: Mapping[tuple[str, str], str], tables: NaicsTables
 ) -> dict[tuple[str, str], list[Link]]:
-    """`codigo_en_metadatos`: peso uniforme entre los códigos explícitos de cada serie."""
+    """Código explícito en metadatos > código en el id > nombre oficial; peso uniforme."""
     out = {}
     for key, text in meta_text.items():
-        codes = codes_in_text(text, tables)
-        method = "codigo_en_metadatos"
+        codes, method = codes_in_text(text, tables), "codigo_en_metadatos"
+        if not codes:
+            codes, method = id_codes(key[0], key[1], tables), "codigo_en_id"
         if not codes:
             codes, method = names_in_text(text, tables), "nombre_oficial"
         if codes:
@@ -118,8 +190,11 @@ def inherit_by_origin(
 def inherit_in_clusters(
     clusters: Iterable[list[tuple[str, str]]],
     own: Mapping[tuple[str, str], list[Link]],
+    majority: float = 0.5,
 ) -> dict[tuple[str, str], list[Link]]:
-    """`heredado_cluster`: miembros sin NAICS reciben el promedio de los de su cluster."""
+    """`heredado_cluster`: los miembros sin NAICS reciben los códigos que reúnen MÁS de
+    `majority` del peso de los miembros con código propio (cada miembro pesa 1, repartido entre
+    sus códigos). Si ninguno alcanza la mayoría, el cluster no hereda nada."""
     out: dict[tuple[str, str], list[Link]] = {}
     for members in clusters:
         donors = [k for k in members if k in own]
@@ -129,7 +204,11 @@ def inherit_in_clusters(
         for k in donors:
             for naics, w, _ in own[k]:
                 acc[naics] += w / len(donors)
-        links = [(n, w, "heredado_cluster") for n, w in sorted(acc.items())]
+        agreed = {n: w for n, w in acc.items() if w > majority}
+        if not agreed:
+            continue
+        total = sum(agreed.values())
+        links = [(n, w / total, "heredado_cluster") for n, w in sorted(agreed.items())]
         for k in members:
             if k not in own:
                 out[k] = links

@@ -874,7 +874,7 @@ def rank_run(
     own = {**own, **by_origin}
     naics_links = {
         **own,
-        **naics_mod.inherit_in_clusters(clusters, own),
+        **naics_mod.inherit_in_clusters(clusters, own, float(rk["naics"]["cluster_majority"])),
         **naics_mod.term_links(term_sics(con, txt_signals), tables),
     }
     naics_cov = naics_mod.coverage(

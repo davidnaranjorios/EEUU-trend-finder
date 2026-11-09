@@ -464,7 +464,8 @@ def _naics_line(items: list[dict[str, Any]]) -> str:
     if not items:
         return '<p class="muted">Industria (NAICS): sin anclaje.</p>'
     txt = "; ".join(
-        f"{i['naics']} {i['name'] or ''} ({i['weight']:.0%}, {'/'.join(i['methods'])})"
+        f"{i['naics']} {i['name'] or ''} ({i['weight']:.0%}, {'/'.join(i['methods'])}"
+        f"{', estimado' if i.get('estimated') else ''})"
         for i in items
     )
     return f'<p class="plain naics">Industria (NAICS): {esc(txt)}</p>'

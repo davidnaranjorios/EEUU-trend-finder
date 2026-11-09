@@ -81,7 +81,15 @@ def candidate_naics(
             a["weight"] += r["peso"] / len(have)
             a["methods"].add(r["metodo"])
     best = sorted(acc.values(), key=lambda a: (-a["weight"], a["naics"]))[:top]
-    return [{**a, "methods": sorted(a["methods"])} for a in best]
+    return [
+        {
+            **a,
+            "methods": sorted(a["methods"]),
+            # Solo herencia (cluster u origen): el código no sale de la serie misma.
+            "estimated": all(m.startswith("heredado_") for m in a["methods"]),
+        }
+        for a in best
+    ]
 
 
 def candidates_data(
