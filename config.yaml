@@ -299,7 +299,10 @@ rank:
     # segunda fuente) si pasa la prueba de co-movimiento: Δ logit anual del término contra el
     # crecimiento anual de la serie, rezagos ±max_lag, stationary bootstrap por bloques con
     # índices compartidos y su propia familia BH (q = fdr.q).
-    comove: {max_lag: 2, min_overlap: 8, n_resamples: 999, block_length: auto, seed: 20261104}
+    # min_overlap_by_grid: años comunes mínimos según la grilla nativa de la serie (la del término
+    # es anual y no se interpola). Una serie anual aporta menos años que una mensual agregada.
+    comove: {max_lag: 2, min_overlap: 8, min_overlap_by_grid: {M: 8, Q: 8, A: 6}, n_resamples: 999,
+             block_length: auto, seed: 20261104}
     seed: 20261103
   text_only:
     enabled: true                 # términos parecidos emergentes en ≥ 2 fuentes de texto

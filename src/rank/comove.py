@@ -63,25 +63,39 @@ def comove_stat(a: np.ndarray, b: np.ndarray, max_lag: int, min_overlap: int) ->
     return float(stat[0]), int(lag[0])
 
 
+def max_overlap(a: np.ndarray, b: np.ndarray, max_lag: int) -> int:
+    """Mayor número de periodos comunes con dato en ambos lados entre los rezagos −L..L."""
+    n = a.size
+    best = 0
+    for lag in range(-max_lag, max_lag + 1):
+        x, y = (a[: n - lag], b[lag:]) if lag >= 0 else (a[-lag:], b[: n + lag])
+        best = max(best, int((np.isfinite(x) & np.isfinite(y)).sum()))
+    return best
+
+
 def comove_family(
-    pairs: list[tuple[np.ndarray, np.ndarray]], params: ComoveParams
+    pairs: list[tuple[np.ndarray, np.ndarray]],
+    params: ComoveParams,
+    min_overlaps: list[int] | None = None,
 ) -> list[dict[str, float | int | str]]:
     """Prueba toda una familia de pares (a, b) sobre un eje común de largo N.
 
-    Devuelve por par: stat, lag, p, q_bh, q_by, n_tests."""
+    `min_overlaps` (opcional) fija el mínimo de periodos comunes de cada par; por defecto,
+    `params.min_overlap`. Devuelve por par: stat, lag, p, q_bh, q_by, n_tests."""
     if not pairs:
         return []
+    mins = min_overlaps or [params.min_overlap] * len(pairs)
     n = pairs[0][0].size
     block = family_block_length(
         [np.nan_to_num(b) for _, b in pairs[: min(len(pairs), 2000)]], params.block_length
     )
     idx = stationary_indices(n, params.n_resamples, block, (params.seed, n, len(pairs)))
     obs, lags, p = [], [], []
-    for a, b in pairs:
-        stat, lag = comove_stat(a, b, params.max_lag, params.min_overlap)
+    for (a, b), mo in zip(pairs, mins, strict=True):
+        stat, lag = comove_stat(a, b, params.max_lag, mo)
         obs.append(stat)
         lags.append(lag)
-        null = stat_matrix(a, b[idx], params.max_lag, params.min_overlap)[0]
+        null = stat_matrix(a, b[idx], params.max_lag, mo)[0]
         p.append((1 + np.sum(null >= stat)) / (null.size + 1))
     p_arr = np.array(p)
     q_bh, q_by = bh_adjust(p_arr), by_adjust(p_arr)
