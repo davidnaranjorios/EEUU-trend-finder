@@ -76,7 +76,7 @@ def test_dashboard_and_explorer(site):
     for heading in ("Estado del sistema", "Embudo de elegibilidad", "Cobertura", "Explorador"):
         assert heading in dash
     idx = json.loads((site_dir / "data" / "explorer" / "index.json").read_text("utf-8"))
-    assert idx["n_cards"] == 411  # 400 de relleno + 8 con señal + 3 de referencia
+    assert idx["n_cards"] == 412  # 400 de relleno + 8 con señal + 4 de referencia
     assert idx["copyrighted_withheld"] == 0  # ya filtradas en la consulta (NOT copyrighted)
     assert set(idx["by_source"]) == {"fred", "bls", "bea", "census"}
     cards = [

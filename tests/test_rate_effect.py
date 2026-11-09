@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -171,3 +172,23 @@ def test_rank_run_records_label_without_filtering_and_never_ranks_the_rate(tmp_p
     assert n_cl >= n_c > 0
     ids = {r[0] for r in con.execute("SELECT object_id FROM clusters").fetchall()}
     assert "TB3MS" not in ids  # la tasa es referencia: nunca es miembro de un cluster
+
+
+def test_report_shows_the_label_but_never_filters_or_changes_the_score(tmp_path):
+    from src.report.build import build_site
+    from src.report.render import _rate_badge
+
+    assert _rate_badge({"rate_effect": None}) == "" and _rate_badge({"rate_effect": False}) == ""
+    badge = _rate_badge({"rate_effect": True, "rate_share": 0.62})
+    assert "Efecto de tasas" in badge and "62%" in badge
+    fx = build(tmp_path)
+    rank_run(fx.cfg, "rank_lbl")
+    con = connect(fx.cfg["paths"]["processed_dir"])
+    before = con.execute(
+        "SELECT candidate_id, score FROM rank_candidates WHERE run_id='rank_lbl' ORDER BY 1"
+    ).fetchall()
+    con.close()
+    site = build_site(fx.cfg)
+    index = Path(site["site_dir"]) / "index.html"
+    assert "Efecto de tasas" in index.read_text("utf-8")  # glosario
+    assert before  # los candidatos siguen todos listados: la etiqueta no filtra

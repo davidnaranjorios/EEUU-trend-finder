@@ -314,6 +314,10 @@ def candidates_data(
                 "n_members": c["n_members"],
                 "series": series,
                 "state": summary_state([x["recent"]["state"] for x in series]),
+                # Etiqueta descriptiva (no filtra): None = no evaluado.
+                "rate_effect": c.get("rate_effect"),
+                "rate_share": c.get("rate_share"),
+                "rate_q": c.get("rate_q"),
                 "phenomenon": build_phenomenon(
                     series,
                     {k: values[k] for k in values if k in {(x["source"], x["id"]) for x in series}},
