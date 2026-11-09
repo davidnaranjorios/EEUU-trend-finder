@@ -69,3 +69,31 @@ Modo comparación: `comparacion.json/.md` con conteos agregados antes/después (
 fenómenos, candidatos, enlaces de texto y embudo, cobertura NAICS por método, «efecto de tasas»
 = desconocido). Una cifra de una corrida anterior a la función es `None`, no 0. El workflow
 `auditoria-clusters.yml` recibe `baseline_run_id` (opcional).
+
+## 8. NAICS para BEA y Census (rama `claude/naics-bea-census`)
+Corrida 1567bd3a: cobertura NAICS de señales BLS 25 %, FRED 17,8 %, BEA 0 %, Census 0 %. El código
+de industria no se perdía en la ingesta: ya viaja en el `series_id`.
+
+- **BEA.** Los ids reales (verificados con la API el 2026-11-09) llevan el código de industria de
+  BEA: `GDPbyIndustry:1:111CA:A`, `UnderlyingGDPbyIndustry:210:23EH:A`,
+  `InputOutput:57:111CA.Industry.487OS.Commodity:A`. Método nuevo `concordancia_bea`: la tabla oficial
+  de BEA («BEA Industry and Commodity Codes and NAICS Concordance», 2023-10) está versionada en
+  `config/naics/bea_industry_naics.csv` (fuente, fecha y hash en `SOURCES.md`). Es NAICS **2017**:
+  `scripts/build_bea_concordance.py` la pasa a NAICS 2022 con la concordancia oficial de Census y
+  sube al padre cuando están todos los hijos (`111CA` → 111 y 112, `44RT` → 44-45). En InputOutput
+  se ancla el lado marcado `Industry`. Los agregados sin NAICS (`PVT`, `GDP`, `31G`...) y el gobierno
+  («n.a.») quedan sin fila. Las tablas Regional (SAGDP...) no llevan el código en el id y siguen por
+  nombre; es la mejora pendiente más clara para BEA.
+- **Census.** `codigo_en_id` lee las dimensiones `NAICS`, `NAICSaaaa`, `category_code` (EITS) e
+  `industry` (QWI) del id (`col=valor`), validadas contra `naics_2022.csv`; los ceros de relleno se
+  recortan, y un código de NAICS 2017 que cambió en 2022 se pasa con
+  `config/naics/naics_2017_to_2022.csv` (concordancia oficial de Census, solo los 140 códigos que
+  cambiaron). Valores que no son NAICS (`TOTAL`, `44X72`, `MDM`, `00`) no anclan. Límite: una
+  dimensión `NAICS2012` solo se acepta si el código también es NAICS 2022 (no se encadena 2012→2017).
+  Riesgo: un `category_code` numérico de una encuesta no industrial se anclaría por error; el filtro
+  es que el nombre de la columna sea de industria y el valor un NAICS oficial.
+- **Sin re-ingesta.** Como el código ya está en el id, basta correr `uv run python -m src.rank run`
+  (o el workflow Reporte): no hay que re-ingerir metadatos de BEA ni de Census.
+- Efecto esperado sobre el embudo: más señales de BEA y Census con NAICS, lo que permite que los
+  clusters se agrupen en fenómenos (ADR 0013, sección 3).
+

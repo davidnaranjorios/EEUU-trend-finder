@@ -273,6 +273,8 @@ rank:
   naics:                          # ADR 0012: tablas oficiales de Census (config/naics/SOURCES.md)
     names_table: config/naics/naics_2022.csv
     concordance_table: config/naics/sic_naics_concordance.csv
+    bea_table: config/naics/bea_industry_naics.csv          # código BEA -> NAICS 2022 (ADR 0013)
+    concordance_2017_table: config/naics/naics_2017_to_2022.csv
     cluster_majority: 0.5         # herencia por cluster: solo códigos con más de este peso entre los miembros con código
     not_applicable_sources: [federal_register]  # sin industria: fuera del denominador de cobertura
   # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
