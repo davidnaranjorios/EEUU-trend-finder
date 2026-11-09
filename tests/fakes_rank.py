@@ -448,23 +448,26 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
             n_buckets=4,
             bucket_col="run_id",
         )
-        for year in range(2010, 2026):
+        # EDGAR guarda trimestres ('2024Q1'); el Federal Register, meses ('2024-05'): como la
+        # ingesta real (ADR 0005). Las proporciones crecen suave desde 2022.
+        for period, frac in _periods(src):
+            rise = max(0.0, frac - 2022)
             rows = [
                 {
                     "source": src,
                     "section": section,
-                    "period": str(year),
+                    "period": period,
                     "term": term,
-                    "doc_count": 5 + 3 * max(0, year - 2022),
+                    "doc_count": int(round(5 + 3 * rise)),
                     "total_docs": 1000,
-                    "n_entities": 4 + max(0, year - 2022),
+                    "n_entities": 4 + int(rise),
                 }
                 for section, term in terms
             ] + [
                 {
                     "source": src,
                     "section": terms[0][0],
-                    "period": str(year),
+                    "period": period,
                     "term": term,
                     "doc_count": 6,
                     "total_docs": 1000,
@@ -477,9 +480,16 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
                 TERM_FREQ,
                 processed / "term_freq",
                 source=src,
-                partition=str(year),
+                partition=period,
             )
     return fx
+
+
+def _periods(src: str) -> list[tuple[str, float]]:
+    """Periodos de `term_freq` como los de la ingesta real: trimestres (EDGAR) o meses (FR)."""
+    if src == "edgar":
+        return [(f"{y}Q{q}", y + (q - 1) / 4) for y in range(2014, 2026) for q in range(1, 5)]
+    return [(f"{y}-{m:02d}", y + (m - 1) / 12) for y in range(2014, 2026) for m in range(1, 13)]
 
 
 def _run_row(run_id: str, detector: str, n: int) -> dict:

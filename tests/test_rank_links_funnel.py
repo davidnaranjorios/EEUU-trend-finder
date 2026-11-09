@@ -45,7 +45,7 @@ def test_term_comoving_with_monthly_series_links_and_unrelated_pair_does_not():
         "M",
     )
     term = ("edgar", "item_1a|xyz")
-    counts = {term: _term_counts(share)}
+    counts = {"A": {term: _term_counts(share)}}
     growth = {("fred", "REL"): related, ("fred", "UNREL"): unrelated}
     stats: dict[str, int] = {}
     pairs = [(term, ("fred", "REL"))]
@@ -70,7 +70,7 @@ def test_pairs_with_too_little_overlap_are_dropped_not_tested():
     cfg = load_config()
     rng = np.random.default_rng(3)
     term = ("edgar", "item_1a|abc")
-    counts = {term: _term_counts(rng.uniform(0.01, 0.02, len(YEARS)))}
+    counts = {"A": {term: _term_counts(rng.uniform(0.01, 0.02, len(YEARS)))}}
     short = GrowthSeries(rng.normal(0, 0.01, 24), 2026 * 12 - 1, "M")  # 2 años
     stats: dict[str, int] = {}
     res = comove_validate(cfg, counts, {("fred", "S"): short}, [(term, ("fred", "S"))], stats)
