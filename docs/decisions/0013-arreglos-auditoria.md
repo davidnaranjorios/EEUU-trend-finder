@@ -58,17 +58,41 @@ sin acceso a los títulos reales; se revisan con la corrida real.
 - (a) `dedup_exact` (`src/detect/dedup.py`): series con los mismos valores en todas las fechas
   (misma grilla y primer periodo, ids distintos; las constantes no se unen) se prueban una sola
   vez, gana la fuente original; el linaje queda en `reports/dedup/<run>.json` (`exact_groups`).
-- (b) **NO implementado: efecto de tasas.** Requiere una serie de tasa de corto plazo como
-  referencia metodológica, pero la excepción del ADR 0009 admite exactamente tres claves
-  (deflactor, población, recesiones). Agregar una cuarta amplía la excepción del guard y necesita
-  aprobación de David. Alternativa sin id fijo (elegir la serie de tasa por palabras clave del
-  título) sería un tema escrito a mano, también prohibido. Queda pendiente.
+- (b) **Efecto de tasas: implementado el 2026-11-09, tras la aprobación de David (opción A).**
+  Ver la sección 7.
 
 ## 6. Reauditoría (`eval/cluster_audit.py --baseline-run-id`)
 Modo comparación: `comparacion.json/.md` con conteos agregados antes/después (clusters,
 fenómenos, candidatos, enlaces de texto y embudo, cobertura NAICS por método, «efecto de tasas»
 = desconocido). Una cifra de una corrida anterior a la función es `None`, no 0. El workflow
 `auditoria-clusters.yml` recibe `baseline_run_id` (opcional).
+
+## 7. Efecto de tasas (rama `claude/efecto-tasas`)
+**Excepción ampliada.** `context.reference_series` admite una cuarta clave, `short_rate` =
+`TB3MS` (FRED, T-bill a 3 meses, mercado secundario, mensual, H.15, sin copyright). Es una
+referencia metodológica como las otras tres: se descarga con ellas, no entra a detectores ni al
+ranking (`reference_keys`) y el guard (`tests/guards.py`) acepta exactamente estas cuatro claves
+(una quinta, o solo tres, falla). Aprobada por David el 2026-11-09; texto en CLAUDE.md, principio 1.
+
+**Etiqueta** (`src/rank/rate_effect.py`, columnas `rate_effect`, `rate_share` en `clusters` y
+`rank_candidates`, más `rate_q` y `rate_n_tests` en `rank_candidates`; NULL = no evaluado):
+- (a) Regresión del crecimiento preparado de la serie representativa del cluster sobre Δ TB3MS,
+  rezagos 0..`rank.rate_effect.max_lag` (2), en la grilla de la serie (la tasa se agrega sumando
+  sus cambios mensuales). Estadístico R²; p por stationary bootstrap con índices de bloques
+  compartidos por (grilla, largo) y cola GPD como en los detectores (sin ella el p mínimo,
+  1/(B+1), impide que BH deje pasar nada con una familia de cientos de clusters); BH sobre la
+  familia de clusters, que cada fila registra (`rate_n_tests`).
+- (b) Se repite la prueba `slope` de los detectores sobre el residuo. Se marca solo si el cambio
+  de pendiente original es significativo (p ≤ q) y el efecto cae ≥ `rank.rate_effect.min_drop`
+  (0,5) o deja de ser significativo. `rate_share` = 1 − efecto residual / original, en [0, 1].
+- Solo etiqueta: el reporte la muestra y no filtra ni cambia el score. `eval/cluster_audit.py`
+  cuenta los clusters evaluados y marcados (`n_marked`; None = la corrida no la calculó).
+
+**Límites.** Mira solo `slope` (un cluster con señal solo de `regime` no se marca); no se evalúa
+en grilla anual (la línea base de `slope` no alcanza) ni con historia corta o sin la serie de tasa
+descargada. Una tendencia que coincide en el tiempo con un ciclo de tasas no se distingue de una
+causada por ella: la etiqueta avisa y la interpretación es humana. Valores iniciales (`max_lag`,
+`min_drop`) por confirmar con la corrida real.
 
 ## 8. NAICS para BEA y Census (rama `claude/naics-bea-census`)
 Corrida 1567bd3a: cobertura NAICS de señales BLS 25 %, FRED 17,8 %, BEA 0 %, Census 0 %. El código
@@ -96,4 +120,3 @@ de industria no se perdía en la ingesta: ya viaja en el `series_id`.
   (o el workflow Reporte): no hay que re-ingerir metadatos de BEA ni de Census.
 - Efecto esperado sobre el embudo: más señales de BEA y Census con NAICS, lo que permite que los
   clusters se agrupen en fenómenos (ADR 0013, sección 3).
-

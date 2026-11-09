@@ -13,9 +13,10 @@ El sistema propone candidatos. La interpretación final la hace un humano.
 1. **Cero temas hardcodeados.** Ningún archivo en `src/` puede contener listas de industrias,
    tendencias, palabras clave o series "de interés". La selección sale de los datos.
    `config.yaml` tampoco puede contenerlas (lo verifica `tests/test_no_hardcoded_topics.py`).
-   Única excepción, aprobada por David el 2026-11-04 (ADR 0009):
-   - `context.reference_series` lista tres series de referencia metodológica: deflactor,
-     población y recesiones;
+   Única excepción, aprobada por David el 2026-11-04 (ADR 0009; ampliada el 2026-11-09):
+   - `context.reference_series` lista cuatro series de referencia metodológica: deflactor,
+     población, recesiones y tasa de corto plazo (`short_rate`, añadida por David el 2026-11-09,
+     ADR 0013, solo para etiquetar "efecto de tasas");
    - tiene exactamente esas claves, y el guard no acepta ids de serie en ninguna otra parte;
    - esas series no entran a los detectores ni al ranking.
    Segunda excepción, aprobada por David el 2026-11-04 (ADR 0011): `text_detect.boilerplate` es una

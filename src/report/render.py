@@ -159,6 +159,10 @@ def guide(
         f"<em>revierte</em> (signo contrario y al menos {rc['reverse_frac']} veces), "
         "<em>continúa</em> (el resto). "
         "Solo para series mensuales o más frecuentes; los datos recientes son preliminares.</dd>",
+        "<dt>Efecto de tasas</dt><dd>Etiqueta descriptiva, no una señal ni un filtro: el "
+        "crecimiento del cluster se relaciona de forma significativa con los cambios de la tasa "
+        "de corto plazo (T-bill a 3 meses) y, al quitar esa parte, su cambio de pendiente cae "
+        "o deja de ser significativo. El candidato sigue en el ranking con el mismo score.</dd>",
         "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
         "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
         "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "
@@ -490,6 +494,20 @@ def _naics_coverage(rr: dict[str, Any]) -> str:
     )
 
 
+def _rate_badge(c: dict[str, Any]) -> str:
+    """Etiqueta "efecto de tasas": solo avisa, nunca filtra ni cambia el score."""
+    if not c.get("rate_effect"):
+        return ""
+    share = c.get("rate_share")
+    pct = f" ({share:.0%} del cambio de pendiente)" if share is not None else ""
+    title = (
+        "El crecimiento de este cluster se explica en buena parte por los cambios de la tasa "
+        "de corto plazo (T-bill a 3 meses): al quitarlos, el cambio de pendiente cae o deja de "
+        "ser significativo. Etiqueta descriptiva: no cambia el ranking."
+    )
+    return f' <span class="state rate-effect" title="{esc(title)}">Efecto de tasas{esc(pct)}</span>'
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -508,12 +526,13 @@ def _candidate(c: dict[str, Any]) -> str:
         else ""
     )
     naics = _naics_line(c.get("naics") or [])
+    rate = _rate_badge(c)
     return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
  data-state="{esc(state)}">
 <header><span class="rank">#{c["rank"]}</span>{badge}
 <strong>{c["n_sources"]} fuentes independientes</strong>
 <span>score {fnum(c["score"], 3)}</span>
-<span class="muted">{c["n_members"]} miembro(s) · {len(c["terms"])} término(s)</span></header>
+<span class="muted">{c["n_members"]} miembro(s) · {len(c["terms"])} término(s)</span>{rate}</header>
 <div>{_sources_chips(c["sources"])}</div>
 {naics}
 <p class="plain">{esc(_why_sources(c["sources"]))}</p>

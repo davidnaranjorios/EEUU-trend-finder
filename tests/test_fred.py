@@ -258,11 +258,12 @@ def test_reference_series_are_downloaded_outside_target_groups(make, fake, cfg):
         "deflator": "EEE",
         "population": "AAA",
         "recessions": "BBB",
+        "short_rate": "CCC",  # descontinuada para el embudo, pero es referencia (ADR 0013)
     }
     ing = prepare(make)
     ing.observations()
     fetched = {p["series_id"] for e, p in fake.requests if e == "series/observations"}
-    assert fetched == {"AAA", "BBB", "FFF", "EEE"}
+    assert fetched == {"AAA", "BBB", "FFF", "EEE", "CCC"}
 
 
 def test_observations_max_series_reports_pending(make):

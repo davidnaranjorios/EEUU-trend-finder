@@ -248,6 +248,9 @@ CLUSTERS = TableSpec(
         ("object_id", pa.string(), False),
         ("role", pa.string(), False),  # representante o miembro
         ("similarity", pa.float64(), True),
+        # Etiqueta "efecto de tasas" del cluster (rank/rate_effect.py): NULL = no evaluado.
+        ("rate_effect", pa.bool_(), True),
+        ("rate_share", pa.float64(), True),
     ),
     key=("run_id", "cluster_id", "source", "object_id"),
 )
@@ -274,6 +277,13 @@ RANK_CANDIDATES = TableSpec(
         ("n_members", pa.int64(), False),
         ("n_terms", pa.int64(), False),
         ("published", pa.bool_(), False),
+        # "Efecto de tasas": etiqueta descriptiva, nunca filtra. `rate_share` = fracción del
+        # cambio de pendiente que explica la tasa; `rate_q`/`rate_n_tests`: q de BH y tamaño de
+        # la familia de clusters contra la que se corrigió. NULL = no evaluado.
+        ("rate_effect", pa.bool_(), True),
+        ("rate_share", pa.float64(), True),
+        ("rate_q", pa.float64(), True),
+        ("rate_n_tests", pa.int64(), True),
     ),
     key=("run_id", "candidate_id"),
 )

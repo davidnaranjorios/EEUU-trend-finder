@@ -40,12 +40,16 @@ YAML_TRAPS = {
     "reference_elsewhere.yaml": "report:\n  reference_series:\n    deflator: CPIAUCSL\n",
     "reference_extra_key.yaml": (
         "context:\n  reference_series:\n    deflator: CPIAUCSL\n    population: POP\n"
-        "    recessions: USREC\n    favorite: GDPC1\n"
+        "    recessions: USREC\n    short_rate: TB3MS\n    favorite: GDPC1\n"  # quinta clave
+    ),
+    "reference_three_keys.yaml": (  # ya no basta con las tres originales
+        "context:\n  reference_series:\n    deflator: CPIAUCSL\n    population: POP\n"
+        "    recessions: USREC\n"
     ),
     "reference_missing_key.yaml": "context:\n  reference_series:\n    deflator: CPIAUCSL\n",
     "reference_list.yaml": (
         "context:\n  reference_series:\n    deflator: [CPIAUCSL, GDPC1]\n    population: POP\n"
-        "    recessions: USREC\n"
+        "    recessions: USREC\n    short_rate: TB3MS\n"
     ),
 }
 
@@ -71,7 +75,7 @@ def test_yaml_guard_allows_only_the_reference_series_exception(tmp_path):
     path = tmp_path / "ok.yaml"
     path.write_text(
         "context:\n  reference_series:\n    deflator: CPIAUCSL\n    population: POP\n"
-        "    recessions: USREC\n",
+        "    recessions: USREC\n    short_rate: TB3MS\n",
         encoding="utf-8",
     )
     assert hardcoded_topic_violations_yaml(path) == []
