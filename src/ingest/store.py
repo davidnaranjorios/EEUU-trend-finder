@@ -261,12 +261,30 @@ def read_table(
     files = sorted(source_dir.glob("??/*.parquet")) if source_dir.is_dir() else []
     if not files:
         return spec.schema.empty_table()
+    paths = [str(f) for f in files]
     con = duckdb.connect()
     try:
-        sql = f"SELECT {', '.join(spec.schema.names)} FROM read_parquet(?)"
+        # Particiones escritas antes de agregar una columna nullable no la tienen: union_by_name
+        # une por nombre (sin él DuckDB toma el esquema del primer archivo) y, si ningún archivo
+        # la trae, sale NULL. Una columna obligatoria ausente sigue siendo un error.
+        present = {
+            r[0]
+            for r in con.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?, union_by_name = true)", [paths]
+            ).fetchall()
+        }
+        select = []
+        for field in spec.schema:
+            if field.name in present:
+                select.append(field.name)
+            elif field.nullable:
+                select.append(f"NULL AS {field.name}")
+            else:
+                raise ValueError(f"{spec.name}: falta columna obligatoria {field.name}")
+        sql = f"SELECT {', '.join(select)} FROM read_parquet(?, union_by_name = true)"
         if where:
             sql += f" WHERE {where}"
-        table = con.execute(sql, [[str(f) for f in files], *(params or [])]).to_arrow_table()
+        table = con.execute(sql, [paths, *(params or [])]).to_arrow_table()
     finally:
         con.close()
     return table.cast(spec.schema)
