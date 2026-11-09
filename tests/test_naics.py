@@ -48,13 +48,14 @@ def test_method_cluster_inheritance_only_fills_members_without_code(tables):
         {("bls", "a"): "NAICS 3361", ("bea", "b"): "NAICS 3362", ("fred", "c"): "nada"}, tables
     )
     out = nx.inherit_in_clusters(
+        [[("bls", "a"), ("bls", "d"), ("fred", "c")], [("fred", "z")]],
+        {**own, ("bls", "d"): own[("bls", "a")]},
+    )
+    assert set(out) == {("fred", "c")}  # los miembros con código propio no se tocan
+    out = nx.inherit_in_clusters(
         [[("bls", "a"), ("bea", "b"), ("fred", "c")], [("fred", "z")]], own
     )
-    assert set(out) == {("fred", "c")}
-    assert {(n, round(w, 2), m) for n, w, m in out[("fred", "c")]} == {
-        ("3361", 0.5, "heredado_cluster"),
-        ("3362", 0.5, "heredado_cluster"),
-    }
+    assert out == {}  # 50 % / 50 %: ningún código tiene mayoría, no se hereda nada
 
 
 def test_method_sic_concordance_weights_by_documents(tables):
@@ -153,3 +154,68 @@ def test_origin_inheritance_and_not_applicable_sources(tables):
     assert got[("fred", "B")][0] == ("3361", 1.0, "heredado_origen") and ("fred", "C") not in got
     cov = nx.coverage([("federal_register", "t"), ("bls", "A")], own, ["federal_register"])
     assert set(cov) == {"bls"}
+
+
+# --- Auditoría f9189307: NAICS más estricto -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("sid", "code"),
+    [
+        ("PCU334513334513", "334513"),  # ids reales de PPI de BLS: industria + producto
+        ("PCU524126524126", "524126"),
+        ("PCU524100524100", "5241"),  # relleno de ceros: 524100 no existe, 5241 sí
+    ],
+)
+def test_naics_embedded_in_bls_ppi_ids(tables, sid, code):
+    got = nx.series_links({("bls", sid): "PPI Industry data | not seasonally adjusted"}, tables)
+    assert got[("bls", sid)] == [(code, 1.0, "codigo_en_id")]
+    # FRED republica los mismos ids PCU; otra fuente con un id parecido no se interpreta.
+    assert ("fred", sid) in nx.series_links({("fred", sid): "x"}, tables)
+    assert nx.series_links({("census", sid): "x"}, tables) == {}
+
+
+def test_id_code_must_exist_in_official_table_and_jolts_shape(tables):
+    assert nx.id_codes("bls", "PCU999999999999", tables) == []
+    assert nx.id_codes("bls", "JTS230000000000000JOL", tables) == ["23"]  # JOLTS construcción
+    assert nx.id_codes("bls", "JTS000000000000000JOL", tables) == []  # total: sin industria
+    assert nx.id_codes("bls", "CES3100000001", tables) == []  # formato sin NAICS directo
+
+
+def test_metadata_code_wins_over_id_code(tables):
+    got = nx.series_links({("bls", "PCU334513334513"): "x | NAICS 3345"}, tables)
+    assert got[("bls", "PCU334513334513")] == [("3345", 1.0, "codigo_en_metadatos")]
+
+
+def test_name_match_requires_the_full_official_name(tables):
+    # "Accommodation" (721) es solo un fragmento de "Accommodation and Food Services" (72).
+    got = nx.series_links({("bea", "a"): "Value added | Accommodation and Food Services"}, tables)
+    assert [c for c, _, _ in got[("bea", "a")]] == ["72"]
+    # Un fragmento suelto de un nombre más largo no ancla nada.
+    assert nx.series_links({("bea", "b"): "Employment in Arts, Entertainment"}, tables) == {}
+    # El nombre oficial con comas sigue casando completo.
+    full = nx.series_links({("bea", "c"): "GDP | Arts, Entertainment, and Recreation"}, tables)
+    assert [c for c, _, _ in full[("bea", "c")]] == ["71"]
+
+
+def test_title_listing_several_sectors_splits_the_weight(tables):
+    title = "Arts, Entertainment, and Recreation and Accommodation and Food Services"
+    got = nx.series_links({("bea", "a"): title}, tables)[("bea", "a")]
+    assert sorted((c, w, m) for c, w, m in got) == [
+        ("71", 0.5, "nombre_oficial"),
+        ("72", 0.5, "nombre_oficial"),
+    ]
+
+
+def test_cluster_inherits_only_with_weighted_majority(tables):
+    own = {
+        ("bls", "a"): [("3361", 1.0, "codigo_en_metadatos")],
+        ("bls", "b"): [("3361", 1.0, "codigo_en_id")],
+        ("bea", "c"): [("5417", 1.0, "nombre_oficial")],
+    }
+    members = [("bls", "a"), ("bls", "b"), ("bea", "c"), ("fred", "x")]
+    out = nx.inherit_in_clusters([members], own, 0.5)
+    assert out[("fred", "x")] == [("3361", 1.0, "heredado_cluster")]  # 2/3 > 0.5; 5417 no hereda
+    assert nx.inherit_in_clusters([members], own, 0.7) == {}  # umbral configurable
+    solo = nx.inherit_in_clusters([[("bea", "c"), ("fred", "x")]], own, 0.5)
+    assert solo[("fred", "x")] == [("5417", 1.0, "heredado_cluster")]

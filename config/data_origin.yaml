@@ -18,6 +18,15 @@ rules:
     match: {source: fred, release_id: 52, series_id_regex: "^BOGZ1[A-Z]{2}(70|73|74|76)"}
     origin: call_reports
     chain: [Call Reports (FFIEC), Fed Z.1]
+  - id: z1_all_sectors_aggregate
+    # Z.1, sector 89 "All Sectors": agregado de todos los sectores. Se arma con los de sus
+    # componentes, el de bancos incluido (Call Reports), así que NO es independiente de ellos:
+    # `inherits_from` le suma los orígenes de esas reglas a los de la Fed. Otros sectores
+    # agregados (por confirmar con los títulos de la corrida real) se agregarían aquí.
+    match: {source: fred, release_id: 52, series_id_regex: "^BOGZ1[A-Z]{2}89"}
+    origin: Board of Governors of the Federal Reserve System
+    inherits_from: [z1_banks_call_reports]
+    chain: [Call Reports (FFIEC), Fed Z.1 (agregado de todos los sectores)]
   - id: z1_price_indices_bea
     # Z.1, sector 07 "Interest Rates and Price Indexes", instrumento 075 (índices de precios) en
     # cadena (Chain Weights): vienen de BEA. Las tasas (072, 073) no.

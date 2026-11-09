@@ -13,6 +13,7 @@ pero no cuentan como pruebas ni como miembros del cluster.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
 from collections.abc import Sequence
@@ -78,5 +79,43 @@ def dedup_series(
             reps.append(c[0])
             if len(c) > 1:
                 groups[(c[0].source, c[0].series_id)] = [(m.source, m.series_id) for m in c[1:]]
+    reps.sort(key=lambda s: (s.source, s.series_id))
+    return reps, groups
+
+
+def exact_key(s: Any) -> tuple[Any, ...] | None:
+    """Huella de una serie: grilla, primer periodo y valores exactos (None si es constante)."""
+    level = np.ascontiguousarray(s.level, dtype=float)
+    if level.size < 2 or float(np.nanmax(level)) == float(np.nanmin(level)):
+        return None  # una serie plana no distingue variables: no se une por valores
+    digest = hashlib.sha1(level.tobytes()).hexdigest()
+    return (s.grid, int(s.first_index), level.size, digest)
+
+
+def dedup_exact(
+    series: Sequence[Any],
+) -> tuple[list[Any], dict[tuple[str, str], list[tuple[str, str]]]]:
+    """Series con los MISMOS valores en todas las fechas (ids distintos): se prueba una sola.
+
+    A diferencia de `dedup_series`, no mira el id: cubre la misma variable publicada con otro
+    código (otra tabla, otro agregado). La representante es la de la fuente original antes que
+    FRED y, a igualdad, la de menor id; las demás se registran en el linaje del reporte
+    (`reports/dedup/<run>.json`, claves `exact_groups`) y no cuentan como pruebas."""
+    buckets: dict[tuple[Any, ...], list[Any]] = defaultdict(list)
+    reps: list[Any] = []
+    for s in series:
+        key = exact_key(s)
+        if key is None:
+            reps.append(s)
+        else:
+            buckets[key].append(s)
+    groups: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for members in buckets.values():
+        order = sorted(members, key=lambda s: (SOURCE_RANK.get(s.source, 1), s.source, s.series_id))
+        reps.append(order[0])
+        if len(order) > 1:
+            groups[(order[0].source, order[0].series_id)] = [
+                (m.source, m.series_id) for m in order[1:]
+            ]
     reps.sort(key=lambda s: (s.source, s.series_id))
     return reps, groups

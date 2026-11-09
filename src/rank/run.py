@@ -57,6 +57,7 @@ from src.rank.cluster import (
 from src.rank.comove import (
     ComoveParams,
     comove_family,
+    max_overlap,
     on_axis,
     series_annual_growth,
     term_annual_change,
@@ -64,6 +65,7 @@ from src.rank.comove import (
 from src.rank.context import select_related
 from src.rank.embed import CachedEmbedder, Embedder, make_embedder
 from src.rank.links import LinkParams, null_threshold, sample_null, top_links
+from src.rank.phenomena import PhenomenaParams, group_phenomena
 from src.rank.triangulate import Candidate, Evidence, assess, score
 from src.schemas import (
     CLUSTERS,
@@ -73,6 +75,7 @@ from src.schemas import (
     RANK_CONTEXT,
     RANK_EVIDENCE,
     RANK_ORIGIN,
+    RANK_PHENOMENA,
     RANK_RUNS,
     SERIES_TERM_LINKS,
     SIGNALS,
@@ -91,6 +94,7 @@ RANK_TABLES = {
     "rank_runs": RANK_RUNS,
     "rank_context": RANK_CONTEXT,
     "naics_links": NAICS_LINKS,
+    "rank_phenomena": RANK_PHENOMENA,
 }
 
 
@@ -528,10 +532,20 @@ def comove_validate(
     counts: dict[tuple[str, str], dict[int, tuple[float, float]]],
     growth: dict[tuple[str, str], GrowthSeries],
     pairs: list[tuple[tuple[str, str], tuple[str, str]]],
+    stats: dict[str, int] | None = None,
 ) -> dict[tuple[tuple[str, str], tuple[str, str]], dict[str, Any]]:
-    """Prueba de co-movimiento de los pares sugeridos por títulos: una sola familia BH."""
+    """Prueba de co-movimiento de los pares sugeridos por títulos: una sola familia BH.
+
+    Alineación de frecuencias: la serie (M, Q o A) se agrega a la frecuencia del término (anual)
+    sumando su crecimiento log de los años completos; el término nunca se interpola. Los pares con
+    menos periodos comunes que el mínimo de la grilla de la serie no son pruebas: no entran a la
+    familia (inflarían el denominador de BH sin poder), pero se cuentan en `stats`.
+    `stats` (opcional) recibe los conteos por etapa del embudo."""
     cm = cfg["rank"]["links"]["comove"]
+    st = stats if stats is not None else {}
+    st.update({"pairs_in": len(pairs), "with_data": 0, "enough_overlap": 0, "tested": 0, "bh": 0})
     usable = [(t, s) for t, s in pairs if t in counts and s in growth]
+    st["with_data"] = len(usable)
     if not usable:
         return {}
     term_ch = {t: term_annual_change(counts[t]) for t, _ in usable}
@@ -543,13 +557,23 @@ def comove_validate(
         {y for d in term_ch.values() for y in d} | {y for d in ser_gr.values() for y in d}
     )
     axis = list(range(years[0], years[-1] + 1))
+    by_grid = cm.get("min_overlap_by_grid", {})
     params = ComoveParams(
         cm["max_lag"], cm["min_overlap"], cm["n_resamples"], cm["block_length"], cm["seed"]
     )
-    res = comove_family(
-        [(on_axis(term_ch[t], axis), on_axis(ser_gr[s], axis)) for t, s in usable], params
-    )
-    return dict(zip(usable, res, strict=True))
+    vecs, mins, keep = [], [], []
+    for t, s in usable:
+        a, b = on_axis(term_ch[t], axis), on_axis(ser_gr[s], axis)
+        mo = int(by_grid.get(growth[s].grid, cm["min_overlap"]))
+        if max_overlap(a, b, params.max_lag) >= mo:
+            vecs.append((a, b))
+            mins.append(mo)
+            keep.append((t, s))
+    st["enough_overlap"] = st["tested"] = len(keep)
+    res = comove_family(vecs, params, mins)
+    q_link = float(cfg["fdr"]["q"])
+    st["bh"] = sum(r["q_bh"] <= q_link for r in res)
+    return dict(zip(keep, res, strict=True))
 
 
 # --- corrida -------------------------------------------------------------------------------------
@@ -682,18 +706,23 @@ def rank_run(
         vocab = vocabulary(con, sorted(text_runs), lp.null_terms + len(terms), lp.seed)
         null = sample_null(vocab, {term_text(o) for _, o in terms}, lp)
         null_vec = emb.embed(null) if null else np.zeros((0, 1))
-    if terms and universe:
-        ser_vec = emb.embed([info[k].title for k in universe])
-        thr_ts = null_threshold(null_vec, ser_vec, lp)
-        method = f"{emb.name}|cos>q{lp.null_quantile}:{thr_ts:.4f}|top{lp.top_k}"
-        for ti, sj, cos in top_links(term_vec, ser_vec, thr_ts, lp):
-            src, sid = universe[sj]
-            links_by_term[terms[ti]].append(((src, sid), cos))
+    funnel: dict[str, Any] = {"n_terms": len(terms), "n_signal_series": len(signal_keys)}
+    seen_pairs: set[tuple[tuple[str, str], tuple[str, str]]] = set()
+
+    def add_links(keys: list[tuple[str, str]], vecs: np.ndarray, thr: float, method: str) -> int:
+        n = 0
+        for ti, sj, cos in top_links(term_vec, vecs, thr, lp):
+            skey = keys[sj]
+            n += 1
+            if (terms[ti], skey) in seen_pairs:
+                continue
+            seen_pairs.add((terms[ti], skey))
+            links_by_term[terms[ti]].append((skey, cos))
             link_rows.append(
                 {
                     "run_id": run_id,
-                    "source": src,
-                    "series_id": sid,
+                    "source": skey[0],
+                    "series_id": skey[1],
                     "text_source": terms[ti][0],
                     "term": terms[ti][1],
                     "score": cos,
@@ -703,6 +732,34 @@ def rank_run(
                     "validated": False,
                 }
             )
+        return n
+
+    if terms and universe:
+        ser_vec = emb.embed([info[k].title for k in universe])
+        thr_ts = null_threshold(null_vec, ser_vec, lp)
+        method = f"{emb.name}|cos>q{lp.null_quantile}:{thr_ts:.4f}|top{lp.top_k}"
+        funnel["pairs_similarity_universe"] = add_links(universe, ser_vec, thr_ts, method)
+        funnel["pairs_similarity_on_signal_series"] = sum(
+            1 for _, sk in seen_pairs if sk in by_series
+        )
+        # Solo una serie con señal puede ser un segundo respaldo del cluster: el top_k sobre las
+        # ~400 mil series del universo se llena de series sin señal. Segundo pase contra las series
+        # con señal, con su propio nulo por término (mismo cuantil, mismos términos del nulo).
+        pos = {k: i for i, k in enumerate(universe)}
+        sig_universe = [k for k in universe if k in by_series]
+        if sig_universe:
+            sig_vec = ser_vec[[pos[k] for k in sig_universe]]
+            thr_sig = null_threshold(null_vec, sig_vec, lp)
+            funnel["link_threshold_signal_series"] = thr_sig
+            before = len(seen_pairs)
+            add_links(
+                sig_universe,
+                sig_vec,
+                thr_sig,
+                f"{emb.name}|cos>q{lp.null_quantile}:{thr_sig:.4f}|top{lp.top_k}|series_con_senal",
+            )
+            funnel["pairs_added_signal_pass"] = len(seen_pairs) - before
+    funnel["pairs_similarity_total"] = len(seen_pairs)
 
     # 3. Evidencia y triangulación de clusters de series.
     tsig = {(s["source"], s["object_id"]): s for s in txt_signals}
@@ -716,9 +773,20 @@ def rank_run(
         for skey, _ in linked
         if skey in cluster_of and (not require_overlap or _overlaps(tsig[tkey], by_series[skey]))
     ]
-    comove = comove_validate(
-        cfg, term_annual_counts(con, txt_signals, cfg["text"]["min_doc_count"]), growth, suggested
+    funnel["pairs_in_cluster_universe"] = sum(
+        1 for t, linked in links_by_term.items() for sk, _ in linked if sk in cluster_of
     )
+    funnel["pairs_window_overlap"] = len(suggested)
+    cstats: dict[str, int] = {}
+    comove = comove_validate(
+        cfg,
+        term_annual_counts(con, txt_signals, cfg["text"]["min_doc_count"]),
+        growth,
+        suggested,
+        cstats,
+    )
+    funnel.update({f"comove_{k}": v for k, v in cstats.items() if k != "pairs_in"})
+    funnel["terms_validated"] = len({t for (t, _), r in comove.items() if r["q_bh"] <= q_link})
     for lr in link_rows:
         res = comove.get(((lr["text_source"], lr["term"]), (lr["source"], lr["series_id"])))
         if res is not None:
@@ -785,7 +853,34 @@ def rank_run(
             ev = [_term_evidence(tsig[k], ents.get(k), None, None) for k in sorted(members)]
             candidates.append(assess(Candidate(cid, "text", ev, len(members)), min_sources))
 
+    # 4b. Anclaje a industria NAICS (ADR 0012).
+    tables = naics_mod.load_tables(cfg, REPO_ROOT)
+    own = naics_mod.series_links(meta_texts(con, signal_keys), tables)
+    by_origin = naics_mod.inherit_by_origin(
+        {k: [tuple(d.split("|", 1)) for d in info[k].duplicates] for k in signal_keys if k in info},
+        own,
+    )
+    own = {**own, **by_origin}
+    naics_links = {
+        **own,
+        **naics_mod.inherit_in_clusters(clusters, own, float(rk["naics"]["cluster_majority"])),
+        **naics_mod.term_links(term_sics(con, txt_signals), tables),
+    }
+    naics_cov = naics_mod.coverage(
+        [*signal_keys, *terms], naics_links, rk["naics"]["not_applicable_sources"]
+    )
     score(candidates, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
+    # 4c. Fenómenos: clusters de series con NAICS compartido, misma dirección y ventanas solapadas.
+    pp = rk["phenomena"]
+    phenomena = group_phenomena(
+        candidates,
+        {cid: m for cid, m in zip(cids, clusters, strict=True)},
+        naics_links,
+        PhenomenaParams(pp["naics_digits"], pp["min_naics_share"], pp["min_direction_share"]),
+        min_sources,
+    )
+    phen_cands = [p.candidate for p in phenomena]
+    score(phen_cands, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
     members_of = dict(zip(cids, clusters, strict=True))
     context_rows = [
         {
@@ -799,22 +894,6 @@ def rank_run(
         for c in candidates
         if c.kind == "series" and c.status == "candidato"
     ]
-    # 4b. Anclaje a industria NAICS (ADR 0012).
-    tables = naics_mod.load_tables(cfg, REPO_ROOT)
-    own = naics_mod.series_links(meta_texts(con, signal_keys), tables)
-    by_origin = naics_mod.inherit_by_origin(
-        {k: [tuple(d.split("|", 1)) for d in info[k].duplicates] for k in signal_keys if k in info},
-        own,
-    )
-    own = {**own, **by_origin}
-    naics_links = {
-        **own,
-        **naics_mod.inherit_in_clusters(clusters, own),
-        **naics_mod.term_links(term_sics(con, txt_signals), tables),
-    }
-    naics_cov = naics_mod.coverage(
-        [*signal_keys, *terms], naics_links, rk["naics"]["not_applicable_sources"]
-    )
     con.close()
 
     # 5. Escritura.
@@ -857,6 +936,7 @@ def rank_run(
                     "n_entities": e.n_entities,
                 }
             )
+    by_cid = {c.candidate_id: c for c in candidates}
     fred_names = [a for v in _fred_agencies(cfg).values() for a in (v or [])]
     n_cand = sum(c.status == "candidato" for c in candidates)
     summary = {
@@ -867,6 +947,14 @@ def rank_run(
         "n_signal_terms": len(terms),
         "n_clusters": len(clusters),
         "n_clusters_multi": sum(len(m) > 1 for m in clusters),
+        "n_phenomena": len(phenomena),
+        "n_phenomena_multi": sum(len(p.cluster_ids) > 1 for p in phenomena),
+        "n_phenomena_candidates": sum(p.candidate.status == "candidato" for p in phenomena),
+        "n_phenomena_by_grouping": sum(
+            p.candidate.status == "candidato"
+            and not any(by_cid[c].status == "candidato" for c in p.cluster_ids)
+            for p in phenomena
+        ),
         "n_unclustered_over_cap": len(tail),
         "n_term_clusters": len(term_clusters),
         "n_links": len(link_rows),
@@ -878,6 +966,7 @@ def rank_run(
         "n_over_cap": sum(c.status == "fuera_del_tope" for c in candidates),
         "n_published": sum(c.published for c in candidates),
         "embeddings": {"model": emb.name, "computed": emb.computed, "reused": emb.reused},
+        "link_funnel": funnel,
         "naics_coverage": naics_cov,
         "adapter_agencies_unmatched": unmatched_adapter_agencies(fred_names),
     }
@@ -900,6 +989,7 @@ def rank_run(
     _write("clusters", cluster_rows, cfg)
     _write("series_term_links", link_rows, cfg)
     _write("rank_candidates", cand_rows, cfg)
+    _write("rank_phenomena", phenomena_rows(run_id, phenomena, candidates), cfg)
     _write("rank_evidence", ev_rows, cfg)
     _write("rank_origin", origin_rows(run_id, candidates, info), cfg)
     _write("rank_context", context_rows, cfg)
@@ -908,6 +998,39 @@ def rank_run(
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
+
+
+def phenomena_rows(
+    run_id: str, phenomena: list[Any], candidates: list[Candidate]
+) -> list[dict[str, Any]]:
+    by_cid = {c.candidate_id: c for c in candidates}
+    rows = []
+    for p in phenomena:
+        c = p.candidate
+        rows.append(
+            {
+                "run_id": run_id,
+                "phenomenon_id": p.phenomenon_id,
+                "status": c.status,
+                "rank": c.rank,
+                "score": c.score,
+                "direction": p.direction,
+                "naics_json": json.dumps([[n, round(w, 4)] for n, w in p.naics]),
+                "window_start": p.window_start,
+                "window_end": p.window_end,
+                "cluster_ids_json": json.dumps(p.cluster_ids),
+                "n_clusters": len(p.cluster_ids),
+                "n_members": c.n_members,
+                "n_sources": c.n_sources,
+                "n_sources_public": c.n_sources_public,
+                "sources_json": json.dumps([sorted(g) for g in c.groups]),
+                "components_json": json.dumps(c.components) if c.components else None,
+                "by_grouping": c.status != "una_fuente"
+                and not any(by_cid[x].status == "candidato" for x in p.cluster_ids),
+                "published": c.published,
+            }
+        )
+    return rows
 
 
 def origin_rows(

@@ -319,6 +319,35 @@ RANK_ORIGIN = TableSpec(
     key=("run_id", "source", "object_id"),
 )
 
+# Fenómenos: grupos de clusters con NAICS compartido, misma dirección y ventanas solapadas
+# (src/rank/phenomena.py). Se triangulan sobre la evidencia de todos sus clusters.
+PHENOMENON_DIRECTIONS = ("sube", "baja", "mixto")
+RANK_PHENOMENA = TableSpec(
+    name="rank_phenomena",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("phenomenon_id", pa.string(), False),
+        ("status", pa.string(), False),
+        ("rank", pa.int64(), True),
+        ("score", pa.float64(), True),
+        ("direction", pa.string(), False),
+        ("naics_json", pa.string(), False),  # [[código, peso], ...]
+        ("window_start", pa.date32(), True),
+        ("window_end", pa.date32(), True),
+        ("cluster_ids_json", pa.string(), False),
+        ("n_clusters", pa.int64(), False),
+        ("n_members", pa.int64(), False),
+        ("n_sources", pa.int64(), False),
+        ("n_sources_public", pa.int64(), False),
+        ("sources_json", pa.string(), False),
+        ("components_json", pa.string(), True),
+        # Triangulado solo al juntar clusters: ningún cluster llegaba a 2 fuentes por separado.
+        ("by_grouping", pa.bool_(), False),
+        ("published", pa.bool_(), False),
+    ),
+    key=("run_id", "phenomenon_id"),
+)
+
 # Ficha del fenómeno (descriptiva): relacionadas y rezagos por candidato de series.
 RANK_CONTEXT = TableSpec(
     name="rank_context",
@@ -331,13 +360,10 @@ RANK_CONTEXT = TableSpec(
 )
 
 # Anclaje a industria (ADR 0012): una fila por (objeto, NAICS). `peso` suma 1 por objeto y método.
-NAICS_METHODS = (
-    "codigo_en_metadatos",
-    "nombre_oficial",
-    "heredado_origen",
-    "heredado_cluster",
-    "sic_concordancia",
-)
+# Directos: el código sale de la serie misma. Derivados: se infiere de otros objetos (estimado).
+NAICS_DIRECT_METHODS = ("codigo_en_metadatos", "codigo_en_id", "nombre_oficial")
+NAICS_DERIVED_METHODS = ("heredado_origen", "heredado_cluster", "sic_concordancia")
+NAICS_METHODS = (*NAICS_DIRECT_METHODS, *NAICS_DERIVED_METHODS)
 NAICS_LINKS = TableSpec(
     name="naics_links",
     schema=_schema(
@@ -394,6 +420,7 @@ ALL_SPECS = {
         RANK_RUNS,
         RANK_CONTEXT,
         NAICS_LINKS,
+        RANK_PHENOMENA,
     )
 }
 
@@ -446,6 +473,20 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"naics_links: {bad[0]} filas con método o peso fuera de dominio")
+    if spec is RANK_PHENOMENA:
+        allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
+        dirs = ", ".join(f"'{x}'" for x in PHENOMENON_DIRECTIONS)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE status NOT IN ({allowed}) "
+            f"OR direction NOT IN ({dirs}) "
+            "OR (status <> 'una_fuente' AND n_sources < 2) "
+            "OR (published AND (status <> 'candidato' OR n_sources_public < 2)) "
+            "OR n_sources_public > n_sources OR n_clusters < 1"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(
+                f"rank_phenomena: {bad[0]} filas violan la triangulación (≥ 2 fuentes)"
+            )
     if spec is RANK_CANDIDATES:
         allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
         bad = con.execute(

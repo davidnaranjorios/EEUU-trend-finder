@@ -24,6 +24,7 @@ TABLES = (
     "naics_links",
     "series_term_links",
     "rank_runs",
+    "rank_phenomena",
 )
 LIMITATION = (
     "No se persistieron todos los pares rechazados: la ausencia de un vínculo no prueba "
@@ -253,6 +254,161 @@ def naics_summary(data: dict[str, list[dict]], *, links_available: bool = True) 
     }
 
 
+RATE_EFFECT_NOTE = (
+    "Marca 'efecto de tasas' NO implementada: exige una serie de tasa de corto plazo como "
+    "referencia metodológica y la excepción del ADR 0009 solo admite deflactor, población y "
+    "recesiones. Pendiente de aprobación de David; hasta entonces el conteo es desconocido."
+)
+
+
+def run_metrics(data: dict[str, list[dict]], missing: list[str]) -> dict[str, Any]:
+    """Conteos agregados de una corrida (sin identificadores) para comparar antes y después.
+
+    Una tabla ausente da None (desconocido), nunca 0: una corrida anterior a los fenómenos o al
+    embudo de enlaces no tiene esas cifras, y mostrar 0 sería inventarlas."""
+    run = next(iter(data.get("rank_runs", [])), {})
+    summary = _json(run.get("params_json"), {}).get("summary", {})
+    have = {t: t not in missing for t in TABLES}
+    # Cada corrida con fenómenos escribe al menos uno (particionan los clusters): sin filas para
+    # esta corrida, la corrida es anterior a los fenómenos y la cifra es desconocida.
+    have["rank_phenomena"] = bool(data.get("rank_phenomena"))
+    cluster_ids = {r["cluster_id"] for r in data.get("clusters", [])}
+    series_clusters = {c for c in cluster_ids if c.startswith("c")}
+    cands = data.get("rank_candidates", [])
+    by_status = Counter((r["kind"], r["status"]) for r in cands)
+    phen = data.get("rank_phenomena", [])
+    links = data.get("series_term_links", [])
+    validated = [r for r in links if r.get("validated")]
+    naics = naics_summary(data, links_available=have["naics_links"])
+    return {
+        "run_id": run.get("run_id"),
+        "clusters": {
+            "series": len(series_clusters) if have["clusters"] else None,
+            "text": len(cluster_ids - series_clusters) if have["clusters"] else None,
+            "series_multi": (
+                sum(
+                    n > 1
+                    for n in Counter(
+                        r["cluster_id"]
+                        for r in data["clusters"]
+                        if r["cluster_id"] in series_clusters
+                    ).values()
+                )
+                if have["clusters"]
+                else None
+            ),
+        },
+        "candidates": {
+            "series_candidato": by_status[("series", "candidato")]
+            if have["rank_candidates"]
+            else None,
+            "series_una_fuente": by_status[("series", "una_fuente")]
+            if have["rank_candidates"]
+            else None,
+            "text_candidato": by_status[("text", "candidato")] if have["rank_candidates"] else None,
+            "published": sum(bool(r["published"]) for r in cands)
+            if have["rank_candidates"]
+            else None,
+        },
+        "phenomena": {
+            "total": len(phen) if have["rank_phenomena"] else None,
+            "multi_cluster": sum(r["n_clusters"] > 1 for r in phen)
+            if have["rank_phenomena"]
+            else None,
+            "candidato": sum(r["status"] == "candidato" for r in phen)
+            if have["rank_phenomena"]
+            else None,
+            "by_grouping": sum(bool(r["by_grouping"]) for r in phen)
+            if have["rank_phenomena"]
+            else None,
+            "published": sum(bool(r["published"]) for r in phen)
+            if have["rank_phenomena"]
+            else None,
+        },
+        "text_links": {
+            "pairs": len(links) if have["series_term_links"] else None,
+            "validated_pairs": len(validated) if have["series_term_links"] else None,
+            "terms_linked": len({(r["text_source"], r["term"]) for r in links})
+            if have["series_term_links"]
+            else None,
+            "terms_validated": len({(r["text_source"], r["term"]) for r in validated})
+            if have["series_term_links"]
+            else None,
+            "funnel": summary.get("link_funnel"),
+        },
+        "naics": {
+            source: {
+                "stored_pct": (row["stored_signal_coverage"] or {}).get("pct"),
+                "mapped_objects": row["mapped_objects_in_links"],
+                "unique_objects_by_method": row["unique_objects_by_method"],
+            }
+            for source, row in naics["sources"].items()
+        },
+        "rate_effect": {"implemented": False, "n_marked": None, "note": RATE_EFFECT_NOTE},
+    }
+
+
+def _delta(before: Any, after: Any) -> Any:
+    if isinstance(before, dict) and isinstance(after, dict):
+        return {k: _delta(before.get(k), after.get(k)) for k in sorted(set(before) | set(after))}
+    if isinstance(before, bool) or isinstance(after, bool):
+        return None
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        return round(after - before, 4)
+    return None
+
+
+def compare_runs(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """Antes/después con la diferencia por métrica (None si falta en alguna de las dos)."""
+    skip = {"run_id", "funnel", "note", "implemented"}
+
+    def strip(x: Any) -> Any:
+        return {k: strip(v) for k, v in x.items() if k not in skip} if isinstance(x, dict) else x
+
+    return {
+        "before": before,
+        "after": after,
+        "delta": _delta(strip(before), strip(after)),
+        "audience": "internal_not_for_publication",
+        "note": "Solo conteos agregados. None = desconocido (tabla ausente), no cero.",
+    }
+
+
+def comparison_markdown(c: dict[str, Any]) -> str:
+    rows: list[str] = []
+
+    def walk(prefix: str, b: Any, a: Any, d: Any) -> None:
+        if isinstance(b, dict) and isinstance(a, dict):
+            for k in sorted(set(b) | set(a)):
+                if k in {"run_id", "funnel", "note", "implemented"}:
+                    continue
+                walk(
+                    f"{prefix}{k}.",
+                    b.get(k),
+                    a.get(k),
+                    (d or {}).get(k) if isinstance(d, dict) else None,
+                )
+        else:
+            rows.append(f"| {prefix[:-1]} | {b} | {a} | {d} |")
+
+    walk("", c["before"], c["after"], c["delta"])
+    return "\n".join(
+        [
+            "# Comparación antes/después — "
+            f"{c['before'].get('run_id')} → {c['after'].get('run_id')}",
+            "",
+            "Interno, no publicable. Solo conteos agregados; None = desconocido.",
+            "",
+            "| Métrica | Antes | Después | Δ |",
+            "|---|---|---|---|",
+            *rows,
+            "",
+            f"Efecto de tasas: {RATE_EFFECT_NOTE}",
+            "",
+        ]
+    )
+
+
 def sample(rows: list[dict], seed: str = "cluster-audit-v1", size: int = 20) -> list[dict]:
     """Hasta 20; reserva un publicado y recorre estratos de estado/cobertura con orden hash."""
     if not 1 <= size <= 20:
@@ -282,8 +438,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--meta-dir", type=Path, help="series_meta local opcional, solo metadatos")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--seed", default="cluster-audit-v1")
+    parser.add_argument(
+        "--baseline-run-id",
+        help="modo comparación: --run-id es la corrida nueva (después) y esta la anterior "
+        "(antes); solo escribe comparacion.json y comparacion.md con conteos agregados",
+    )
     args = parser.parse_args(argv)
     root, out = args.rank_dir.resolve(), args.out.resolve()
+    if args.baseline_run_id:
+        if out == root or out.is_relative_to(root) or root.is_relative_to(out):
+            parser.error("salida y entrada deben estar en árboles separados")
+        metrics = []
+        for rid in (args.baseline_run_id, args.run_id):
+            data, manifest = load_local(root, rid)
+            if not data["rank_runs"]:
+                parser.error(f"la corrida {rid} no existe en rank_runs; no se compara a ciegas")
+            metrics.append(run_metrics(data, manifest["missing_tables"]))
+        result = compare_runs(*metrics)
+        out.mkdir(parents=True, exist_ok=False)
+        (out / "comparacion.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+        )
+        (out / "comparacion.md").write_text(comparison_markdown(result), encoding="utf-8")
+        print(json.dumps({"compare": [args.baseline_run_id, args.run_id], "out": str(out)}))
+        return 0
     if out == root or out.is_relative_to(root) or root.is_relative_to(out):
         parser.error("salida y entrada deben estar en árboles separados")
     if args.meta_dir:

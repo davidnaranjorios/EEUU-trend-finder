@@ -232,7 +232,7 @@ dato (`config/data_origin.yaml` + detector de duplicados, `src/rank/origin.py`):
 Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
 build`; en Actions, `.github/workflows/reporte.yml` (publica en GitHub Pages; otro destino con la
 variable `PUBLISH_TARGET`: cloudflare_pages o none). Tablas en `processed/rank/`:
-`clusters`, `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`,
+`clusters`, `rank_phenomena` (ADR 0013), `series_term_links`, `rank_candidates`, `rank_evidence`, `rank_runs`,
 `rank_context`. Esta última es la ficha del fenómeno, descriptiva: relacionadas elegidas por los
 datos, rezagos, transformaciones y robustez (`src/rank/context.py`, `src/report/phenomenon.py`).
 **Terminado cuando:** el reporte HTML semanal lista clusters candidatos con su evidencia

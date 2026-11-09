@@ -36,7 +36,7 @@ import pyarrow as pa
 from src.catalog import connect
 from src.config import REPO_ROOT, load_config
 from src.detect.approval import annotate
-from src.detect.dedup import dedup_series
+from src.detect.dedup import dedup_exact, dedup_series
 from src.detect.family import FamilyParams, Item, run_family
 from src.detect.numeric import locate_break
 from src.ingest.store import bucket_of, read_table, upsert
@@ -338,6 +338,7 @@ def save_dedup(
     n_before: int,
     n_after: int,
     groups: dict[tuple[str, str], list[tuple[str, str]]],
+    exact_groups: dict[tuple[str, str], list[tuple[str, str]]] | None = None,
 ) -> None:
     """Resumen de la deduplicación (idéntico en todos los shards; finalize lo suma al reporte)."""
     root = table_root(cfg, "reports") / "dedup"
@@ -347,6 +348,12 @@ def save_dedup(
         "series_after": n_after,
         "groups": {
             f"{k[0]}|{k[1]}": [f"{m[0]}|{m[1]}" for m in v] for k, v in sorted(groups.items())
+        },
+        # Linaje de los duplicados exactos (mismos valores en todas las fechas, otro id):
+        # representante -> omitidas, que no se prueban.
+        "exact_groups": {
+            f"{k[0]}|{k[1]}": [f"{m[0]}|{m[1]}" for m in v]
+            for k, v in sorted((exact_groups or {}).items())
         },
     }
     (root / f"{run_id}.json").write_text(json.dumps(doc, indent=1), "utf-8")
@@ -370,7 +377,8 @@ def run_detectors(
     con.close()
     n_before = len(series)
     series, dup_groups = dedup_series(series)
-    save_dedup(cfg, run_id, n_before, len(series), dup_groups)
+    series, exact_groups = dedup_exact(series)
+    save_dedup(cfg, run_id, n_before, len(series), dup_groups, exact_groups)
     if max_series is not None:
         series = series[:max_series]
     stats: dict[str, Any] = {
@@ -564,7 +572,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         lines.insert(
             4,
             f"Deduplicación previa a las pruebas: {dd['series_before']} series antes, "
-            f"{dd['series_after']} después ({len(dd['groups'])} grupos de variables repetidas).\n",
+            f"{dd['series_after']} después ({len(dd['groups'])} grupos de variables repetidas, "
+            f"{len(dd.get('exact_groups') or {})} grupos de series idénticas).\n",
         )
     for det, s in report["detectors"].items():
         flags = (" ⚠" if s.get("approval_alert") else "") + (
