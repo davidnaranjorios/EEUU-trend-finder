@@ -275,6 +275,12 @@ rank:
     concordance_table: config/naics/sic_naics_concordance.csv
     cluster_majority: 0.5         # herencia por cluster: solo códigos con más de este peso entre los miembros con código
     not_applicable_sources: [federal_register]  # sin industria: fuera del denominador de cobertura
+  # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
+  # ventanas solapadas se triangulan juntos (src/rank/phenomena.py). La regla de origen no cambia.
+  phenomena:
+    naics_digits: 3
+    min_naics_share: 0.25         # peso mínimo de un código dentro del cluster para contar
+    min_direction_share: 0.6      # acuerdo mínimo de signo entre las series del cluster
   max_candidates: 50              # tope por tipo de candidato y corrida
   embeddings:
     backend: fastembed            # fastembed (uv sync --group embed) | hashing (tests, sin red)

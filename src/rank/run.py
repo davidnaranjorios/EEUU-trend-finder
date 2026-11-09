@@ -65,6 +65,7 @@ from src.rank.comove import (
 from src.rank.context import select_related
 from src.rank.embed import CachedEmbedder, Embedder, make_embedder
 from src.rank.links import LinkParams, null_threshold, sample_null, top_links
+from src.rank.phenomena import PhenomenaParams, group_phenomena
 from src.rank.triangulate import Candidate, Evidence, assess, score
 from src.schemas import (
     CLUSTERS,
@@ -74,6 +75,7 @@ from src.schemas import (
     RANK_CONTEXT,
     RANK_EVIDENCE,
     RANK_ORIGIN,
+    RANK_PHENOMENA,
     RANK_RUNS,
     SERIES_TERM_LINKS,
     SIGNALS,
@@ -92,6 +94,7 @@ RANK_TABLES = {
     "rank_runs": RANK_RUNS,
     "rank_context": RANK_CONTEXT,
     "naics_links": NAICS_LINKS,
+    "rank_phenomena": RANK_PHENOMENA,
 }
 
 
@@ -850,20 +853,6 @@ def rank_run(
             ev = [_term_evidence(tsig[k], ents.get(k), None, None) for k in sorted(members)]
             candidates.append(assess(Candidate(cid, "text", ev, len(members)), min_sources))
 
-    score(candidates, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
-    members_of = dict(zip(cids, clusters, strict=True))
-    context_rows = [
-        {
-            "run_id": run_id,
-            "candidate_id": c.candidate_id,
-            "payload_json": json.dumps(
-                phenomenon_context(con, cfg, members_of[c.candidate_id], info, emb, refs),
-                default=str,
-            ),
-        }
-        for c in candidates
-        if c.kind == "series" and c.status == "candidato"
-    ]
     # 4b. Anclaje a industria NAICS (ADR 0012).
     tables = naics_mod.load_tables(cfg, REPO_ROOT)
     own = naics_mod.series_links(meta_texts(con, signal_keys), tables)
@@ -880,6 +869,31 @@ def rank_run(
     naics_cov = naics_mod.coverage(
         [*signal_keys, *terms], naics_links, rk["naics"]["not_applicable_sources"]
     )
+    score(candidates, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
+    # 4c. Fenómenos: clusters de series con NAICS compartido, misma dirección y ventanas solapadas.
+    pp = rk["phenomena"]
+    phenomena = group_phenomena(
+        candidates,
+        {cid: m for cid, m in zip(cids, clusters, strict=True)},
+        naics_links,
+        PhenomenaParams(pp["naics_digits"], pp["min_naics_share"], pp["min_direction_share"]),
+        min_sources,
+    )
+    phen_cands = [p.candidate for p in phenomena]
+    score(phen_cands, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
+    members_of = dict(zip(cids, clusters, strict=True))
+    context_rows = [
+        {
+            "run_id": run_id,
+            "candidate_id": c.candidate_id,
+            "payload_json": json.dumps(
+                phenomenon_context(con, cfg, members_of[c.candidate_id], info, emb, refs),
+                default=str,
+            ),
+        }
+        for c in candidates
+        if c.kind == "series" and c.status == "candidato"
+    ]
     con.close()
 
     # 5. Escritura.
@@ -922,6 +936,7 @@ def rank_run(
                     "n_entities": e.n_entities,
                 }
             )
+    by_cid = {c.candidate_id: c for c in candidates}
     fred_names = [a for v in _fred_agencies(cfg).values() for a in (v or [])]
     n_cand = sum(c.status == "candidato" for c in candidates)
     summary = {
@@ -932,6 +947,14 @@ def rank_run(
         "n_signal_terms": len(terms),
         "n_clusters": len(clusters),
         "n_clusters_multi": sum(len(m) > 1 for m in clusters),
+        "n_phenomena": len(phenomena),
+        "n_phenomena_multi": sum(len(p.cluster_ids) > 1 for p in phenomena),
+        "n_phenomena_candidates": sum(p.candidate.status == "candidato" for p in phenomena),
+        "n_phenomena_by_grouping": sum(
+            p.candidate.status == "candidato"
+            and not any(by_cid[c].status == "candidato" for c in p.cluster_ids)
+            for p in phenomena
+        ),
         "n_unclustered_over_cap": len(tail),
         "n_term_clusters": len(term_clusters),
         "n_links": len(link_rows),
@@ -966,6 +989,7 @@ def rank_run(
     _write("clusters", cluster_rows, cfg)
     _write("series_term_links", link_rows, cfg)
     _write("rank_candidates", cand_rows, cfg)
+    _write("rank_phenomena", phenomena_rows(run_id, phenomena, candidates), cfg)
     _write("rank_evidence", ev_rows, cfg)
     _write("rank_origin", origin_rows(run_id, candidates, info), cfg)
     _write("rank_context", context_rows, cfg)
@@ -974,6 +998,39 @@ def rank_run(
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
+
+
+def phenomena_rows(
+    run_id: str, phenomena: list[Any], candidates: list[Candidate]
+) -> list[dict[str, Any]]:
+    by_cid = {c.candidate_id: c for c in candidates}
+    rows = []
+    for p in phenomena:
+        c = p.candidate
+        rows.append(
+            {
+                "run_id": run_id,
+                "phenomenon_id": p.phenomenon_id,
+                "status": c.status,
+                "rank": c.rank,
+                "score": c.score,
+                "direction": p.direction,
+                "naics_json": json.dumps([[n, round(w, 4)] for n, w in p.naics]),
+                "window_start": p.window_start,
+                "window_end": p.window_end,
+                "cluster_ids_json": json.dumps(p.cluster_ids),
+                "n_clusters": len(p.cluster_ids),
+                "n_members": c.n_members,
+                "n_sources": c.n_sources,
+                "n_sources_public": c.n_sources_public,
+                "sources_json": json.dumps([sorted(g) for g in c.groups]),
+                "components_json": json.dumps(c.components) if c.components else None,
+                "by_grouping": c.status != "una_fuente"
+                and not any(by_cid[x].status == "candidato" for x in p.cluster_ids),
+                "published": c.published,
+            }
+        )
+    return rows
 
 
 def origin_rows(

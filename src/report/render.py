@@ -522,6 +522,33 @@ def _candidate(c: dict[str, Any]) -> str:
 </section>"""
 
 
+def _phenomenon_card(p: dict[str, Any]) -> str:
+    naics = "; ".join(f"{n['naics']} {n['name'] or ''} ({n['weight']:.0%})" for n in p["naics"])
+    clusters = " ".join(
+        f'<a href="#{esc(c["id"])}"><code>{esc(c["id"])}</code></a>'
+        if c["in_ranking"]
+        else f'<code title="cluster de una sola fuente, sin ficha propia">{esc(c["id"])}</code>'
+        for c in p["clusters"]
+    )
+    grouping = (
+        '<p class="plain">Ningún cluster llega solo a 2 fuentes independientes: la triangulación '
+        "sale de juntarlos (misma industria, misma dirección, ventanas que se solapan).</p>"
+        if p["by_grouping"]
+        else ""
+    )
+    ws, we = p["window"]
+    win = f" · ventana {esc(ws)} a {esc(we)}" if ws and we else ""
+    return f"""<section class="card phen" id="{esc(p["phenomenon_id"])}">
+<header><span class="rank">#{p["rank"]}</span>
+<strong>{p["n_sources"]} fuentes independientes</strong> <span>score {fnum(p["score"], 3)}</span>
+<span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
+{esc(p["direction"])}{win}</span></header>
+<div>{_sources_chips(p["sources"])}</div>
+<p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
+{grouping}<p class="muted">Clusters: {clusters}</p>
+</section>"""
+
+
 def _tile(k: str, v: Any) -> str:
     return f'<div class="tile"><div class="v">{esc(v)}</div><div class="k">{esc(k)}</div></div>'
 
@@ -535,6 +562,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         _tile("Series con señal", fnum(rr.get("n_signal_series"))),
         _tile("Términos con señal", fnum(rr.get("n_signal_terms"))),
         _tile("Clusters", fnum(rr.get("n_clusters"))),
+        _tile("Fenómenos", fnum(len(data.get("phenomena") or []))),
         _tile("Con ≥ 2 fuentes", fnum(rr.get("n_candidates"))),
         _tile("Publicados", fnum(rr.get("n_published"))),
         _tile("Una sola fuente (descartados)", fnum(rr.get("n_single_source"))),
@@ -565,6 +593,12 @@ def ranking_page(data: dict[str, Any]) -> str:
         "<h2>Señales por detector</h2>",
         _table(det_rows, {2, 3, 5, 6}, "Familia", "Detector", "Pruebas", "BH", "% BH", "BY", "q"),
         '<p class="muted">BH decide; BY se reporta solo como comparación.</p>',
+        f"<h2>Fenómenos ({len(data.get('phenomena') or [])})</h2>",
+        '<p class="lead">Un fenómeno agrupa clusters de la misma industria (NAICS), con el mismo '
+        "sentido del cambio y ventanas que se solapan. Se triangula sobre la evidencia de todos "
+        "sus clusters, contando fuentes por origen del dato.</p>",
+        concat(*(_phenomenon_card(p) for p in data.get("phenomena") or []))
+        or '<p class="muted">Sin fenómenos triangulados esta semana.</p>',
         f"<h2>Ranking ({len(series)})</h2>",
         '<div class="controls" id="rank-controls"><label>Últimos 12 meses '
         '<select data-role="state"><option value="">todos</option>'

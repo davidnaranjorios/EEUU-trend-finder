@@ -59,6 +59,9 @@ def build_site(
         private = _strip_charts(
             {k: [c for c in v if c["candidate_id"] not in published_ids] for k, v in allc.items()}
         )
+    phenomena = rdata.phenomena_data(
+        cfg, rank_run, {c["candidate_id"] for v in candidates.values() for c in v}
+    )
     published_series = {
         (s["source"], s["id"]): c["candidate_id"]
         for v in candidates.values()
@@ -81,6 +84,7 @@ def build_site(
         "funnel": rdata.funnel(con),
         "coverage": rdata.coverage(con),
         "candidates": candidates,
+        "phenomena": phenomena,
         "explorer": explorer_index,
         "weights": cfg["rank"]["weights"],
         "q": cfg["fdr"]["q"],

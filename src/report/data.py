@@ -15,10 +15,12 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
+from src.config import REPO_ROOT
 from src.detect.approval import alert_flags
 from src.detect.run import REFERENCE_SOURCE, RUNS_PARTITION, _resolve, table_root
 from src.detect.text import grid_start
 from src.ingest.store import read_table
+from src.rank import naics as naics_mod
 from src.rank.origin import format_chain
 from src.rank.run import NUMERIC_RUN_PARTITIONS, PARTITION, latest_rank_run, rank_root, term_text
 from src.report.charts import line_chart
@@ -32,6 +34,7 @@ from src.schemas import (
     RANK_CONTEXT,
     RANK_EVIDENCE,
     RANK_ORIGIN,
+    RANK_PHENOMENA,
     SIGNALS,
 )
 
@@ -90,6 +93,47 @@ def candidate_naics(
         }
         for a in best
     ]
+
+
+def phenomena_data(
+    cfg: dict[str, Any], rank_run: dict[str, Any] | None, published_ids: set[str]
+) -> list[dict[str, Any]]:
+    """Fenómenos publicables (evidencia pública en ≥ 2 fuentes independientes), con sus clusters.
+
+    Solo salen ids de cluster (hash) y conteos: ningún título ni id de serie, así que no puede
+    filtrar series con copyright. `in_ranking` marca los clusters que tienen su propia ficha."""
+    if not rank_run:
+        return []
+    try:
+        rows = _rank_rows(cfg, RANK_PHENOMENA, "rank_phenomena", rank_run["run_id"])
+    except (FileNotFoundError, OSError):  # corridas anteriores a los fenómenos
+        return []
+    names = naics_mod.load_tables(cfg, REPO_ROOT).names
+    out = []
+    for r in rows:
+        if r["status"] != "candidato" or not r["published"]:
+            continue
+        cids = json.loads(r["cluster_ids_json"])
+        out.append(
+            {
+                "phenomenon_id": r["phenomenon_id"],
+                "rank": r["rank"],
+                "score": r["score"],
+                "direction": r["direction"],
+                "n_sources": r["n_sources_public"],
+                "sources": json.loads(r["sources_json"]),
+                "n_clusters": r["n_clusters"],
+                "n_members": r["n_members"],
+                "by_grouping": r["by_grouping"],
+                "window": (r["window_start"], r["window_end"]),
+                "naics": [
+                    {"naics": c, "name": names.get(c), "weight": w}
+                    for c, w in json.loads(r["naics_json"])
+                ],
+                "clusters": [{"id": c, "in_ranking": c in published_ids} for c in cids],
+            }
+        )
+    return sorted(out, key=lambda p: (p["rank"] or 10**9, p["phenomenon_id"]))
 
 
 def candidates_data(
