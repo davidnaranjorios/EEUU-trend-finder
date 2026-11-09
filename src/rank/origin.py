@@ -35,6 +35,9 @@ class Rule:
     match: Mapping[str, Any]
     origin: str
     chain: tuple[str, ...]
+    # Orígenes de los componentes de un agregado (`inherits_from`): además del propio, la serie
+    # comparte identidad con todo lo que se arma con ellos.
+    also: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -57,8 +60,12 @@ def validate_table(data: Any) -> list[Rule]:
     rules, seen = [], set()
     for i, r in enumerate(rules_in):
         where = f"rules[{i}]"
-        if not isinstance(r, dict) or set(r) != {"id", "match", "origin", "chain"}:
-            errors.append(f"{where}: claves exactas id, match, origin, chain")
+        if (
+            not isinstance(r, dict)
+            or not {"id", "match", "origin", "chain"} <= set(r)
+            or set(r) - {"id", "match", "origin", "chain", "inherits_from"}
+        ):
+            errors.append(f"{where}: claves id, match, origin, chain (y opcional inherits_from)")
             continue
         if not isinstance(r["id"], str) or not r["id"] or r["id"] in seen:
             errors.append(f"{where}: id vacío o repetido")
@@ -85,7 +92,15 @@ def validate_table(data: Any) -> list[Rule]:
         ):
             errors.append(f"{where}.chain: lista de ≥ 2 textos (raíz primero)")
             continue
-        rules.append(Rule(r["id"], m, agency_key(r["origin"]), tuple(chain)))
+        parents = r.get("inherits_from", [])
+        known = {x.id: x for x in rules}
+        if not isinstance(parents, list) or any(
+            not isinstance(x, str) or x not in known for x in parents
+        ):
+            errors.append(f"{where}.inherits_from: ids de reglas anteriores")
+            continue
+        also = frozenset(known[x].origin for x in parents)
+        rules.append(Rule(r["id"], m, agency_key(r["origin"]), tuple(chain), also))
     if errors:
         raise ValueError("data_origin inválida: " + "; ".join(errors))
     return rules
@@ -122,7 +137,7 @@ def resolve_origin(
             continue
         if "title_regex" in m and not re.search(m["title_regex"], title or ""):
             continue
-        return Origin(frozenset({r.origin}), r.chain, r.id)
+        return Origin(frozenset({r.origin}) | r.also, r.chain, r.id)
     return Origin(agencies, ())
 
 

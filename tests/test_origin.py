@@ -260,3 +260,41 @@ def test_report_shows_origin_chain_and_flag():
 def test_published_report_reads_origin_table(ranked):
     out = build_site(ranked.cfg)
     assert out["rank_run"] == "rank1"
+
+
+# --- Auditoría f9189307: agregados Z.1 heredan los orígenes de sus componentes -----------------
+
+
+def _z1_all_sectors(sid="BOGZ1FL893065125Q"):
+    return _z1_real(sid, "All Sectors; Home Equity Loans; Asset, Level")
+
+
+def test_z1_all_sectors_aggregate_does_not_triangulate_against_call_reports():
+    """Caso HELOC: Call Reports (FDIC) contra el agregado "All Sectors" de la Z.1 = una fuente."""
+    agg = _z1_all_sectors()
+    assert agg.rule_id == "z1_all_sectors_aggregate"
+    assert agg.keys == FED | frozenset({"call reports"})
+    assert _sources(agg, _fdic("FDICHELOC")) == 1
+    assert _sources(agg, _z1("BOGZ1FL763065105Q")) == 1  # y con el sector de bancos de la Z.1
+    assert format_chain(agg.chain) == (
+        "Call Reports (FFIEC) → republicado por Fed Z.1 (agregado de todos los sectores)"
+    )
+
+
+def test_z1_aggregate_stays_independent_of_unrelated_agencies():
+    other = resolve_origin(
+        RULES, source="fred", series_id="X", agencies=frozenset({"census bureau"}), release_ids=[3]
+    )
+    assert _sources(_z1_all_sectors(), other) == 2
+
+
+def test_z1_non_aggregate_non_bank_sectors_keep_the_fed_origin():
+    # Sector 15 (hogares): no es agregado ni de bancos; solo la Fed.
+    assert _z1_real("BOGZ1FL153065125Q", "Households; Home Equity Loans").keys == FED
+
+
+def test_inherits_from_must_reference_earlier_rules():
+    data = yaml.safe_load(Path("config/data_origin.yaml").read_text("utf-8"))
+    data["rules"][0]["inherits_from"] = ["no_existe"]
+    with pytest.raises(ValueError):
+        validate_table(data)
