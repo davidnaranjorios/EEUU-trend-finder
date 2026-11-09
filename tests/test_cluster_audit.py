@@ -291,3 +291,105 @@ def test_naics_summary_does_not_invent_denominator_from_clusters_or_missing_link
     assert result["sources"]["fred"]["mapped_objects_in_links"] is None
     assert result["sources"]["fred"]["unique_objects_by_method"] is None
     assert result["sources"]["fred"]["signal_denominator"] == 146
+
+
+# --- Auditoría f9189307: comparación antes/después ----------------------------------------------
+
+
+def _write_runs(root, rows_by_table):
+    for table, rows in rows_by_table.items():
+        write(root, table, rows)
+
+
+def _run_tables(rid, *, phenomena):
+    params = {"rank": {}, "summary": {"link_funnel": {"n_terms": 3}}} if phenomena else {}
+    t = {
+        "clusters": [
+            {"run_id": rid, "cluster_id": c, "source": "fred", "object_id": c, "role": "m"}
+            for c in ("c1", "c2", "tx")
+        ],
+        "rank_candidates": [
+            {**candidate("c1", "candidato", True, n_sources=2, n_sources_public=2), "run_id": rid},
+            {**candidate("c2"), "run_id": rid},
+        ],
+        "series_term_links": [
+            {
+                "run_id": rid,
+                "source": "fred",
+                "series_id": "c1",
+                "text_source": "edgar",
+                "term": "t",
+                "validated": phenomena,
+            }
+        ],
+        "naics_links": [
+            {
+                "run_id": rid,
+                "source": "bls",
+                "object_id": "a",
+                "naics": "31",
+                "metodo": "codigo_en_id" if phenomena else "nombre_oficial",
+                "peso": 1.0,
+            }
+        ],
+        "rank_runs": [{"run_id": rid, "params_json": json.dumps(params)}],
+    }
+    if phenomena:
+        t["rank_phenomena"] = [
+            {
+                "run_id": rid,
+                "phenomenon_id": "p1",
+                "status": "candidato",
+                "n_clusters": 2,
+                "by_grouping": True,
+                "published": True,
+            }
+        ]
+    return t
+
+
+def test_compare_mode_writes_aggregate_before_after_and_marks_unknown_not_zero(tmp_path, capsys):
+    root, out = tmp_path / "rank", tmp_path / "cmp"
+    old, new = _run_tables("old", phenomena=False), _run_tables("new", phenomena=True)
+    merged = {k: old[k] + new[k] for k in old}
+    merged["rank_phenomena"] = new["rank_phenomena"]
+    _write_runs(root, merged)
+    argv = ["--rank-dir", str(root), "--run-id", "new", "--baseline-run-id", "old"]
+    assert main([*argv, "--out", str(out)]) == 0
+    res = json.loads((out / "comparacion.json").read_text(encoding="utf-8"))
+    assert res["before"]["run_id"] == "old" and res["after"]["run_id"] == "new"
+    assert res["before"]["phenomena"]["total"] is None  # corrida anterior: desconocido, no 0
+    assert res["after"]["phenomena"] == {
+        "total": 1,
+        "multi_cluster": 1,
+        "candidato": 1,
+        "by_grouping": 1,
+        "published": 1,
+    }
+    assert res["before"]["clusters"]["series"] == 2 and res["after"]["clusters"]["text"] == 1
+    assert res["before"]["text_links"]["validated_pairs"] == 0
+    assert res["after"]["text_links"]["validated_pairs"] == 1
+    assert res["delta"]["text_links"]["validated_pairs"] == 1
+    assert res["delta"]["phenomena"]["total"] is None
+    assert res["after"]["naics"]["bls"]["unique_objects_by_method"] == {"codigo_en_id": 1}
+    assert res["after"]["rate_effect"]["n_marked"] is None  # no implementado: no se inventa
+    assert "Efecto de tasas" in (out / "comparacion.md").read_text(encoding="utf-8")
+    assert not (out / "inventario.json").exists()  # modo comparación: sin identificadores
+
+
+def test_compare_mode_refuses_missing_baseline_run(tmp_path):
+    root = tmp_path / "rank"
+    _write_runs(root, _run_tables("new", phenomena=True))
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--rank-dir",
+                str(root),
+                "--run-id",
+                "new",
+                "--baseline-run-id",
+                "ghost",
+                "--out",
+                str(tmp_path / "cmp"),
+            ]
+        )

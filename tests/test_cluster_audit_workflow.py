@@ -177,3 +177,37 @@ def test_aggregate_summary_never_prints_identifiers_titles_paths_or_unknown_name
     assert output["stored_coverage_available"] is False
     assert output["unknown_sources_present"] and output["unknown_statuses_present"]
     assert output["naics_coverage"]["bls"]["unknown_methods_present"]
+
+
+def test_baseline_is_optional_validated_and_only_adds_a_comparison_step():
+    inputs = (WF.get("on", WF.get(True)))["workflow_dispatch"]["inputs"]
+    assert inputs["baseline_run_id"]["required"] is False
+    assert JOB["env"]["BASELINE_RUN_ID"] == "${{ inputs.baseline_run_id }}"
+    assert "BASELINE_RUN_ID" in STEPS["validate"]["run"]
+    compare = STEPS["compare"]
+    assert compare["if"] == "${{ inputs.baseline_run_id != '' }}"
+    assert "${{" not in compare["run"]
+    assert "--baseline-run-id" in compare["run"] and "work/audit-compare" in compare["run"]
+    assert "--immutable" in compare["run"] and "rclone sync" not in compare["run"]
+
+
+@pytest.mark.skipif(BASH is None, reason="requiere bash")
+@pytest.mark.parametrize("value", ["A" * 32, "0" * 31, "$(touch injected)"])
+def test_invalid_baseline_is_rejected_and_empty_is_accepted(tmp_path, value):
+    env = {**os.environ, "RANK_RUN_ID": "a" * 32, "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+    bad = subprocess.run(
+        [BASH, "-euo", "pipefail", "-c", STEPS["validate"]["run"]],
+        cwd=tmp_path,
+        env={**env, "BASELINE_RUN_ID": value},
+        capture_output=True,
+        text=True,
+    )
+    assert bad.returncode != 0 and not (tmp_path / "injected").exists()
+    ok = subprocess.run(
+        [BASH, "-euo", "pipefail", "-c", STEPS["validate"]["run"]],
+        cwd=tmp_path,
+        env={**env, "BASELINE_RUN_ID": ""},
+        capture_output=True,
+        text=True,
+    )
+    assert ok.returncode == 0

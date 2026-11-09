@@ -8,6 +8,11 @@ on:
         description: "Corrida de ranking (32 caracteres hexadecimales minúsculos)"
         required: true
         type: string
+      baseline_run_id:
+        description: "Corrida anterior (opcional): si se da, genera la comparación antes/después"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +31,7 @@ jobs:
     timeout-minutes: 30
     env:
       RANK_RUN_ID: ${{ inputs.rank_run_id }}
+      BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -35,6 +41,7 @@ jobs:
         id: validate
         run: |
           if [[ ! "$RANK_RUN_ID" =~ ^[0-9a-f]{32}$ ]] ||
+             [[ -n "${BASELINE_RUN_ID:-}" && ! "${BASELINE_RUN_ID:-}" =~ ^[0-9a-f]{32}$ ]] ||
              [[ ! "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] ||
              [[ ! "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
             echo "::error::Identificador de ejecución no válido"
@@ -95,7 +102,7 @@ jobs:
 
           manifest = json.loads(Path("work/audit-output/manifest.json").read_text(encoding="utf-8"))
           sources = {"fred", "bls", "bea", "census", "edgar", "federal_register"}
-          methods = {"codigo_en_metadatos", "nombre_oficial", "heredado_origen", "heredado_cluster", "sic_concordancia"}
+          methods = {"codigo_en_metadatos", "codigo_en_id", "nombre_oficial", "heredado_origen", "heredado_cluster", "sic_concordancia"}
           statuses = {"candidato", "una_fuente", "fuera_del_tope", "sin_estado"}
 
           def count(value):
@@ -135,3 +142,22 @@ jobs:
             exit 1
           fi
           cat work/audit-logs/summary.json
+      - name: Comparar antes y después (solo conteos agregados)
+        id: compare
+        if: ${{ inputs.baseline_run_id != '' }}
+        run: |
+          if ! uv run --quiet python eval/cluster_audit.py \
+            --rank-dir data/processed/rank --run-id "$RANK_RUN_ID" \
+            --baseline-run-id "$BASELINE_RUN_ID" --out work/audit-compare \
+            >work/audit-logs/compare.log 2>&1; then
+            echo "::error::No se pudo generar la comparación antes/después"
+            exit 1
+          fi
+          source infra/r2_env.sh >work/audit-logs/config-compare.log 2>&1
+          destination="r2:$BUCKET/audits/$RANK_RUN_ID/compare-$BASELINE_RUN_ID-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"
+          if ! rclone copy work/audit-compare "$destination" --immutable --checksum >work/audit-logs/copy-compare.log 2>&1; then
+            echo "::error::No se pudo conservar la comparación privada inmutable"
+            exit 1
+          fi
+          # Solo conteos agregados (sin identificadores): el resumen es seguro de mostrar.
+          cat work/audit-compare/comparacion.md
