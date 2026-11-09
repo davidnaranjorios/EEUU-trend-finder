@@ -488,8 +488,8 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
 def _periods(src: str) -> list[tuple[str, float]]:
     """Periodos de `term_freq` como los de la ingesta real: trimestres (EDGAR) o meses (FR)."""
     if src == "edgar":
-        return [(f"{y}Q{q}", y + (q - 1) / 4) for y in range(2014, 2026) for q in range(1, 5)]
-    return [(f"{y}-{m:02d}", y + (m - 1) / 12) for y in range(2014, 2026) for m in range(1, 13)]
+        return [(f"{y}Q{q}", y + (q - 1) / 4) for y in range(2010, 2026) for q in range(1, 5)]
+    return [(f"{y}-{m:02d}", y + (m - 1) / 12) for y in range(2010, 2026) for m in range(1, 13)]
 
 
 def _run_row(run_id: str, detector: str, n: int) -> dict:
