@@ -6,6 +6,12 @@ Métodos (columna `metodo` de `naics_links`):
 - `codigo_en_id`: el código está en el id propio de la serie (PPI de BLS `PCU<naics><producto>`,
   JOLTS `JT<S|U><industria>...`); solo vale si existe en la tabla oficial (los ceros de relleno a
   la derecha se recortan: 524100 → 5241).
+- `codigo_en_id` también lee Census: la dimensión de industria de una serie (`NAICS`, `NAICS2017`,
+  `NAICS2022`, `category_code` de EITS, `industry` de QWI) aparece en el id como `col=valor`.
+  Un código de NAICS 2017 que cambió en 2022 se pasa con la concordancia oficial de Census.
+- `concordancia_bea`: el id de BEA lleva su código de industria (`GDPbyIndustry:1:111CA:A`,
+  `InputOutput:57:111CA.Industry.487OS.Commodity:A`); la tabla oficial de BEA lo lleva a NAICS 2022
+  (`config/naics/bea_industry_naics.csv`, peso repartido). Los agregados sin NAICS quedan sin fila.
 - `nombre_oficial`: un tramo del título (limitado por comas, "and" o separadores) es el nombre
   oficial NAICS 2022 COMPLETO. Un título que lista varios sectores reparte el peso entre todos los
   que casan; los fragmentos de un nombre más largo no cuentan.
@@ -25,7 +31,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,11 +56,21 @@ ID_FORMATS: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
 Link = tuple[str, float, str]  # (naics, peso, metodo)
 
 
+# Dimensiones de industria de Census en el id (`col=valor`): nombre de la columna, no un tema.
+CENSUS_COL_RE = re.compile(r"(?i)^(?:naics(?:\d{4})?|category_code|industry)$")
+# Ids de BEA con el código de industria dentro (ver `bea_codes`).
+BEA_IO_RE = re.compile(r"^InputOutput:[^:]+:([^:]+):[A-Za-z]$")
+BEA_INDUSTRY_RE = re.compile(r"^(?:Underlying)?GDPbyIndustry:[^:]+:([A-Za-z0-9]+):[A-Za-z]$")
+BEA_CODE_RE = re.compile(r"^[A-Za-z0-9]{1,6}$")
+
+
 @dataclass(frozen=True)
 class NaicsTables:
     names: dict[str, str]  # código NAICS 2022 -> nombre oficial
     by_name: dict[str, str]  # nombre oficial normalizado -> código (el más amplio si se repite)
     concordance: dict[str, list[tuple[str, float]]]  # SIC (4 dígitos) -> [(NAICS 2022, peso)]
+    bea: dict[str, list[tuple[str, float]]] = field(default_factory=dict)  # código BEA -> NAICS
+    to2022: dict[str, list[tuple[str, float]]] = field(default_factory=dict)  # NAICS 2017 -> 2022
 
 
 def load_tables(cfg: Mapping[str, Any], root: Path) -> NaicsTables:
@@ -68,7 +84,21 @@ def load_tables(cfg: Mapping[str, Any], root: Path) -> NaicsTables:
     by_name: dict[str, str] = {}
     for code, name in sorted(names.items(), key=lambda kv: (len(kv[0]), kv[0])):
         by_name.setdefault(normalize_name(name), code)
-    return NaicsTables(names, by_name, dict(conc))
+    return NaicsTables(
+        names,
+        by_name,
+        dict(conc),
+        _pairs(root / paths["bea_table"], "bea_code", "naics", "weight"),
+        _pairs(root / paths["concordance_2017_table"], "naics2017", "naics2022", "weight"),
+    )
+
+
+def _pairs(path: Path, key: str, value: str, weight: str) -> dict[str, list[tuple[str, float]]]:
+    out: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    with path.open(encoding="utf-8", newline="") as fh:
+        for r in csv.DictReader(fh):
+            out[r[key]].append((r[value], float(r[weight])))
+    return dict(out)
 
 
 def normalize_name(text: str) -> str:
@@ -126,6 +156,77 @@ def names_in_text(text: str, tables: NaicsTables) -> list[str]:
     return codes
 
 
+def _valid_code(code: str, tables: NaicsTables) -> str | None:
+    """`code` si es un NAICS 2022 oficial; los ceros de relleno a la derecha se recortan."""
+    while len(code) >= 2:
+        if code in tables.names:
+            return code
+        if code.endswith("0") and "-" not in code:
+            code = code[:-1]
+        else:
+            return None
+    return None
+
+
+def census_codes(series_id: str, tables: NaicsTables) -> list[tuple[str, float]]:
+    """(NAICS 2022, peso) de las dimensiones de industria de un id de Census (`col=valor`).
+
+    Un código que ya es NAICS 2022 vale tal cual; uno de NAICS 2017 que cambió se pasa con la
+    concordancia oficial (peso repartido). Un valor que no es NAICS (`TOTAL`, `44X72`) se omite."""
+    acc: dict[str, float] = {}
+    for part in (series_id or "").split(":"):
+        col, sep, value = part.partition("=")
+        if not sep or not CENSUS_COL_RE.match(col):
+            continue
+        value = value.strip()
+        hit = _valid_code(value, tables)
+        mapped = tables.to2022.get(value)
+        if mapped and value not in tables.names:
+            for code, w in mapped:
+                acc[code] = acc.get(code, 0.0) + w
+        elif hit:
+            acc[hit] = acc.get(hit, 0.0) + 1.0
+    total = sum(acc.values())
+    return [(c, w / total) for c, w in sorted(acc.items())] if total else []
+
+
+def bea_codes(series_id: str) -> list[str]:
+    """Códigos de industria de BEA en el id (GDPbyIndustry, UnderlyingGDPbyIndustry, InputOutput).
+
+    En InputOutput el id es `InputOutput:<tabla>:<RowCode>.<RowType>.<ColCode>.<ColType>:<freq>`
+    (un código vacío se omite); se anclan los códigos marcados `Industry` y, si no hay, los de
+    producto (los códigos de BEA son los mismos en ambos lados)."""
+    m = BEA_INDUSTRY_RE.match(series_id or "")
+    if m:
+        return [m.group(1)]
+    m = BEA_IO_RE.match(series_id or "")
+    if not m:
+        return []
+    toks = m.group(1).split(".")
+    sides: list[tuple[str, str]] = []  # (código, tipo)
+    i = 0
+    while i < len(toks):
+        if toks[i] in ("Industry", "Commodity"):  # RowCode vacío: el tipo viene solo
+            i += 1
+        elif i + 1 < len(toks) and toks[i + 1] in ("Industry", "Commodity"):
+            sides.append((toks[i], toks[i + 1]))
+            i += 2
+        else:
+            i += 1
+    industry = [c for c, t in sides if t == "Industry" and BEA_CODE_RE.match(c)]
+    return industry or [c for c, _ in sides if BEA_CODE_RE.match(c)]
+
+
+def bea_links(series_id: str, tables: NaicsTables) -> list[tuple[str, float]]:
+    """(NAICS 2022, peso) del código BEA del id según la concordancia oficial de BEA."""
+    codes = [c for c in bea_codes(series_id) if c in tables.bea]
+    acc: dict[str, float] = defaultdict(float)
+    for c in codes:
+        for naics, w in tables.bea[c]:
+            acc[naics] += w / len(codes)
+    return sorted(acc.items())
+
+
 def id_codes(source: str, series_id: str, tables: NaicsTables) -> list[str]:
     """NAICS embebido en el id propio de la serie (ver ID_FORMATS), validado contra la tabla."""
     for sources, pat in ID_FORMATS:
@@ -162,10 +263,20 @@ def series_links(
         codes, method = codes_in_text(text, tables), "codigo_en_metadatos"
         if not codes:
             codes, method = id_codes(key[0], key[1], tables), "codigo_en_id"
-        if not codes:
-            codes, method = names_in_text(text, tables), "nombre_oficial"
         if codes:
             out[key] = [(c, 1 / len(codes), method) for c in codes]
+            continue
+        weighted: list[tuple[str, float]] = []
+        if key[0] == "census":
+            weighted, method = census_codes(key[1], tables), "codigo_en_id"
+        elif key[0] == "bea":
+            weighted, method = bea_links(key[1], tables), "concordancia_bea"
+        if weighted:
+            out[key] = [(c, w, method) for c, w in weighted]
+            continue
+        codes = names_in_text(text, tables)
+        if codes:
+            out[key] = [(c, 1 / len(codes), "nombre_oficial") for c in codes]
     return out
 
 
