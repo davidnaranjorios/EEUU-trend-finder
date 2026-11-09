@@ -371,7 +371,12 @@ RANK_CONTEXT = TableSpec(
 
 # Anclaje a industria (ADR 0012): una fila por (objeto, NAICS). `peso` suma 1 por objeto y método.
 # Directos: el código sale de la serie misma. Derivados: se infiere de otros objetos (estimado).
-NAICS_DIRECT_METHODS = ("codigo_en_metadatos", "codigo_en_id", "nombre_oficial")
+NAICS_DIRECT_METHODS = (
+    "codigo_en_metadatos",
+    "codigo_en_id",
+    "concordancia_bea",
+    "nombre_oficial",
+)
 NAICS_DERIVED_METHODS = ("heredado_origen", "heredado_cluster", "sic_concordancia")
 NAICS_METHODS = (*NAICS_DIRECT_METHODS, *NAICS_DERIVED_METHODS)
 NAICS_LINKS = TableSpec(

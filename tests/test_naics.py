@@ -219,3 +219,156 @@ def test_cluster_inherits_only_with_weighted_majority(tables):
     assert nx.inherit_in_clusters([members], own, 0.7) == {}  # umbral configurable
     solo = nx.inherit_in_clusters([[("bea", "c"), ("fred", "x")]], own, 0.5)
     assert solo[("fred", "x")] == [("5417", 1.0, "heredado_cluster")]
+
+
+# --- BEA y Census con código propio (ids reales) -------------------------------------------------
+
+from src.ingest.bea import parse_data  # noqa: E402
+
+# Filas recortadas de respuestas reales de la API de BEA (2026-11-09): GDPbyIndustry (tabla 1),
+# UnderlyingGDPbyIndustry (tabla 210) e InputOutput (tabla 57).
+BEA_GDPI = {
+    "BEAAPI": {
+        "Results": [
+            {
+                "Statistic": "GDP by Industry",
+                "Data": [
+                    {
+                        "TableID": "1",
+                        "Frequency": "A",
+                        "Year": "2022",
+                        "Quarter": "2022",
+                        "Industry": ind,
+                        "IndustrYDescription": desc,
+                        "DataValue": "1.0",
+                        "NoteRef": "1",
+                    }
+                    for ind, desc in (
+                        ("111CA", "Farms"),
+                        ("44RT", "Retail trade"),
+                        ("5415", "Computer systems design and related services"),
+                        ("PVT", "Private industries"),
+                        ("GDP", "Gross domestic product"),
+                    )
+                ],
+            }
+        ]
+    }
+}
+BEA_IO = {
+    "BEAAPI": {
+        "Results": [
+            {
+                "Statistic": "Input-Output",
+                "Data": [
+                    {
+                        "TableID": "57",
+                        "Year": "2022",
+                        "RowCode": "",
+                        "RowDescr": "Total industry output requirement",
+                        "RowType": "Industry",
+                        "ColCode": "111CA",
+                        "ColDescr": "Farms",
+                        "ColType": "Commodity",
+                        "DataValue": "2.1",
+                        "NoteRef": "57",
+                    },
+                    {
+                        "TableID": "57",
+                        "Year": "2022",
+                        "RowCode": "111CA",
+                        "RowDescr": "Farms",
+                        "RowType": "Industry",
+                        "ColCode": "487OS",
+                        "ColDescr": "Other transportation and support activities",
+                        "ColType": "Commodity",
+                        "DataValue": "0.01",
+                        "NoteRef": "57",
+                    },
+                ],
+            }
+        ]
+    }
+}
+
+
+def _bea_ids(payload, dataset, table):
+    parsed = parse_data(payload, dataset=dataset, table=table, table_desc="t", unit_param="TableID")
+    return list(parsed.series)
+
+
+def test_bea_ids_carry_the_industry_code_and_the_official_concordance_maps_it(tables):
+    ids = _bea_ids(BEA_GDPI, "GDPbyIndustry", "1")
+    assert "GDPbyIndustry:1:111CA:A" in ids  # formato real que produce el adaptador
+    links = nx.series_links({("bea", i): "Value added | t" for i in ids}, tables)
+    farms = links[("bea", "GDPbyIndustry:1:111CA:A")]
+    assert sorted((c, round(w, 2), m) for c, w, m in farms) == [
+        ("111", 0.5, "concordancia_bea"),
+        ("112", 0.5, "concordancia_bea"),
+    ]
+    assert links[("bea", "GDPbyIndustry:1:44RT:A")] == [("44-45", 1.0, "concordancia_bea")]
+    assert links[("bea", "GDPbyIndustry:1:5415:A")][0][0] == "5415"
+    # Agregados que BEA define sin NAICS: sin fila, no se inventa.
+    assert ("bea", "GDPbyIndustry:1:PVT:A") not in links
+    assert ("bea", "GDPbyIndustry:1:GDP:A") not in links
+
+
+def test_bea_underlying_and_input_output_ids(tables):
+    assert nx.bea_codes("UnderlyingGDPbyIndustry:210:23EH:A") == ["23EH"]
+    io = _bea_ids(BEA_IO, "InputOutput", "57")
+    assert "InputOutput:57:111CA.Industry.487OS.Commodity:A" in io
+    # Se ancla el lado marcado Industry (la fila 111CA), no el producto 487OS.
+    assert nx.bea_codes("InputOutput:57:111CA.Industry.487OS.Commodity:A") == ["111CA"]
+    # Con el código de fila vacío y solo un producto, se usa el producto.
+    assert nx.bea_codes("InputOutput:57:Industry.111CA.Commodity:A") == ["111CA"]
+    got = nx.series_links({("bea", i): "t" for i in io}, tables)
+    assert all(links[0][2] == "concordancia_bea" for links in got.values()) and len(got) == 2
+    assert nx.bea_codes("NIPA:T10101:A191RL:A") == []  # otros datasets no llevan industria
+
+
+def test_bea_table_is_official_consistent_and_covers_the_main_datasets(tables):
+    assert len(tables.bea) > 400
+    for code, pairs in tables.bea.items():
+        assert all(n in tables.names for n, _ in pairs), code
+        assert abs(sum(w for _, w in pairs) - 1) < 1e-3, code
+    # Todos los códigos de industria de las filas reales de arriba, salvo los agregados sin NAICS.
+    for code in ("111CA", "44RT", "5415", "23EH", "487OS", "311FT", "33DG"):
+        assert code in tables.bea, code
+    assert (REPO_ROOT / "config" / "naics" / "SOURCES.md").read_text().count("bea.gov") >= 1
+
+
+CENSUS_IDS = {
+    # EITS: la dimensión de industria es `category_code`.
+    ("census", "timeseries:eits:mrts:cell_value:category_code=441:data_type_code=SM"): "441",
+    ("census", "timeseries:eits:qss:cell_value:category_code=5415:seasonally_adj=yes"): "5415",
+    ("census", "timeseries:eits:mrts:cell_value:category_code=44X72:data_type_code=SM"): None,
+    ("census", "timeseries:eits:m3:cell_value:category_code=MDM:data_type_code=VS"): None,
+    # Encuestas anuales: columna NAICSaaaa.
+    ("census", "timeseries:asm:area2017:RCPTPLM:NAICS2017=311:SECTOR=31"): "311",
+    ("census", "timeseries:bds:EMP:NAICS=315110"): "315120",  # NAICS 2017 que cambió en 2022
+    ("census", "timeseries:qwi:sa:Emp:industry=00:sex=0"): None,  # 00 = todas las industrias
+}
+
+
+def test_census_ids_with_their_own_naics_dimension_are_anchored(tables):
+    links = nx.series_links({k: "t" for k in CENSUS_IDS}, tables)
+    for key, expected in CENSUS_IDS.items():
+        if expected is None:
+            assert key not in links, key
+        else:
+            assert [c for c, _, _ in links[key]] == [expected], key
+            assert links[key][0][2] == "codigo_en_id"
+
+
+def test_census_and_bea_coverage_with_own_code_is_never_zero(tables):
+    objects = [*CENSUS_IDS, *(("bea", i) for i in _bea_ids(BEA_GDPI, "GDPbyIndustry", "1"))]
+    links = nx.series_links({k: "sin código ni nombre en el título" for k in objects}, tables)
+    cov = nx.coverage(objects, links)
+    assert cov["census"]["with_naics"] > 0 and cov["bea"]["with_naics"] > 0
+    assert cov["census"]["pct"] >= 50 and cov["bea"]["pct"] >= 60
+
+
+def test_title_name_still_works_when_the_id_has_no_code(tables):
+    # Sin código en el id, BEA y Census siguen cayendo al nombre oficial completo del título.
+    got = nx.series_links({("bea", "NIPA:T10101:X:A"): "Value added | Retail trade"}, tables)
+    assert got[("bea", "NIPA:T10101:X:A")][0][2] == "nombre_oficial"
