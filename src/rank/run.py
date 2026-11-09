@@ -45,6 +45,7 @@ from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
+from src.rank import rate_effect as rate_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
     ClusterParams,
@@ -312,7 +313,7 @@ def growth_of(
     series = load_series(con, cfg, ids=keys)
     return {
         (p.series.source, p.series.series_id): GrowthSeries(
-            p.item.growth, p.prep.last_index, p.series.grid
+            p.item.growth, p.prep.last_index, p.series.grid, p.item.scale, p.item.persistence
         )
         for p in prep_for("regime", series, cfg)
     }
@@ -601,6 +602,49 @@ def link_params(cfg: dict[str, Any]) -> LinkParams:
     )
 
 
+def rate_effects(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    clusters: list[list[tuple[str, str]]],
+    cids: list[str],
+    growth: dict[tuple[str, str], GrowthSeries],
+) -> tuple[dict[str, rate_mod.RateResult], dict[str, Any]]:
+    """Etiqueta de efecto de tasas por cluster de series (ver `rate_effect.py`).
+
+    La serie del cluster es su representante (o el primer miembro con crecimiento preparado).
+    Sin la serie de tasa descargada no se evalúa nada y el resumen lo dice (no se inventa)."""
+    ref = (cfg["context"]["reference_series"] or {}).get("short_rate")
+    summary: dict[str, Any] = {"reference": ref, "available": False}
+    rows = (
+        con.execute(
+            "SELECT date, value FROM series WHERE source = 'fred' AND series_id = ? "
+            "AND vintage_date IS NULL AND value IS NOT NULL ORDER BY date",
+            [ref],
+        ).fetchall()
+        if ref
+        else []
+    )
+    if not rows:
+        return {}, summary
+    levels = {d.year * 12 + d.month - 1: float(v) for d, v in rows}
+    items: dict[str, tuple[np.ndarray, int, str, float, int]] = {}
+    for cid, members in zip(cids, clusters, strict=True):
+        g = next((growth[k] for k in members if k in growth), None)
+        if g is not None:
+            items[cid] = (g.growth, g.last_index, g.grid, g.scale, g.persistence)
+    dr = {grid: rate_mod.rate_changes(levels, grid) for grid in ("M", "Q", "A")}
+    res = rate_mod.evaluate(items, dr, rate_mod.params_from(cfg))
+    summary.update(
+        {
+            "available": True,
+            "n_clusters": len(clusters),
+            "n_evaluated": sum(r.evaluated for r in res.values()),
+            "n_marked": sum(r.rate_effect for r in res.values()),
+        }
+    )
+    return res, summary
+
+
 def _best_by_series(signals: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
     out: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for s in signals:
@@ -674,6 +718,9 @@ def rank_run(
                 sim_to_rep[keyed[i]] = float(s[i, r])
             clusters.append(_rep_first(members, rep))
     clusters += [[k] for k in no_growth + tail]
+    # Etiqueta "efecto de tasas" por cluster (descriptiva: nunca filtra ni cambia el score).
+    all_cids = [cluster_id("c", [f"{s}|{i}" for s, i in m]) for m in clusters]
+    rate_by_cid, rate_summary = rate_effects(con, cfg, clusters, all_cids, growth)
     cluster_of = {}
     cluster_rows = []
     cids = []
@@ -690,6 +737,8 @@ def rank_run(
                     "object_id": k[1],
                     "role": "representante" if j == 0 else "miembro",
                     "similarity": sim_to_rep.get(k, 1.0 if j == 0 else None),
+                    "rate_effect": rate_by_cid[cid].rate_effect if cid in rate_by_cid else None,
+                    "rate_share": rate_by_cid[cid].rate_share if cid in rate_by_cid else None,
                 }
             )
 
@@ -914,6 +963,18 @@ def rank_run(
                 "n_members": c.n_members,
                 "n_terms": sum(e.kind == "term" for e in c.evidence),
                 "published": c.published,
+                "rate_effect": rate_by_cid[c.candidate_id].rate_effect
+                if c.candidate_id in rate_by_cid
+                else None,
+                "rate_share": rate_by_cid[c.candidate_id].rate_share
+                if c.candidate_id in rate_by_cid
+                else None,
+                "rate_q": rate_by_cid[c.candidate_id].q_bh
+                if c.candidate_id in rate_by_cid
+                else None,
+                "rate_n_tests": rate_by_cid[c.candidate_id].n_tests
+                if c.candidate_id in rate_by_cid
+                else None,
             }
         )
         for e in c.evidence:
@@ -967,6 +1028,7 @@ def rank_run(
         "n_published": sum(c.published for c in candidates),
         "embeddings": {"model": emb.name, "computed": emb.computed, "reused": emb.reused},
         "link_funnel": funnel,
+        "rate_effect": rate_summary,
         "naics_coverage": naics_cov,
         "adapter_agencies_unmatched": unmatched_adapter_agencies(fred_names),
     }
