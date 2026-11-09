@@ -248,6 +248,10 @@ No agrega p ni q, y no cambia el score, la FDR ni la regla de fuentes.
   clusters, evidencia y relacionadas. Lo verifica
   `test_reference_series_never_enter_detectors_or_ranking`.
 
+> **Nota 2026-11-09 (ADR 0013, sección 7):** David amplió la excepción con una cuarta clave,
+> `short_rate: TB3MS` (tasa de corto plazo, solo para la etiqueta «efecto de tasas»). Ahora son
+> exactamente cuatro claves; el resto de esta sección sigue igual.
+
 ### Panel apilado y descarga de las series de referencia (2026-11-04)
 
 - **Panel apilado.** "Comparar con relacionadas" muestra el núcleo arriba y después las

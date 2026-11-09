@@ -119,7 +119,7 @@ def test_reference_series_never_enter_detectors_or_ranking(built):
     con = connect(fx.cfg["paths"]["processed_dir"])
     loaded = {(s.source, s.series_id) for s in load_series(con, fx.cfg)}
     refs = reference_keys(fx.cfg)
-    assert len(refs) == 3 and not loaded & refs
+    assert len(refs) == 4 and not loaded & refs
     members = {(s, o) for s, o in con.execute("SELECT source, object_id FROM clusters").fetchall()}
     evidence = {
         (s, o) for s, o in con.execute("SELECT source, object_id FROM rank_evidence").fetchall()

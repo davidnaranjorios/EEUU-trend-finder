@@ -275,6 +275,12 @@ rank:
     concordance_table: config/naics/sic_naics_concordance.csv
     cluster_majority: 0.5         # herencia por cluster: solo códigos con más de este peso entre los miembros con código
     not_applicable_sources: [federal_register]  # sin industria: fuera del denominador de cobertura
+  # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se
+  # regresa sobre Δ de la tasa de corto plazo (context.reference_series.short_rate), rezagos
+  # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary
+  # bootstrap, BH sobre los clusters) y el cambio de pendiente cae ≥ min_drop o deja de ser
+  # significativo al usar el residuo. Solo etiqueta: nunca filtra ni cambia el score.
+  rate_effect: {max_lag: 2, min_drop: 0.5, seed: 20261109}
   # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
   # ventanas solapadas se triangulan juntos (src/rank/phenomena.py). La regla de origen no cambia.
   phenomena:
@@ -357,6 +363,9 @@ context:
     deflator: CPIAUCSL            # IPC-U (deflactor para valores reales)
     population: POP               # población (per cápita)
     recessions: USREC             # indicador de recesión (sombreado)
+    # Cuarta clave, aprobada por David el 2026-11-09 (ADR 0009/0013): tasa de corto plazo (T-bill
+    # a 3 meses, mensual, H.15, sin copyright) para etiquetar "efecto de tasas". Solo etiqueta.
+    short_rate: TB3MS
   max_related: 8
   pool_max: 300                   # vecinas de la misma rama prefiltradas por título
   alpha: 0.5                      # puntaje = α·coseno del título + (1−α)·|ρ| de crecimientos

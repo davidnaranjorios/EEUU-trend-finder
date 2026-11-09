@@ -305,7 +305,14 @@ def _run_tables(rid, *, phenomena):
     params = {"rank": {}, "summary": {"link_funnel": {"n_terms": 3}}} if phenomena else {}
     t = {
         "clusters": [
-            {"run_id": rid, "cluster_id": c, "source": "fred", "object_id": c, "role": "m"}
+            {
+                "run_id": rid,
+                "cluster_id": c,
+                "source": "fred",
+                "object_id": c,
+                "role": "m",
+                "rate_effect": (c == "c1") if phenomena and c != "tx" else None,
+            }
             for c in ("c1", "c2", "tx")
         ],
         "rank_candidates": [
@@ -372,7 +379,10 @@ def test_compare_mode_writes_aggregate_before_after_and_marks_unknown_not_zero(t
     assert res["delta"]["text_links"]["validated_pairs"] == 1
     assert res["delta"]["phenomena"]["total"] is None
     assert res["after"]["naics"]["bls"]["unique_objects_by_method"] == {"codigo_en_id": 1}
-    assert res["after"]["rate_effect"]["n_marked"] is None  # no implementado: no se inventa
+    assert res["after"]["rate_effect"]["n_marked"] == 1  # c1 marcado, c2 no, de 2 evaluados
+    assert res["after"]["rate_effect"]["n_evaluated"] == 2
+    assert res["before"]["rate_effect"]["n_marked"] is None  # corrida anterior: desconocido
+    assert res["delta"]["rate_effect"]["n_marked"] is None
     assert "Efecto de tasas" in (out / "comparacion.md").read_text(encoding="utf-8")
     assert not (out / "inventario.json").exists()  # modo comparación: sin identificadores
 

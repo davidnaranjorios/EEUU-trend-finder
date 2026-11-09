@@ -325,6 +325,16 @@ def build(tmp_path: Path, seed: int = 7) -> Fixture:
         agencies=["Reference Agency"],
         detect=False,
     )
+    add_series(  # tasa de corto plazo de referencia: con "señal" fingida, tampoco entra al ranking
+        "ref_short_rate",
+        "fred",
+        refs["short_rate"],
+        "Short-term rate reference",
+        0.01 * rng.standard_normal(N_MONTHS),
+        signal=True,
+        units="Percent",
+        agencies=["Reference Agency"],
+    )
     rec = np.zeros(N_MONTHS)
     rec[24:36] = 1  # una recesión de 12 meses
     for r in series_rows:  # el indicador de recesión es 0/1, no un nivel exponencial

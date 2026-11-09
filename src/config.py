@@ -326,17 +326,22 @@ def _validate_rank(r: dict[str, Any]) -> None:
     for key in ("alpha", "threshold", "duplicate_rho", "duplicate_cos"):
         if not isinstance(c.get(key), int | float) or not 0 <= c[key] <= 1:
             raise ConfigError(f"rank.cluster.{key} debe estar en [0, 1]")
+    re_ = r.get("rate_effect") or {}
+    if not isinstance(re_.get("max_lag"), int) or re_["max_lag"] < 0:
+        raise ConfigError("rank.rate_effect.max_lag debe ser un entero >= 0")
+    if not isinstance(re_.get("min_drop"), int | float) or not 0 < re_["min_drop"] <= 1:
+        raise ConfigError("rank.rate_effect.min_drop debe estar en (0, 1]")
     lk = r.get("links") or {}
     q = lk.get("null_quantile")
     if not isinstance(q, int | float) or not 0 < q < 1:
         raise ConfigError("rank.links.null_quantile debe estar en (0, 1)")
 
 
-REFERENCE_KEYS = ("deflator", "population", "recessions")
+REFERENCE_KEYS = ("deflator", "population", "recessions", "short_rate")
 
 
 def _validate_context(c: dict[str, Any]) -> None:
-    """Ficha del fenómeno: exactamente tres series de referencia metodológica (ADR 0009)."""
+    """Ficha del fenómeno: exactamente cuatro series de referencia metodológica (ADR 0009, 0013)."""
     refs = c.get("reference_series")
     if not isinstance(refs, dict) or set(refs) != set(REFERENCE_KEYS):
         raise ConfigError(f"context.reference_series debe tener exactamente {REFERENCE_KEYS}")

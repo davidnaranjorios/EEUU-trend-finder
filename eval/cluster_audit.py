@@ -255,10 +255,38 @@ def naics_summary(data: dict[str, list[dict]], *, links_available: bool = True) 
 
 
 RATE_EFFECT_NOTE = (
-    "Marca 'efecto de tasas' NO implementada: exige una serie de tasa de corto plazo como "
-    "referencia metodológica y la excepción del ADR 0009 solo admite deflactor, población y "
-    "recesiones. Pendiente de aprobación de David; hasta entonces el conteo es desconocido."
+    "Efecto de tasas (ADR 0013): marca descriptiva por cluster, nunca filtra. None = la corrida "
+    "no la calculó (anterior a la función, o sin la serie de tasa descargada), no cero."
 )
+
+
+def _rate_metrics(data: dict[str, list[dict]], have: dict[str, bool]) -> dict[str, Any]:
+    """Clusters de series evaluados y marcados "efecto de tasas" (NULL = no evaluado)."""
+    rows = data.get("clusters", []) if have["clusters"] else []
+    by_cluster: dict[str, Any] = {}
+    for r in rows:
+        if r["cluster_id"].startswith("c"):
+            by_cluster.setdefault(r["cluster_id"], r.get("rate_effect"))
+    evaluated = {c: v for c, v in by_cluster.items() if v is not None}
+    cands = [
+        r
+        for r in data.get("rank_candidates", [])
+        if r["kind"] == "series" and r.get("rate_effect") is not None
+    ]
+    if not evaluated:
+        return {
+            "implemented": True,
+            "n_evaluated": None,
+            "n_marked": None,
+            "note": RATE_EFFECT_NOTE,
+        }
+    return {
+        "implemented": True,
+        "n_evaluated": len(evaluated),
+        "n_marked": sum(bool(v) for v in evaluated.values()),
+        "n_marked_candidates": sum(bool(r["rate_effect"]) for r in cands),
+        "note": RATE_EFFECT_NOTE,
+    }
 
 
 def run_metrics(data: dict[str, list[dict]], missing: list[str]) -> dict[str, Any]:
@@ -344,7 +372,7 @@ def run_metrics(data: dict[str, list[dict]], missing: list[str]) -> dict[str, An
             }
             for source, row in naics["sources"].items()
         },
-        "rate_effect": {"implemented": False, "n_marked": None, "note": RATE_EFFECT_NOTE},
+        "rate_effect": _rate_metrics(data, have),
     }
 
 
@@ -403,7 +431,7 @@ def comparison_markdown(c: dict[str, Any]) -> str:
             "|---|---|---|---|",
             *rows,
             "",
-            f"Efecto de tasas: {RATE_EFFECT_NOTE}",
+            RATE_EFFECT_NOTE,
             "",
         ]
     )

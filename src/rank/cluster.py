@@ -39,6 +39,8 @@ class GrowthSeries:
     growth: np.ndarray
     last_index: int
     grid: str
+    scale: float = 1.0  # sd robusta del crecimiento (la de los detectores)
+    persistence: int = 2  # periodos consecutivos exigidos en su grilla
 
 
 @dataclass
