@@ -57,10 +57,11 @@ from src.rank.cluster import (
 )
 from src.rank.comove import (
     ComoveParams,
-    comove_family,
+    coarser,
+    comove_joint,
     max_overlap,
     on_axis,
-    series_annual_growth,
+    series_grid_growth,
     term_annual_change,
 )
 from src.rank.context import select_related
@@ -486,24 +487,36 @@ def term_base_share(
     return {k: num[k] / den[k] for k in num if den[k] > 0}
 
 
-def term_annual_counts(
-    con: duckdb.DuckDBPyConnection, signals: list[dict[str, Any]], min_doc_count: int
-) -> dict[tuple[str, str], dict[int, tuple[float, float]]]:
-    """(c, n) anuales de cada término con señal; solo años con todos los subperiodos de la
-    sección. Un subperiodo sin fila del término se imputa en el tope de la censura."""
+# Índice de periodo de `term_freq` en cada grilla del test de co-movimiento: año (A) o
+# año·4 + trimestre (Q). Los periodos de EDGAR son trimestres ('2024Q1') y los del Federal
+# Register meses ('2024-05'); ambos se agregan a la grilla sin interpolar.
+GRID_SQL = {
+    "A": "substr(period, 1, 4)::INT",
+    # Un periodo más grueso que la grilla (p. ej. '2024' en Q) no se puede repartir: queda NULL
+    # y se descarta (no se interpola).
+    "Q": (
+        "CASE WHEN period LIKE '____Q_' THEN substr(period, 1, 4)::INT * 4 + "
+        "substr(period, 6, 1)::INT - 1 "
+        "WHEN period LIKE '____-__' THEN substr(period, 1, 4)::INT * 4 + "
+        "(substr(period, 6, 2)::INT - 1) // 3 END"
+    ),
+}
+
+
+def term_grid_counts(
+    con: duckdb.DuckDBPyConnection,
+    signals: list[dict[str, Any]],
+    min_doc_count: int,
+    grids: set[str],
+) -> dict[str, dict[tuple[str, str], dict[int, tuple[float, float]]]]:
+    """(c, n) por periodo de cada grilla de `grids` (A, Q) de cada término con señal.
+
+    Solo periodos completos: con todos los subperiodos de `term_freq` de la sección (4 trimestres
+    por año; 3 meses por trimestre). Un subperiodo sin fila del término se imputa en el tope de la
+    censura. El término se agrega, nunca se interpola."""
     if not signals:
-        return {}
+        return {g: {} for g in grids}
     srcs = sorted({s["source"] for s in signals})
-    tot = con.execute(
-        "SELECT source, section, substr(period, 1, 4)::INT y, count(*) n_sub, sum(total_docs) n "
-        "FROM (SELECT DISTINCT source, section, period, total_docs FROM term_freq "
-        "WHERE list_contains(?, source)) GROUP BY ALL",
-        [srcs],
-    ).fetchall()
-    full = {}
-    for src, sec, y, n_sub, n in tot:
-        full.setdefault((src, sec), {})[y] = (n_sub, n)
-    need = {k: max(v[0] for v in d.values()) for k, d in full.items()}
     con.register(
         "_cterms",
         pa.table(
@@ -514,67 +527,118 @@ def term_annual_counts(
             }
         ),
     )
-    rows = con.execute(
-        "SELECT t.source, t.section, t.term, substr(f.period, 1, 4)::INT, sum(f.doc_count), "
-        "count(*) FROM term_freq f JOIN _cterms t USING (source, section, term) GROUP BY ALL"
-    ).fetchall()
-    out: dict[tuple[str, str], dict[int, tuple[float, float]]] = {}
-    for src, sec, term, y, c, n_present in rows:
-        n_sub, n = full[(src, sec)][y]
-        if n_sub != need[(src, sec)]:
-            continue
-        c = min(c + (n_sub - n_present) * (min_doc_count - 1), n)
-        out.setdefault((src, f"{sec}|{term}"), {})[y] = (float(c), float(n))
-    return out
+    result: dict[str, dict[tuple[str, str], dict[int, tuple[float, float]]]] = {}
+    for grid in sorted(grids):
+        expr = GRID_SQL[grid]
+        tot = con.execute(
+            f"SELECT source, section, {expr} g, count(*) n_sub, sum(total_docs) n "
+            "FROM (SELECT DISTINCT source, section, period, total_docs FROM term_freq "
+            "WHERE list_contains(?, source)) GROUP BY ALL",
+            [srcs],
+        ).fetchall()
+        full: dict[tuple[str, str], dict[int, tuple[int, float]]] = {}
+        for src, sec, g, n_sub, n in tot:
+            if g is None:
+                continue
+            full.setdefault((src, sec), {})[g] = (n_sub, n)
+        need = {k: max(v[0] for v in d.values()) for k, d in full.items()}
+        rows = con.execute(
+            f"SELECT t.source, t.section, t.term, {expr}, sum(f.doc_count), count(*) "
+            "FROM term_freq f JOIN _cterms t USING (source, section, term) GROUP BY ALL"
+        ).fetchall()
+        out: dict[tuple[str, str], dict[int, tuple[float, float]]] = {}
+        for src, sec, term, g, c, n_present in rows:
+            if g is None or (src, sec) not in full:
+                continue
+            n_sub, n = full[(src, sec)][g]
+            if n_sub != need[(src, sec)]:
+                continue
+            c = min(c + (n_sub - n_present) * (min_doc_count - 1), n)
+            out.setdefault((src, f"{sec}|{term}"), {})[g] = (float(c), float(n))
+        result[grid] = out
+    return result
+
+
+def text_grids(cfg: dict[str, Any], sources: set[str]) -> dict[str, str]:
+    """Grilla del término por fuente de texto (`rank.links.comove.text_grid`; por defecto A)."""
+    tg = cfg["rank"]["links"]["comove"].get("text_grid") or {}
+    return {s: tg.get(s, "A") for s in sources}
+
+
+def _lag_for(max_lag: Any, grid: str) -> int:
+    return int(max_lag[grid] if isinstance(max_lag, dict) else max_lag)
 
 
 def comove_validate(
     cfg: dict[str, Any],
-    counts: dict[tuple[str, str], dict[int, tuple[float, float]]],
+    counts: dict[str, dict[tuple[str, str], dict[int, tuple[float, float]]]],
     growth: dict[tuple[str, str], GrowthSeries],
     pairs: list[tuple[tuple[str, str], tuple[str, str]]],
     stats: dict[str, int] | None = None,
 ) -> dict[tuple[tuple[str, str], tuple[str, str]], dict[str, Any]]:
     """Prueba de co-movimiento de los pares sugeridos por títulos: una sola familia BH.
 
-    Alineación de frecuencias: la serie (M, Q o A) se agrega a la frecuencia del término (anual)
-    sumando su crecimiento log de los años completos; el término nunca se interpola. Los pares con
-    menos periodos comunes que el mínimo de la grilla de la serie no son pruebas: no entran a la
-    familia (inflarían el denominador de BH sin poder), pero se cuentan en `stats`.
-    `stats` (opcional) recibe los conteos por etapa del embudo."""
+    Alineación de frecuencias: cada par se compara en la grilla MÁS GRUESA entre la del término
+    (`rank.links.comove.text_grid`: Federal Register trimestral, EDGAR anual) y la nativa de la
+    serie (M, Q o A). La serie se agrega a esa grilla sumando su crecimiento log de los periodos
+    completos; el término nunca se interpola (una serie anual con un término trimestral se prueba
+    en anual, con el término agregado a años). `counts` trae los conteos del término por grilla.
+    Los pares con menos periodos comunes que el mínimo de su grilla (`min_overlap_by_grid`) no son
+    pruebas: no entran a la familia (inflarían el denominador de BH sin poder), pero se cuentan en
+    `stats`. Los índices de bloques son los mismos dentro de cada grilla y todos los p se corrigen
+    juntos (una sola familia BH). `stats` (opcional) recibe los conteos por etapa del embudo."""
     cm = cfg["rank"]["links"]["comove"]
     st = stats if stats is not None else {}
     st.update({"pairs_in": len(pairs), "with_data": 0, "enough_overlap": 0, "tested": 0, "bh": 0})
-    usable = [(t, s) for t, s in pairs if t in counts and s in growth]
-    st["with_data"] = len(usable)
-    if not usable:
-        return {}
-    term_ch = {t: term_annual_change(counts[t]) for t, _ in usable}
-    ser_gr = {
-        s: series_annual_growth(growth[s].growth, growth[s].last_index, growth[s].grid)
-        for _, s in usable
-    }
-    years = sorted(
-        {y for d in term_ch.values() for y in d} | {y for d in ser_gr.values() for y in d}
-    )
-    axis = list(range(years[0], years[-1] + 1))
+    tgrid = text_grids(cfg, {t[0] for t, _ in pairs})
     by_grid = cm.get("min_overlap_by_grid", {})
-    params = ComoveParams(
-        cm["max_lag"], cm["min_overlap"], cm["n_resamples"], cm["block_length"], cm["seed"]
+    prepared: dict[str, list[tuple[tuple[str, str], tuple[str, str], dict, dict]]] = defaultdict(
+        list
     )
-    vecs, mins, keep = [], [], []
-    for t, s in usable:
-        a, b = on_axis(term_ch[t], axis), on_axis(ser_gr[s], axis)
-        mo = int(by_grid.get(growth[s].grid, cm["min_overlap"]))
-        if max_overlap(a, b, params.max_lag) >= mo:
-            vecs.append((a, b))
-            mins.append(mo)
-            keep.append((t, s))
-    st["enough_overlap"] = st["tested"] = len(keep)
-    res = comove_family(vecs, params, mins)
+    for t, s in pairs:
+        if s not in growth:
+            continue
+        cg = coarser(tgrid[t[0]], growth[s].grid)
+        ch = counts.get(cg, {}).get(t)
+        if ch is None:
+            continue
+        g = growth[s]
+        prepared[cg].append(
+            (t, s, term_annual_change(ch), series_grid_growth(g.growth, g.last_index, g.grid, cg))
+        )
+        st["with_data"] += 1
+    if not prepared:
+        return {}
+    groups, keys = [], []
+    for cg in sorted(prepared):
+        rows = prepared[cg]
+        years = sorted({y for _, _, tc, sg in rows for y in (*tc, *sg)})
+        axis = list(range(years[0], years[-1] + 1))
+        lag = _lag_for(cm["max_lag"], cg)
+        params = ComoveParams(
+            lag, cm["min_overlap"], cm["n_resamples"], cm["block_length"], cm["seed"]
+        )
+        mo = int(by_grid.get(cg, cm["min_overlap"]))
+        vecs, mins, keep = [], [], []
+        for t, s, tc, sg in rows:
+            a, b = on_axis(tc, axis), on_axis(sg, axis)
+            if max_overlap(a, b, lag) >= mo:
+                vecs.append((a, b))
+                mins.append(mo)
+                keep.append((t, s))
+        st[f"tested_grid_{cg}"] = len(keep)
+        if keep:
+            groups.append((vecs, params, mins))
+            keys.append((cg, keep))
+    st["enough_overlap"] = st["tested"] = sum(len(k) for _, k in keys)
+    results = comove_joint(groups)
     q_link = float(cfg["fdr"]["q"])
-    st["bh"] = sum(r["q_bh"] <= q_link for r in res)
-    return dict(zip(keep, res, strict=True))
+    out: dict[tuple[tuple[str, str], tuple[str, str]], dict[str, Any]] = {}
+    for (cg, keep), res in zip(keys, results, strict=True):
+        for pair, r in zip(keep, res, strict=True):
+            out[pair] = {**r, "grid": cg}
+    st["bh"] = sum(r["q_bh"] <= q_link for r in out.values())
+    return out
 
 
 # --- corrida -------------------------------------------------------------------------------------
@@ -829,7 +893,12 @@ def rank_run(
     cstats: dict[str, int] = {}
     comove = comove_validate(
         cfg,
-        term_annual_counts(con, txt_signals, cfg["text"]["min_doc_count"]),
+        term_grid_counts(
+            con,
+            txt_signals,
+            cfg["text"]["min_doc_count"],
+            {"A", *text_grids(cfg, {x["source"] for x in txt_signals}).values()},
+        ),
         growth,
         suggested,
         cstats,

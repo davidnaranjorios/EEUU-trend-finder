@@ -331,6 +331,16 @@ def _validate_rank(r: dict[str, Any]) -> None:
         raise ConfigError("rank.rate_effect.max_lag debe ser un entero >= 0")
     if not isinstance(re_.get("min_drop"), int | float) or not 0 < re_["min_drop"] <= 1:
         raise ConfigError("rank.rate_effect.min_drop debe estar en (0, 1]")
+    cm = (r.get("links") or {}).get("comove") or {}
+    tg = cm.get("text_grid") or {}
+    if not isinstance(tg, dict) or any(g not in ("Q", "A") for g in tg.values()):
+        raise ConfigError("rank.links.comove.text_grid: una grilla Q o A por fuente de texto")
+    mo = cm.get("min_overlap_by_grid") or {}
+    for grid in {"A", *tg.values()}:
+        if not isinstance(mo.get(grid), int) or mo[grid] < 4:
+            raise ConfigError(
+                f"rank.links.comove.min_overlap_by_grid.{grid} debe ser un entero >= 4"
+            )
     lk = r.get("links") or {}
     q = lk.get("null_quantile")
     if not isinstance(q, int | float) or not 0 < q < 1:

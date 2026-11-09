@@ -120,3 +120,35 @@ de industria no se perdía en la ingesta: ya viaja en el `series_id`.
   (o el workflow Reporte): no hay que re-ingerir metadatos de BEA ni de Census.
 - Efecto esperado sobre el embudo: más señales de BEA y Census con NAICS, lo que permite que los
   clusters se agrupen en fenómenos (ADR 0013, sección 3).
+
+## 9. Enlaces texto–serie trimestrales para el Federal Register (rama `claude/texto-trimestral`)
+Corrida 1567bd3a: embudo de enlaces 63 → 0 con señal, segundo pase +14 → ventana 14 → solape 11 →
+testeados 11 → BH 0. El test de co-movimiento usaba Δ logit **anual** del término: con ~25 años de
+Federal Register quedaban ~6–15 puntos y casi nada de potencia.
+
+- **No hace falta reprocesar ni re-ingerir.** `term_freq` del Federal Register ya guarda **meses**
+  (`2024-05`) y el de EDGAR **trimestres** (`2024Q1`) (ADR 0005); el detector de texto ya los agrega
+  a su grilla. Solo la agregación del test de co-movimiento era anual. Sin costo extra de Actions
+  salvo una segunda consulta de agregación sobre `term_freq` de los términos con señal.
+- **`rank.links.comove.text_grid: {federal_register: Q, edgar: A}`.** El término se agrega a su
+  grilla (trimestres completos: 3 meses; años completos: 4 trimestres) y **nunca se interpola**. Cada
+  par se prueba en la grilla MÁS GRUESA entre la del término y la nativa de la serie: un término
+  trimestral con una serie mensual o trimestral se prueba en trimestral; con una serie anual, en
+  anual (el término se agrega a años). EDGAR sigue anual (10-K anuales).
+- **Parámetros por grilla de comparación:** `min_overlap_by_grid: {A: 6, Q: 24}` (antes estaba
+  indexado por la grilla nativa de la serie y valía 8 para M y Q; ahora un par M/Q anual pide 6, lo
+  que lo hace algo menos exigente en solape pero con la misma calibración bootstrap) y
+  `max_lag: {A: 2, Q: 4}`.
+- **Estadística.** Mismo estadístico (máx. |ρ| sobre rezagos entre Δ logit del término y el
+  crecimiento de la serie) y mismo stationary bootstrap por bloques, con índices compartidos por
+  grilla y largo de eje. Una sola familia BH sobre todos los pares (trimestrales y anuales juntos);
+  cada fila registra el tamaño de la familia completa (`comove_joint`).
+- **Medición (tests sintéticos).** Término trimestral ligado a una serie mensual con relación 0,5:
+  trimestral detecta 9 de 12, anual 2 de 12; mediana de p 0,001 frente a 0,13. Con relación 0 sobre
+  ruido puro, la tasa de descubrimientos queda bajo q. Las cotas de los tests dejan margen sobre
+  esas mediciones.
+- **Embudo esperado.** Con ~100 trimestres por término (frente a ~25 años) los pares con términos
+  del Federal Register pasan de tener ~6–15 puntos a ~24–100, así que `comove_enough_overlap` y
+  `comove_tested` deberían subir y `comove_bh` dejar de ser 0 donde haya relación real. Nuevas
+  claves en `link_funnel`: `comove_tested_grid_Q` y `comove_tested_grid_A`.
+- Los términos de EDGAR no cambian de grilla; no se esperan cambios en sus enlaces.

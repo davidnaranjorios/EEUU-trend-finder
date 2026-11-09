@@ -314,10 +314,23 @@ rank:
     # segunda fuente) si pasa la prueba de co-movimiento: Δ logit anual del término contra el
     # crecimiento anual de la serie, rezagos ±max_lag, stationary bootstrap por bloques con
     # índices compartidos y su propia familia BH (q = fdr.q).
-    # min_overlap_by_grid: años comunes mínimos según la grilla nativa de la serie (la del término
-    # es anual y no se interpola). Una serie anual aporta menos años que una mensual agregada.
-    comove: {max_lag: 2, min_overlap: 8, min_overlap_by_grid: {M: 8, Q: 8, A: 6}, n_resamples: 999,
-             block_length: auto, seed: 20261104}
+    # Grilla de comparación. El término se agrega a su grilla (`text_grid`: Federal Register
+    # trimestral, EDGAR anual: 10-K anuales) y nunca se interpola; cada par se prueba en la más
+    # gruesa entre la del término y la nativa de la serie (una serie anual con un término trimestral
+    # se prueba en anual). El trimestral da ~4 veces más puntos que el anual: con ~25 años de
+    # Federal Register, ~100 trimestres en lugar de ~25 años.
+    # min_overlap_by_grid: periodos comunes mínimos de la grilla de comparación (A: años; Q:
+    # trimestres). max_lag: entero o por grilla (en periodos de esa grilla).
+    # Mismo bootstrap por bloques con índices compartidos dentro de cada grilla; una sola familia
+    # BH sobre todos los pares.
+    comove:
+      text_grid: {federal_register: Q, edgar: A}
+      max_lag: {A: 2, Q: 4}
+      min_overlap: 8
+      min_overlap_by_grid: {A: 6, Q: 24}
+      n_resamples: 999
+      block_length: auto
+      seed: 20261104
     seed: 20261103
   text_only:
     enabled: true                 # términos parecidos emergentes en ≥ 2 fuentes de texto

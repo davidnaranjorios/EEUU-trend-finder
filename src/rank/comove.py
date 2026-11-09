@@ -73,6 +73,50 @@ def max_overlap(a: np.ndarray, b: np.ndarray, max_lag: int) -> int:
     return best
 
 
+def comove_raw(
+    pairs: list[tuple[np.ndarray, np.ndarray]],
+    params: ComoveParams,
+    min_overlaps: list[int] | None = None,
+    salt: int = 0,
+) -> tuple[list[float], list[int], np.ndarray]:
+    """(stat, rezago, p) de cada par sobre un eje común de largo N, sin corregir por familia.
+
+    Los índices de bloques del stationary bootstrap son los mismos para todos los pares del eje
+    (`salt` separa ejes de la misma longitud y distinta grilla)."""
+    if not pairs:
+        return [], [], np.zeros(0)
+    mins = min_overlaps or [params.min_overlap] * len(pairs)
+    n = pairs[0][0].size
+    block = family_block_length(
+        [np.nan_to_num(b) for _, b in pairs[: min(len(pairs), 2000)]], params.block_length
+    )
+    idx = stationary_indices(n, params.n_resamples, block, (params.seed, n, len(pairs), salt))
+    obs, lags, p = [], [], []
+    for (a, b), mo in zip(pairs, mins, strict=True):
+        stat, lag = comove_stat(a, b, params.max_lag, mo)
+        obs.append(stat)
+        lags.append(lag)
+        null = stat_matrix(a, b[idx], params.max_lag, mo)[0]
+        p.append((1 + np.sum(null >= stat)) / (null.size + 1))
+    return obs, lags, np.array(p)
+
+
+def _rows(
+    obs: list[float], lags: list[int], p_arr: np.ndarray, q_bh: np.ndarray, q_by: np.ndarray, m: int
+) -> list[dict[str, float | int | str]]:
+    return [
+        {
+            "stat": obs[i],
+            "lag": lags[i],
+            "p": float(p_arr[i]),
+            "q_bh": float(q_bh[i]),
+            "q_by": float(q_by[i]),
+            "n_tests": m,
+        }
+        for i in range(len(obs))
+    ]
+
+
 def comove_family(
     pairs: list[tuple[np.ndarray, np.ndarray]],
     params: ComoveParams,
@@ -82,44 +126,54 @@ def comove_family(
 
     `min_overlaps` (opcional) fija el mínimo de periodos comunes de cada par; por defecto,
     `params.min_overlap`. Devuelve por par: stat, lag, p, q_bh, q_by, n_tests."""
+    obs, lags, p_arr = comove_raw(pairs, params, min_overlaps)
     if not pairs:
         return []
-    mins = min_overlaps or [params.min_overlap] * len(pairs)
-    n = pairs[0][0].size
-    block = family_block_length(
-        [np.nan_to_num(b) for _, b in pairs[: min(len(pairs), 2000)]], params.block_length
-    )
-    idx = stationary_indices(n, params.n_resamples, block, (params.seed, n, len(pairs)))
-    obs, lags, p = [], [], []
-    for (a, b), mo in zip(pairs, mins, strict=True):
-        stat, lag = comove_stat(a, b, params.max_lag, mo)
-        obs.append(stat)
-        lags.append(lag)
-        null = stat_matrix(a, b[idx], params.max_lag, mo)[0]
-        p.append((1 + np.sum(null >= stat)) / (null.size + 1))
-    p_arr = np.array(p)
-    q_bh, q_by = bh_adjust(p_arr), by_adjust(p_arr)
-    return [
-        {
-            "stat": obs[i],
-            "lag": lags[i],
-            "p": float(p_arr[i]),
-            "q_bh": float(q_bh[i]),
-            "q_by": float(q_by[i]),
-            "n_tests": len(pairs),
-        }
-        for i in range(len(pairs))
-    ]
+    return _rows(obs, lags, p_arr, bh_adjust(p_arr), by_adjust(p_arr), len(pairs))
 
 
-# --- Datos: ambos lados en una grilla anual común ---------------------------------------------
+def comove_joint(
+    groups: list[tuple[list[tuple[np.ndarray, np.ndarray]], ComoveParams, list[int]]],
+) -> list[list[dict[str, float | int | str]]]:
+    """Una sola familia BH sobre varios ejes (p. ej. pares trimestrales y anuales).
+
+    Cada grupo es (pares, parámetros, mínimos de solape) sobre su propio eje, con sus propios
+    índices de bloques compartidos; los p se juntan y se corrigen todos a la vez, y cada fila
+    registra el tamaño de la familia completa."""
+    raws = [comove_raw(pairs, prm, mins, salt=i) for i, (pairs, prm, mins) in enumerate(groups)]
+    p_all = np.concatenate([r[2] for r in raws]) if raws else np.zeros(0)
+    if p_all.size == 0:
+        return [[] for _ in groups]
+    q_bh, q_by = bh_adjust(p_all), by_adjust(p_all)
+    out, lo = [], 0
+    for obs, lags, p_arr in raws:
+        hi = lo + len(obs)
+        out.append(_rows(obs, lags, p_arr, q_bh[lo:hi], q_by[lo:hi], p_all.size))
+        lo = hi
+    return out
+
+
+# --- Datos: ambos lados en una grilla común (el término nunca se interpola) -----------------------
 
 PER_YEAR = {"M": 12, "Q": 4, "A": 1}
+GRID_ORDER = {"M": 0, "Q": 1, "A": 2}
 
 
-def series_annual_growth(growth: np.ndarray, last_index: int, grid: str) -> dict[int, float]:
-    """Crecimiento anual (suma del crecimiento log de la grilla nativa) de los años completos."""
-    per = PER_YEAR[grid]
+def coarser(a: str, b: str) -> str:
+    """La grilla más gruesa de las dos: la serie se agrega a ella, el término nunca se interpola."""
+    return a if GRID_ORDER[a] >= GRID_ORDER[b] else b
+
+
+def series_grid_growth(
+    growth: np.ndarray, last_index: int, native: str, target: str
+) -> dict[int, float]:
+    """Crecimiento en la grilla `target` (suma del crecimiento log de la grilla nativa).
+
+    Solo periodos completos. Índices: años (A), año·4 + trimestre (Q) o año·12 + mes (M).
+    `target` no puede ser más fina que `native` (no se interpola)."""
+    if GRID_ORDER[target] < GRID_ORDER[native]:
+        raise ValueError(f"no se puede llevar una serie {native} a la grilla más fina {target}")
+    per = PER_YEAR[native] // PER_YEAR[target]
     first = last_index - growth.size + 1
     acc: dict[int, list[float]] = {}
     for j, g in enumerate(growth):
@@ -128,13 +182,24 @@ def series_annual_growth(growth: np.ndarray, last_index: int, grid: str) -> dict
     return {y: float(np.sum(v)) for y, v in acc.items() if len(v) == per}
 
 
+def series_annual_growth(growth: np.ndarray, last_index: int, grid: str) -> dict[int, float]:
+    """Crecimiento anual (suma del crecimiento log de la grilla nativa) de los años completos."""
+    return series_grid_growth(growth, last_index, grid, "A")
+
+
 def term_annual_change(counts: dict[int, tuple[float, float]]) -> dict[int, float]:
-    """Δ logit (Jeffreys) de la proporción anual de documentos; `counts`: año -> (c, n)."""
+    """Δ logit (Jeffreys) de la proporción de documentos entre periodos consecutivos.
+
+    `counts`: índice de periodo (año, o año·4 + trimestre) -> (c, n). Sirve para cualquier grilla
+    de índices enteros consecutivos."""
     logit = {}
     for y, (c, n) in counts.items():
         p = (c + 0.5) / (n + 1.0)
         logit[y] = float(np.log(p / (1 - p)))
     return {y: logit[y] - logit[y - 1] for y in logit if y - 1 in logit}
+
+
+term_change = term_annual_change
 
 
 def on_axis(values: dict[int, float], axis: list[int]) -> np.ndarray:
