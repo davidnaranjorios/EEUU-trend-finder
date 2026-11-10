@@ -69,8 +69,9 @@ Census (cobertura Census 0 %, BLS 74,9 %).
 (ECEC), no el Employment Cost Index (`CI`) como se supuso: la página oficial de formatos de id de
 BLS (https://www.bls.gov/help/hlpforma.htm) da `CMU1010000100000P` con «datatype code» en la
 posición 17. Sus unidades son «Cost of compensation (Cost per hour worked)»: costo laboral por hora.
-Regla: se amplía `costo_laboral_por_hora` (unidades «cost per hour [worked]»), sin prefijo; las
-series ECEC en porcentaje del total ya caían en `tasa` por sus unidades.
+Regla: se amplía `costo_laboral_por_hora` (unidades «cost per hour [worked]»), sin prefijo; una
+serie ECEC cuyas unidades sean un porcentaje sigue cayendo en `tasa`, porque esa regla va antes
+(no verificado con datos reales).
 
 **BLS, 35 series `LNU…` («Population Level»):** conteos de personas de la CPS. Regla nueva
 `poblacion_cps` (fuente bls, prefijo oficial `LN[SU]`, título «population level») con clase
