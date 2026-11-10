@@ -49,7 +49,7 @@ def is_demand(e: Evidence, params: WatchParams) -> bool:
     DEFLACTADO conserva el cambio: |efecto real| ≥ `min_effect` y el mismo signo (ADR 0018).
     Sin efecto real medible no se puede afirmar que no sea inflación: no cuenta."""
     if e.measure_kind == "cantidad":
-        return True
+        return e.measure_subtype != "poblacion"  # la población es demografía, no demanda
     if e.measure_kind != "valor" or e.real_effect is None:
         return False
     return abs(e.real_effect) >= params.min_effect and e.real_effect * e.effect_size > 0
@@ -84,10 +84,11 @@ def assess_watch(
         return Watch(False, "sin_senal")
     demand = [e for e in sig if is_demand(e, params)]
     if not demand:
-        nominal = any(e.measure_kind == "valor" for e in sig) and not any(
-            e.measure_kind == "cantidad" for e in sig
-        )
-        return Watch(False, "solo_valor_nominal" if nominal else "sin_evidencia_de_demanda")
+        nominal = any(e.measure_kind == "valor" for e in sig)
+        pop = any(e.measure_kind == "cantidad" and e.measure_subtype == "poblacion" for e in sig)
+        if nominal:
+            return Watch(False, "solo_valor_nominal")
+        return Watch(False, "solo_poblacion" if pop else "sin_evidencia_de_demanda")
     clean = [
         e
         for cid, ev in cluster_evidence.items()

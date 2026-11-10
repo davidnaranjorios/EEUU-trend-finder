@@ -30,7 +30,10 @@ from src.config import REPO_ROOT
 
 DEFAULT_PATH = REPO_ROOT / "config" / "measure_kind.yaml"
 KINDS = ("precio", "cantidad", "valor", "tasa", "otro")
-SUBTYPES = ("costo_laboral",)
+# Subtipo -> clase de medida en la que se admite: el precio del trabajo es un precio; la
+# población (conteo de personas de la CPS) es una cantidad, pero demografía y no demanda de
+# mercado (ADR 0018).
+SUBTYPES = {"costo_laboral": "precio", "poblacion": "cantidad"}
 # Una serie de cada clase cuenta como "demanda" si es cantidad o valor real; precio y tasa no.
 DEMAND_KINDS = ("cantidad", "valor")
 MATCH_KEYS = frozenset({"source", "id_regex", "units_regex", "title_regex"})
@@ -75,8 +78,8 @@ def validate_table(data: Any) -> list[Rule]:
         if r["kind"] not in KINDS:
             errors.append(f"{where}.kind debe ser uno de {KINDS}")
         sub = r.get("subtype")
-        if sub is not None and (sub not in SUBTYPES or r["kind"] != "precio"):
-            errors.append(f"{where}.subtype solo admite {SUBTYPES} y solo en kind precio")
+        if sub is not None and SUBTYPES.get(sub) != r["kind"]:
+            errors.append(f"{where}.subtype solo admite {SUBTYPES} (cada uno en su clase)")
         m = r["match"]
         if not isinstance(m, dict) or not m or set(m) - MATCH_KEYS:
             errors.append(f"{where}.match: claves permitidas {sorted(MATCH_KEYS)}")

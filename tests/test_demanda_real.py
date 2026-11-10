@@ -42,10 +42,10 @@ def _growth(infl, *, real_jump=0.0, noise=0.0005, seed=0):
     return GrowthSeries(g, LAST, "M", scale=0.001, persistence=3)
 
 
-def ev(kind, *, effect=2.0, real=None, agency="bls", q=1e-6):
+def ev(kind, *, effect=2.0, real=None, agency="bls", q=1e-6, sub=None):
     return Evidence(
         "series", "bls", "V", frozenset({agency}), q, effect, ("slope",), True, WS, WE,
-        measure_kind=kind, real_effect=real,
+        measure_kind=kind, measure_subtype=sub, real_effect=real,
     )  # fmt: skip
 
 
@@ -190,3 +190,14 @@ def test_rank_run_records_real_effect_and_coverage_without_changing_the_ranking(
 
 def test_date_helper_is_consistent():
     assert grid_date(LAST, "M") == date(2024, 12, 1)
+
+
+def test_population_counts_are_quantities_but_not_market_demand():
+    w = watch([ev("cantidad", sub="poblacion")])
+    assert not w.eligible and w.reason == "solo_poblacion"
+    # Si además hay una cantidad que no es población, esa sí cuenta (y la población no suma).
+    w = watch([ev("cantidad", sub="poblacion"), ev("cantidad")])
+    assert w.eligible and w.n_demand_series == 1
+    # Un valor nominal tiene prioridad en el motivo: el problema ahí es la inflación.
+    w = watch([ev("cantidad", sub="poblacion"), ev("valor", real=0.1)])
+    assert not w.eligible and w.reason == "solo_valor_nominal"

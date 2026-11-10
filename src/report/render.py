@@ -255,7 +255,9 @@ MEASURE_LABELS = {
 def measure_label(kind: str | None, subtype: str | None = None) -> str:
     """ "precio (costo laboral)", "cantidad"...: la clase de medida de una serie (ADR 0014)."""
     base = MEASURE_LABELS.get(kind or "otro", "sin clasificar")
-    return f"{base} (costo laboral)" if subtype == "costo_laboral" else base
+    if subtype == "costo_laboral":
+        return f"{base} (costo laboral)"
+    return f"{base} (población)" if subtype == "poblacion" else base
 
 
 def _measure_mix(mix: dict[str, int]) -> str:

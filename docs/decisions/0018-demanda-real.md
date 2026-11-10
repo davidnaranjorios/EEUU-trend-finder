@@ -62,7 +62,40 @@ Ambas cambian la calibración de la prueba de pendiente sobre el residuo y requi
 sobre ruido (como en el ADR 0013) antes de aplicarse; por eso no se aplican aquí.
 
 ## 3. Cobertura de la clase de medida
-(Ver sección siguiente de este ADR cuando se complete; depende de la lista de series `otro`.)
+**Medido (corrida 3361573d, explorador público):** 49 series con señal en `otro`: 43 de BLS y 6 de
+Census (cobertura Census 0 %, BLS 74,9 %).
+
+**BLS, 8 series `CMU…D`:** prefijo oficial `CM` = **Employer Costs for Employee Compensation**
+(ECEC), no el Employment Cost Index (`CI`) como se supuso: la página oficial de formatos de id de
+BLS (https://www.bls.gov/help/hlpforma.htm) da `CMU1010000100000P` con «datatype code» en la
+posición 17. Sus unidades son «Cost of compensation (Cost per hour worked)»: costo laboral por hora.
+Regla: se amplía `costo_laboral_por_hora` (unidades «cost per hour [worked]»), sin prefijo; las
+series ECEC en porcentaje del total ya caían en `tasa` por sus unidades.
+
+**BLS, 35 series `LNU…` («Population Level»):** conteos de personas de la CPS. Regla nueva
+`poblacion_cps` (fuente bls, prefijo oficial `LN[SU]`, título «population level») con clase
+`cantidad` y **subtipo nuevo `poblacion`**, que **no cuenta como evidencia de demanda** en la lista
+en observación (es demografía y no demanda de mercado; nuevo motivo `solo_poblacion`). Otras series
+de la CPS (p. ej. «Employment Level») no se tocan: el patrón es solo «population level».
+Decisión a confirmar por David: la regla usa el título («population level») porque la página
+oficial de formatos de BLS no documenta el formato de id `LN` ni su código de condición laboral, así
+que no se pudo apoyar en un código oficial; la palabra se admite en el vocabulario del test como
+nombre oficial de la medida de la CPS, no como tema.
+
+**Census, 6 series QFR (`timeseries:eits:qfr:…:data_type_code=219|322|D119`): SIN CAMBIO, siguen en
+`otro`.** El significado de `data_type_code` no está publicado de forma que se pueda verificar:
+`variables.json` del dataset solo da la etiqueta «item type» (sin valores ni variable `*_LABEL`), la
+página de consulta de Census no define 219, 322 ni D119, y la documentación histórica del QFR
+(`historic-documentation-naics.pdf`) usa otros códigos de partida (SALES, TOTASSET…) sin esos
+números. Sin significado verificado no se inventa una clase (valor en dólares frente a razón). Hace
+falta la tabla oficial de tipos de dato de EITS/QFR (Documento técnico del QFR en
+https://www.census.gov/econ/qfr/ o la oficina del QFR); con ella, una regla por
+`data_type_code` es trivial. Queda como test (`test_census_qfr_item_codes_stay_unclassified…`) para
+que el día que se añada la regla el cambio sea deliberado.
+
+**Efecto esperado en la cobertura (sin datos, solo por los ids recibidos):** las 43 series de BLS
+pasan a clasificarse (8 precio/costo laboral, 35 cantidad/población): BLS 100 % de esas señales. Census
+queda en 0 %. La cobertura real se mide en la próxima corrida (`summary.measure_kind_coverage`).
 
 ## Límites
 - Sin corrida real todavía: cuántos fenómenos salen de la lista al exigir efecto real se ve en
