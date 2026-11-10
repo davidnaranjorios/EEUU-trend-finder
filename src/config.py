@@ -331,6 +331,11 @@ def _validate_rank(r: dict[str, Any]) -> None:
         raise ConfigError("rank.rate_effect.max_lag debe ser un entero >= 0")
     if not isinstance(re_.get("min_drop"), int | float) or not 0 < re_["min_drop"] <= 1:
         raise ConfigError("rank.rate_effect.min_drop debe estar en (0, 1]")
+    if not isinstance(re_.get("include_level"), bool):
+        raise ConfigError("rank.rate_effect.include_level debe ser true o false")
+    mr = re_.get("min_rows_by_grid") or {}
+    if any(not isinstance(mr.get(g), int) or mr[g] < 8 for g in ("M", "Q", "A")):
+        raise ConfigError("rank.rate_effect.min_rows_by_grid: un entero >= 8 por grilla M, Q y A")
     cm = (r.get("links") or {}).get("comove") or {}
     tg = cm.get("text_grid") or {}
     if not isinstance(tg, dict) or any(g not in ("Q", "A") for g in tg.values()):
