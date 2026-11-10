@@ -75,3 +75,9 @@ La primera versión no casaba el lado Z.1: HELOC `BOGZ1FL703065125Q` es sector 7
   Call Report 5300 (uniones de crédito) se agregarían como adaptadores `SourceAdapter` en
   `src/ingest/` con su propia agencia y origen (`equifax_ccp`, `ncua_5300`), más reglas en este
   archivo para las series de la Z.1 que derivan de ellos. Requiere aprobación antes de ingestar.
+
+## Revisión 2026-11-10: índices de precios de BEA
+Los índices de precios y deflactores de BEA (NIPA, NIUnderlyingDetail, GDPbyIndustry,
+UnderlyingGDPbyIndustry, y vía FRED con agencia BEA) heredan el origen de BLS además del de BEA
+(`also_origin` en `config/data_origin.yaml`). Verificación, citas y límites en ADR 0013, sección 10.
+
