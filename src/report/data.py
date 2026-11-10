@@ -124,6 +124,7 @@ def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list
                 "effect": r.get("watch_effect"),
                 "q": r.get("watch_q"),
                 "n_demand_series": r.get("watch_n_demand_series"),
+                "real_effect": r.get("watch_real_effect"),
                 "naics": [
                     {"naics": c, "name": names.get(c), "weight": w}
                     for c, w in json.loads(r["naics_json"])

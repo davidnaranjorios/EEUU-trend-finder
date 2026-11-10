@@ -256,7 +256,9 @@ MEASURE_LABELS = {
 def measure_label(kind: str | None, subtype: str | None = None) -> str:
     """ "precio (costo laboral)", "cantidad"...: la clase de medida de una serie (ADR 0014)."""
     base = MEASURE_LABELS.get(kind or "otro", "sin clasificar")
-    return f"{base} (costo laboral)" if subtype == "costo_laboral" else base
+    if subtype == "costo_laboral":
+        return f"{base} (costo laboral)"
+    return f"{base} (población)" if subtype == "poblacion" else base
 
 
 def _measure_mix(mix: dict[str, int]) -> str:
@@ -640,14 +642,17 @@ def _watch_card(p: dict[str, Any]) -> str:
     ws, we = p["window"]
     win = f" · ventana {esc(ws)} a {esc(we)}" if ws and we else ""
     clusters = " ".join(f"<code>{esc(c)}</code>" for c in p["clusters"])
+    re_ = p.get("real_effect")
+    real = f" (real, deflactado: {fnum(abs(re_), 2)})" if re_ is not None else ""
     return f"""<section class="card watch" id="{esc(p["phenomenon_id"])}">
 <header><span class="state watch-flag">🟡 En observación</span>
-<span>efecto {fnum(p["effect"], 2)} · q {fnum(p["q"], 4)}</span>
+<span>efecto {fnum(p["effect"], 2)}{real} · q {fnum(p["q"], 4)}</span>
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
 {esc(p["direction"])}{win}</span></header>
 <p class="plain watch-warning"><strong>Un solo origen: no triangulado.</strong> No es un candidato \
 del ranking ni entra al score; pasa FDR y tiene {p["n_demand_series"]} serie(s) de cantidad o \
-valor sin efecto de tasas ni de inflación.</p>
+valor real (el valor nominal solo cuenta si su crecimiento deflactado conserva el efecto), sin \
+efecto de tasas ni de inflación.</p>
 <div>{_sources_chips(p["sources"])}</div>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>

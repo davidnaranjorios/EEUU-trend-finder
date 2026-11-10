@@ -321,6 +321,8 @@ RANK_EVIDENCE = TableSpec(
         # Clase de medida de la serie (rank/measure.py): precio, cantidad, valor, tasa u otro.
         ("measure_kind", pa.string(), True),
         ("measure_subtype", pa.string(), True),
+        # Efecto estandarizado del crecimiento deflactado de una serie `valor` (ADR 0018).
+        ("real_effect", pa.float64(), True),
     ),
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
@@ -378,6 +380,8 @@ RANK_PHENOMENA = TableSpec(
         ("watch_effect", pa.float64(), True),
         ("watch_q", pa.float64(), True),
         ("watch_n_demand_series", pa.int64(), True),
+        # Mayor |efecto real| (deflactado) de sus series `valor` que cuentan como demanda.
+        ("watch_real_effect", pa.float64(), True),
     ),
     key=("run_id", "phenomenon_id"),
 )

@@ -23,7 +23,8 @@ from dataclasses import dataclass
 
 from src.rank.triangulate import Candidate, Evidence
 
-# Clases de medida que cuentan como evidencia de demanda (ADR 0014).
+# Clases de medida que pueden ser evidencia de demanda (ADR 0014); `valor` solo si su efecto
+# sobrevive al deflactor (ADR 0018).
 DEMAND_KINDS = frozenset({"cantidad", "valor"})
 
 
@@ -40,6 +41,25 @@ class Watch:
     effect: float | None = None  # mayor |efecto| de sus series de demanda
     q_value: float | None = None  # menor q de esas series
     n_demand_series: int = 0
+    real_effect: float | None = None  # mayor |efecto real| de sus series `valor` (ADR 0018)
+
+
+def is_demand(e: Evidence, params: WatchParams) -> bool:
+    """Una serie `cantidad` cuenta. Una `valor` (dólares corrientes) solo si su crecimiento
+    DEFLACTADO conserva el cambio: |efecto real| ≥ `min_effect` y el mismo signo (ADR 0018).
+    Sin efecto real medible no se puede afirmar que no sea inflación: no cuenta."""
+    if e.measure_kind == "cantidad":
+        return e.measure_subtype != "poblacion"  # la población es demografía, no demanda
+    if e.measure_kind != "valor" or e.real_effect is None:
+        return False
+    return abs(e.real_effect) >= params.min_effect and e.real_effect * e.effect_size > 0
+
+
+def strength(e: Evidence) -> float:
+    """Efecto con el que se compara el umbral: el real para `valor`, el del detector si no."""
+    return (
+        e.real_effect if e.measure_kind == "valor" and e.real_effect is not None else e.effect_size
+    )
 
 
 def assess_watch(
@@ -62,9 +82,13 @@ def assess_watch(
     sig = [e for e in series if e.q_value <= params.q]
     if not sig:
         return Watch(False, "sin_senal")
-    demand = [e for e in sig if e.measure_kind in DEMAND_KINDS]
+    demand = [e for e in sig if is_demand(e, params)]
     if not demand:
-        return Watch(False, "sin_evidencia_de_demanda")
+        nominal = any(e.measure_kind == "valor" for e in sig)
+        pop = any(e.measure_kind == "cantidad" and e.measure_subtype == "poblacion" for e in sig)
+        if nominal:
+            return Watch(False, "solo_valor_nominal")
+        return Watch(False, "solo_poblacion" if pop else "sin_evidencia_de_demanda")
     clean = [
         e
         for cid, ev in cluster_evidence.items()
@@ -74,13 +98,15 @@ def assess_watch(
     ]
     if not clean:
         return Watch(False, "efecto_tasas_o_inflacion")
-    big = [e for e in clean if abs(e.effect_size) >= params.min_effect]
+    big = [e for e in clean if abs(strength(e)) >= params.min_effect]
     if not big:
         return Watch(False, "efecto_bajo")
+    reals = [abs(e.real_effect) for e in big if e.measure_kind == "valor" and e.real_effect]
     return Watch(
         True,
         None,
-        effect=max(abs(e.effect_size) for e in big),
+        effect=max(abs(strength(e)) for e in big),
         q_value=min(e.q_value for e in big),
         n_demand_series=len(big),
+        real_effect=max(reals) if reals else None,
     )

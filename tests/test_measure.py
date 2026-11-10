@@ -105,6 +105,34 @@ REAL = [
     ),
     ("bls", "CES0500000001", "ALL EMPLOYEES, THOUSANDS", "All employees", ("cantidad", None)),
     ("bls", "LNS14000000", "PERCENT OR RATE", "Unemployment Rate", ("tasa", None)),
+    # Ids reales de la corrida 3361573d que quedaban en `otro` (explorador público, 2026-11-10).
+    # CM = Employer Costs for Employee Compensation (ECEC): costo por hora trabajada.
+    *[
+        ("bls", sid, "Cost of compensation (Cost per hour worked)", "", ("precio", "costo_laboral"))
+        for sid in (
+            "CMU1140000200000D",
+            "CMU201G000510000D",
+            "CMU202G000510000D",
+            "CMU2130000200610D",
+            "CMU2140000500000D",
+            "CMU2210000100610D",
+            "CMU2215100200000D",
+            "CMU3020000300000D",
+        )
+    ],
+    # LN = CPS: población (conteo de personas, demografía y no demanda de mercado).
+    *[
+        ("bls", sid, "", f"(Unadj) Population Level - {grp}", ("cantidad", "poblacion"))
+        for sid, grp in (
+            ("LNU00000018", "16 Yrs. & over"),
+            ("LNU00000093", "25 Yrs. & over"),
+            ("LNU00015832", "Women, 16 Yrs. & over"),
+            ("LNU00024885", "20 Yrs. & over"),
+            ("LNU00069595", "Black or African American, 16 Yrs. & over"),
+        )
+    ],
+    # Otras series de la CPS que NO son población no se tocan por el mismo patrón.
+    ("bls", "LNU02000000", "", "(Unadj) Employment Level", ("otro", None)),
     # BEA: tipo oficial de tabla en el título
     (
         "bea",
@@ -242,6 +270,9 @@ DESCRIPTORS = {
     "import",
     "export",
     "cost",
+    "worked",
+    "population",
+    "level",
     # tasas y porcentajes
     "percent",
     "percentage",
@@ -283,7 +314,7 @@ DESCRIPTORS = {
 }
 # Prefijos oficiales de encuesta de BLS admitidos (CPI-U, CPI-W, C-CPI-U, PPI, precios de
 # importación y exportación, índice de costo laboral) y modificadores de ajuste estacional.
-ID_PREFIXES = {"CU", "CW", "SU", "PC", "WP", "EI", "CI"}
+ID_PREFIXES = {"CU", "CW", "SU", "PC", "WP", "EI", "CI", "LN"}
 
 
 def _words(pattern: str) -> set[str]:
@@ -344,6 +375,7 @@ def test_table_cannot_be_replaced_by_a_rules_file_inside_config_yaml():
         lambda d: d["rules"][0]["match"].update(units_regex="("),
         lambda d: d["rules"][0].update(subtype="otro_subtipo"),
         lambda d: d["rules"][0].update(subtype="costo_laboral"),  # kind tasa: no admite subtipo
+        lambda d: d["rules"][0].update(subtype="poblacion"),  # solo en cantidad
         lambda d: d["rules"].append(dict(d["rules"][0])),  # id repetido
         lambda d: d.update(rules=[]),
     ],
@@ -422,3 +454,23 @@ def test_demand_label_is_descriptive_and_shown_in_the_report():
     )
     assert measure_label("precio", "costo_laboral") == "precio (costo laboral)"
     assert measure_label(None) == "sin clasificar" and _measure_mix({}) == "—"
+
+
+# Census EITS/QFR: el significado de `data_type_code` (219, 322, D119) no está publicado en la API
+# (variables.json da solo la etiqueta "item type", sin valores ni variable *_LABEL; ADR 0018). Sin
+# significado verificado no se inventa una clase: siguen en `otro` hasta tener la tabla oficial.
+CENSUS_QFR_IDS = [
+    "timeseries:eits:qfr:cell_value:category_code=458:data_type_code=219",
+    "timeseries:eits:qfr:cell_value:category_code=513:data_type_code=219",
+    "timeseries:eits:qfr:cell_value:category_code=547:data_type_code=322",
+    "timeseries:eits:qfr:cell_value:category_code=547:data_type_code=D119",
+    "timeseries:eits:qfr:cell_value:category_code=PTS:data_type_code=322",
+    "timeseries:eits:qfr:cell_value:category_code=PTS:data_type_code=D119",
+]
+
+
+@pytest.mark.parametrize("sid", CENSUS_QFR_IDS)
+def test_census_qfr_item_codes_stay_unclassified_until_their_meaning_is_verified(sid):
+    code = sid.rsplit("=", 1)[1]
+    title = f"Quarterly Financial Report | Industry list: x | item type: {code}"
+    assert kind("census", sid, code, title) == ("otro", None)

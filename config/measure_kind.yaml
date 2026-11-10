@@ -25,7 +25,7 @@ rules:
   - id: costo_laboral_por_hora
     kind: precio
     subtype: costo_laboral
-    match: {units_regex: "(?i)(dollars?|cents) per hour|hourly (earnings|compensation|wages?)"}
+    match: {units_regex: "(?i)(dollars?|cents) per hour|cost per hour( worked)?|hourly (earnings|compensation|wages?)"}
   - id: costo_laboral_titulo
     kind: precio
     subtype: costo_laboral
@@ -67,6 +67,13 @@ rules:
   - id: valor_bea_tabla_nominal
     kind: valor
     match: {title_regex: "(?i)\\b(value added|gross output|intermediate inputs)\\b"}
+
+  # --- Población de la CPS (BLS, prefijo oficial LN): conteo de personas, pero demografía y no demanda
+  # de mercado (subtipo `poblacion`: no cuenta como evidencia de demanda; ADR 0018).
+  - id: poblacion_cps
+    kind: cantidad
+    subtype: poblacion
+    match: {source: bls, id_regex: "^LN[SU]", title_regex: "(?i)\\bpopulation level\\b"}
 
   # --- Conteos de personas, unidades, horas y empleos (después de los importes en dólares).
   - id: cantidad_conteos
