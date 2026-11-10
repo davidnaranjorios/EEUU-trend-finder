@@ -27,6 +27,13 @@ eligibility:
   # Umbrales fijados el 2026-10-23 a la vista del embudo medido (ADR 0002).
   # Historia más corta que esto no se descarta: va al grupo "nuevas".
   min_history_years: 10
+  # Series jóvenes (ADR 0017): los grupos del embudo con historia corta que pasan SOLO al detector
+  # `relative_growth` (nunca a slope ni a regime). Se descargan si su nivel geográfico está en
+  # `download.groups`; se usan si su historia está entre min_years y max_years.
+  young:
+    groups: [nuevas]
+    min_years: 3
+    max_years: 15
   # Una versión por variable (mismo título normalizado). Orden de preferencia del representante:
   # ajuste estacional, unidades en nivel sobre transformadas, frecuencia más alta que cumpla la
   # historia mínima, historia más larga y, en empate, el identificador.
@@ -94,6 +101,23 @@ detect:
     n_exceed: 250
     n_exceed_min: 50
     gof_alpha: 0.05
+  # Detector `relative_growth` (series jóvenes, ADR 0017): crecimiento relativo a su agregado
+  # padre. Familia FDR propia; confianza por defecto amarilla (🟡). No toca la calibración de
+  # slope ni de regime. phi_margin 5: medido sobre ruido AR(1) (φ hasta 0,9) y con correlación
+  # entre series, 3–4 dejaban FDR > q en series cortas.
+  relative_growth:
+    enabled: true
+    confidence: yellow
+    phi_margin: 5.0
+    min_periods: {M: 36, Q: 24, A: 12}   # diferencias de crecimiento mínimas en común con el padre
+    # Nacimiento de series (descriptivo): cuántas series nuevas aparecen por agencia y NAICS.
+    births:
+      enabled: true
+      naics_digits: 3
+      recent_years: 3
+      min_years: 8                 # años de historia mínimos de la cuenta
+      min_total: 20                # series mínimas en el grupo (agencia, NAICS)
+      phi_margin: 3.0              # medido (ADR 0017): FDR <= 0,08 sobre conteos con AR(1) de φ hasta 0,8
   pelt:                         # solo para fechar el quiebre de los sobrevivientes de BH
     jump: 5
     penalty: 3.0                # pen = penalty · log(N) · sd²

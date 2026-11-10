@@ -460,15 +460,22 @@ class SourceIngestor:
         return {"crawl": crawl, "download": self.download(budget_s=left)}
 
     def targets(self) -> dict[str, str]:
-        """series_id -> unidad de las series de los grupos de `download.groups`."""
+        """series_id -> unidad de las series a descargar: los grupos de `download.groups` más las
+        series jóvenes (`eligibility.young`, ADR 0017) de nivel geográfico descargable."""
         con = self._lineage_con()
         if con is None:
             return {}
+        young = (self.cfg["eligibility"].get("young") or {}).get("groups") or []
         try:
             rows = con.execute(
                 "SELECT l.series_id, c.unit FROM latest l JOIN catalog c USING (series_id) "
-                "WHERE l.group_name IN (SELECT unnest(?))",
-                [list(self.cfg["download"]["groups"])],
+                "WHERE l.group_name IN (SELECT unnest(?)) "
+                "OR (l.group_name IN (SELECT unnest(?)) AND l.geo_level IN (SELECT unnest(?)))",
+                [
+                    list(self.cfg["download"]["groups"]),
+                    list(young),
+                    list(self.cfg["download"]["groups"]),
+                ],
             ).fetchall()
         finally:
             con.close()

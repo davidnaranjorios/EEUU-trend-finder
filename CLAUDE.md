@@ -192,7 +192,8 @@ Hecho: detectores `slope` (Theil-Sen, persistencia dentro del estadístico) y `r
 PELT solo fecha), stationary bootstrap con índices compartidos y post-blackening AR(1), cola
 GPD para el piso del p, BH decide y BY compara. Diseño y mediciones: ADR 0007.
 Uso: `uv run python -m src.detect run [--shard I/N --run-id ID] | fdr --run-id ID | report`;
-en Actions, `.github/workflows/detectores.yml`. Tablas: `detector_tests` y `detector_runs`
+en Actions, `.github/workflows/detectores.yml`. Series jóvenes (3–15 años): detector
+`relative_growth` con familia FDR propia y conteo descriptivo de nacimientos, ADR 0017. Tablas: `detector_tests` y `detector_runs`
 (`processed/lineage/`), `signals` (`data/signals/`).
 **Terminado cuando** (tests):
 - sobre datos sintéticos de ruido puro —incluyendo ruido AR(1) y **correlación entre series**—

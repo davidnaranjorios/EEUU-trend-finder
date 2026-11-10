@@ -62,6 +62,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ConfigError("fdr.calibration.n_resamples debe ser un entero >= 99")
 
     _validate_detect(_section(cfg, "detect"))
+    _validate_relative(_section(cfg, "detect"), _section(cfg, "eligibility").get("young") or {})
     _validate_fred(_section(cfg, "fred"))
     _validate_eligibility(_section(cfg, "eligibility"))
     _validate_vintages(_section(cfg, "vintages"))
@@ -78,6 +79,15 @@ def validate_config(cfg: dict[str, Any]) -> None:
     for key in ("bucket", "prefix"):
         if not isinstance(storage.get(key), str) or not storage[key]:
             raise ConfigError(f"storage.{key} debe ser un texto no vacío")
+
+
+def in_young_scope(group_name: str | None, geo_level: str | None, cfg: dict[str, Any]) -> bool:
+    """Una serie del grupo joven (p. ej. historia corta) con nivel geográfico descargable.
+
+    Solo amplía la DESCARGA y el detector `relative_growth` (ADR 0017); `download.groups` sigue
+    siendo la lista que ven slope, regime, el explorador y los exportes."""
+    young = (cfg.get("eligibility") or {}).get("young") or {}
+    return group_name in (young.get("groups") or []) and geo_level in cfg["download"]["groups"]
 
 
 # Grupos del embudo que se pueden descargar (los demás son exclusiones o diagnósticos).
@@ -107,6 +117,36 @@ def _validate_eligibility(el: dict[str, Any]) -> None:
 
 DETECTORS = ("slope", "regime")
 GRIDS = ("M", "Q", "A")
+
+
+def _validate_relative(d: dict[str, Any], young: dict[str, Any]) -> None:
+    """`detect.relative_growth` y `eligibility.young` (series jóvenes, ADR 0017)."""
+    rg = d.get("relative_growth") or {}
+    if not isinstance(rg.get("enabled"), bool):
+        raise ConfigError("detect.relative_growth.enabled debe ser true o false")
+    if rg.get("confidence") not in ("yellow", "green", "red"):
+        raise ConfigError("detect.relative_growth.confidence debe ser yellow, green o red")
+    if not isinstance(rg.get("phi_margin"), int | float) or rg["phi_margin"] < 0:
+        raise ConfigError("detect.relative_growth.phi_margin debe ser un número >= 0")
+    mp = rg.get("min_periods") or {}
+    if any(not isinstance(mp.get(g), int) or mp[g] < 8 for g in GRIDS):
+        raise ConfigError("detect.relative_growth.min_periods: un entero >= 8 por grilla M, Q y A")
+    b = rg.get("births") or {}
+    if not isinstance(b.get("enabled"), bool):
+        raise ConfigError("detect.relative_growth.births.enabled debe ser true o false")
+    for key in ("naics_digits", "recent_years", "min_years", "min_total"):
+        if not isinstance(b.get(key), int) or b[key] < 1:
+            raise ConfigError(f"detect.relative_growth.births.{key} debe ser un entero >= 1")
+    if not isinstance(b.get("phi_margin"), int | float) or b["phi_margin"] < 0:
+        raise ConfigError("detect.relative_growth.births.phi_margin debe ser un número >= 0")
+    if not 2 <= b["naics_digits"] <= 6:
+        raise ConfigError("detect.relative_growth.births.naics_digits debe estar entre 2 y 6")
+    groups = young.get("groups")
+    if not isinstance(groups, list) or not groups or not all(isinstance(g, str) for g in groups):
+        raise ConfigError("eligibility.young.groups debe ser una lista no vacía de grupos")
+    lo, hi = young.get("min_years"), young.get("max_years")
+    if not isinstance(lo, int) or not isinstance(hi, int) or not 1 <= lo < hi:
+        raise ConfigError("eligibility.young: min_years y max_years enteros con 1 <= min < max")
 
 
 def _validate_detect(d: dict[str, Any]) -> None:

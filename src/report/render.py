@@ -13,6 +13,7 @@ from src.report.recent import INSUFFICIENT, STATES
 DETECTOR_NAMES = {
     "slope": "cambio de pendiente",
     "regime": "quiebre de régimen",
+    "relative_growth": "crecimiento relativo al agregado (serie joven, confianza 🟡)",
     "text_emerging": "término emergente",
 }
 
