@@ -40,8 +40,9 @@ crecimiento. Los clusters llevan el crecimiento preparado de `regime` (`lookback
 M 180, Q 60, A 15. Por tanto solo se evalúan las series **mensuales con los 15 años completos**;
 **ninguna trimestral ni anual puede evaluarse**, aunque `slope` sí las probó (su exigencia es
 W + max(W, línea base) = 120 / 53 / 40, porque su línea base `g[:-W]` ya contiene la ventana
-previa). Los clusters de precios (PPI, CPI, deflactores BEA) quedan fuera si son trimestrales o
-anuales (los deflactores de BEA son mayormente así) o si tienen menos de 15 años mensuales.
+previa). Un cluster de precios (PPI, CPI, deflactores BEA) queda fuera si su representante es
+trimestral o anual, o mensual con menos de 15 años; cuántos son así no se puede saber sin los
+datos de la corrida (de ahí el diagnóstico de abajo).
 
 **Qué se hace ahora (solo diagnóstico, no cambia ninguna decisión):** el resumen de la corrida
 (`summary.rate_effect.coverage` y `summary.inflation_effect.coverage`) trae, por grilla y por clase
