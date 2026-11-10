@@ -282,7 +282,15 @@ rank:
   # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary
   # bootstrap, BH sobre los clusters) y el cambio de pendiente cae ≥ min_drop o deja de ser
   # significativo al usar el residuo. Solo etiqueta: nunca filtra ni cambia el score.
-  rate_effect: {max_lag: 2, min_drop: 0.5, seed: 20261109}
+  # include_level: además de Δr, el NIVEL de la tasa (los índices de acumulación crecen ≈ r/periodos
+  # por año). min_rows_by_grid: periodos mínimos con dato de la tasa para evaluar un cluster
+  # (la calibración de `slope`, incluida su línea base mínima, no cambia).
+  rate_effect:
+    max_lag: 2
+    min_drop: 0.5
+    seed: 20261109
+    include_level: true
+    min_rows_by_grid: {M: 36, Q: 20, A: 12}
   # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
   # ventanas solapadas se triangulan juntos (src/rank/phenomena.py). La regla de origen no cambia.
   phenomena:

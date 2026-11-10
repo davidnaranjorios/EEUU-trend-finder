@@ -94,6 +94,37 @@ descargada. Una tendencia que coincide en el tiempo con un ciclo de tasas no se 
 causada por ella: la etiqueta avisa y la interpretación es humana. Valores iniciales (`max_lag`,
 `min_drop`) por confirmar con la corrida real.
 
+**Revisión 2026-11-10 (rama `claude/efecto-tasas-nivel`).** Reporte 3914814, con TB3MS ya
+descargada: `available` = true, 119 clusters, 52 evaluados y **0 marcados**, aunque la auditoría
+tenía índices de T-bills y money market que deberían marcarse.
+- **Causa.** El diseño regresaba el crecimiento solo sobre Δr. El crecimiento de un índice de
+  acumulación (T-bills, money market, intereses devengados) es ≈ r_t / periodos por año: depende
+  del **nivel**, y su cambio de pendiente es un cambio de nivel de la tasa. Tras un ciclo de alzas Δr
+  vuelve a ~0 mientras el nivel se queda alto: el R² con Δr es ~0,1 (q ≈ 0,5) y el residuo conserva
+  la aceleración.
+- **Diseño nuevo** (`rank.rate_effect.include_level: true`): nivel contemporáneo r_t (promedio del
+  periodo de la grilla) **más** Δr con rezagos 0..`max_lag` (1 + (L+1) columnas). Se eligió el nivel
+  sin rezagos para no duplicar columnas casi colineales (nivel y cambio rezagados); `false` reproduce
+  el diseño anterior. El residuo y la prueba de pendiente con/sin tasa quedan igual; el bootstrap
+  (índices compartidos, cola GPD) y BH sobre la familia también.
+- **Condición adicional, por un falso positivo medido.** Con el nivel en el diseño, una aceleración
+  propia sin relación con la tasa se ajustaba por azar a su deriva (regresión espuria de dos series
+  persistentes): 12 de 40 «relacionadas» y 6 de 40 marcadas con una tasa sin ciclo. Remuestrear la
+  tasa en vez del crecimiento lo arregla pero deja sin potencia a la relación real (el nivel de un
+  camino aleatorio ajusta cualquier rampa: p ≈ 0,002 a B = 499 incluso con R² = 0,999). Lo que
+  distingue a la relación real es que sobrevive en **primeras diferencias** (g = c·r ⇒ Δg = c·Δr),
+  que son estacionarias. Se exige también que el mismo modelo en diferencias sea significativo (su
+  propio bootstrap de Δg y su propia familia BH; `r2_diff`, `p_diff`, `q_diff`). Medido: índice de
+  acumulación con ruido realista (2·10⁻⁵ frente a una señal de ~4·10⁻³) marcado 16 de 16; tendencia
+  propia 0 de 30; ruido puro 0 de 600. Límite: una serie cuyo ruido supera el cambio mensual de la
+  tasa (4·10⁻⁴) no se ve en diferencias y no se marca (0 de 16).
+- **Por qué no se evaluó cada cluster.** `summary.rate_effect.not_evaluated_by_reason`:
+  `sin_crecimiento` (sin crecimiento preparado), `serie_corta` (menos de 2W + max(W, línea base de
+  `slope`) periodos), `pocos_periodos_con_tasa`, `sin_ventana` y `sin_tasa`. Las series anuales
+  quedan casi todas fuera por `serie_corta` (≤ 15 crecimientos frente a 2·7 + 33 = 47), no por el
+  mínimo de filas: es la calibración de `slope` y no se cambió. `min_rows_by_grid` (M 36, Q 20,
+  A 12) reemplaza el mínimo fijo de 20 filas y se puede ajustar sin tocar esa calibración.
+
 ## 8. NAICS para BEA y Census (rama `claude/naics-bea-census`)
 Corrida 1567bd3a: cobertura NAICS de señales BLS 25 %, FRED 17,8 %, BEA 0 %, Census 0 %. El código
 de industria no se perdía en la ingesta: ya viaja en el `series_id`.

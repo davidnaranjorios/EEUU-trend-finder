@@ -160,9 +160,10 @@ def guide(
         "<em>continúa</em> (el resto). "
         "Solo para series mensuales o más frecuentes; los datos recientes son preliminares.</dd>",
         "<dt>Efecto de tasas</dt><dd>Etiqueta descriptiva, no una señal ni un filtro: el "
-        "crecimiento del cluster se relaciona de forma significativa con los cambios de la tasa "
-        "de corto plazo (T-bill a 3 meses) y, al quitar esa parte, su cambio de pendiente cae "
-        "o deja de ser significativo. El candidato sigue en el ranking con el mismo score.</dd>",
+        "crecimiento del cluster se relaciona de forma significativa con el nivel y los cambios "
+        "de la tasa de corto plazo (T-bill a 3 meses) y, al quitar esa parte, su cambio de "
+        "pendiente cae o deja de ser significativo. El candidato sigue en el ranking con el "
+        "mismo score.</dd>",
         "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
         "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
         "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "

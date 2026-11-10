@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -697,13 +697,20 @@ def rate_effects(
         if g is not None:
             items[cid] = (g.growth, g.last_index, g.grid, g.scale, g.persistence)
     dr = {grid: rate_mod.rate_changes(levels, grid) for grid in ("M", "Q", "A")}
-    res = rate_mod.evaluate(items, dr, rate_mod.params_from(cfg))
+    lv = {grid: rate_mod.rate_levels(levels, grid) for grid in ("M", "Q", "A")}
+    params = rate_mod.params_from(cfg)
+    res = rate_mod.evaluate(items, dr, params, lv)
+    # Por qué no se evaluó cada cluster (sin crecimiento preparado: ni el detector lo pudo usar).
+    reasons = Counter(r.reason for r in res.values() if not r.evaluated and r.reason)
+    reasons["sin_crecimiento"] = len(clusters) - len(items)
     summary.update(
         {
             "available": True,
+            "include_level": params.include_level,
             "n_clusters": len(clusters),
             "n_evaluated": sum(r.evaluated for r in res.values()),
             "n_marked": sum(r.rate_effect for r in res.values()),
+            "not_evaluated_by_reason": {k: v for k, v in sorted(reasons.items()) if v},
         }
     )
     return res, summary
