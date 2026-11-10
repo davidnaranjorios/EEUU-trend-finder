@@ -62,6 +62,7 @@ def build_site(
     phenomena = rdata.phenomena_data(
         cfg, rank_run, {c["candidate_id"] for v in candidates.values() for c in v}
     )
+    watchlist = rdata.watchlist_data(cfg, rank_run)
     published_series = {
         (s["source"], s["id"]): c["candidate_id"]
         for v in candidates.values()
@@ -85,6 +86,7 @@ def build_site(
         "coverage": rdata.coverage(con),
         "candidates": candidates,
         "phenomena": phenomena,
+        "watchlist": watchlist,
         "explorer": explorer_index,
         "weights": cfg["rank"]["weights"],
         "q": cfg["fdr"]["q"],

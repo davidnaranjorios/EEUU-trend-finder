@@ -251,6 +251,9 @@ CLUSTERS = TableSpec(
         # Etiqueta "efecto de tasas" del cluster (rank/rate_effect.py): NULL = no evaluado.
         ("rate_effect", pa.bool_(), True),
         ("rate_share", pa.float64(), True),
+        # Etiqueta "efecto inflación" (rank/inflation_effect.py): NULL = no evaluado.
+        ("inflation_effect", pa.bool_(), True),
+        ("inflation_share", pa.float64(), True),
     ),
     key=("run_id", "cluster_id", "source", "object_id"),
 )
@@ -286,6 +289,11 @@ RANK_CANDIDATES = TableSpec(
         ("rate_share", pa.float64(), True),
         ("rate_q", pa.float64(), True),
         ("rate_n_tests", pa.int64(), True),
+        # "Efecto inflación": misma lectura que `rate_*`, con la inflación del deflactor.
+        ("inflation_effect", pa.bool_(), True),
+        ("inflation_share", pa.float64(), True),
+        ("inflation_q", pa.float64(), True),
+        ("inflation_n_tests", pa.int64(), True),
     ),
     key=("run_id", "candidate_id"),
 )
@@ -363,6 +371,13 @@ RANK_PHENOMENA = TableSpec(
         # todo su respaldo numérico son precios; NULL si no se puede afirmar. Solo etiqueta.
         ("measure_mix_json", pa.string(), True),
         ("no_demand_evidence", pa.bool_(), True),
+        # Lista "en observación" (ADR 0016): True si entra; False con `watch_reason`; NULL en
+        # particiones anteriores. Nunca entra al score ni al ranking.
+        ("watch", pa.bool_(), True),
+        ("watch_reason", pa.string(), True),
+        ("watch_effect", pa.float64(), True),
+        ("watch_q", pa.float64(), True),
+        ("watch_n_demand_series", pa.int64(), True),
     ),
     key=("run_id", "phenomenon_id"),
 )
@@ -510,6 +525,17 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         if bad[0]:
             raise SchemaError(
                 f"rank_phenomena: {bad[0]} filas violan la triangulación (≥ 2 fuentes)"
+            )
+        # La lista "en observación" es solo de un origen y nunca está publicada como ranking.
+        bad = con.execute(
+            "SELECT count(*) FROM t WHERE watch AND "
+            "(status <> 'una_fuente' OR n_sources <> 1 OR published OR rank IS NOT NULL "
+            "OR score IS NOT NULL)"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(
+                f"rank_phenomena: {bad[0]} filas en observación que no son de un solo origen "
+                "o que entran al ranking o al score"
             )
     if spec is RANK_CANDIDATES:
         allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
