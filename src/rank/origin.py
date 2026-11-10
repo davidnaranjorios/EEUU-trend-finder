@@ -27,6 +27,9 @@ _ID_FIELDS = frozenset({"source", "release_id", "agency"})
 _DESC_FIELDS = frozenset({"series_id_regex", "units_regex", "title_regex"})
 MATCH_KEYS = _ID_FIELDS | _DESC_FIELDS
 DEFAULT_PATH = REPO_ROOT / "config" / "data_origin.yaml"
+# Claves de una regla: obligatorias y opcionales (herencia de otros orígenes).
+RULE_REQUIRED = frozenset({"id", "match", "origin", "chain"})
+RULE_OPTIONAL = frozenset({"inherits_from", "also_origin"})
 
 
 @dataclass(frozen=True)
@@ -63,8 +66,8 @@ def validate_table(data: Any) -> list[Rule]:
         where = f"rules[{i}]"
         if (
             not isinstance(r, dict)
-            or not {"id", "match", "origin", "chain"} <= set(r)
-            or set(r) - {"id", "match", "origin", "chain", "inherits_from", "also_origin"}
+            or not RULE_REQUIRED <= set(r)
+            or set(r) - RULE_REQUIRED - RULE_OPTIONAL
         ):
             errors.append(
                 f"{where}: claves id, match, origin, chain (opcionales: inherits_from, also_origin)"
