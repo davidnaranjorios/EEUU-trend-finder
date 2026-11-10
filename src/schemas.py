@@ -251,6 +251,9 @@ CLUSTERS = TableSpec(
         # Etiqueta "efecto de tasas" del cluster (rank/rate_effect.py): NULL = no evaluado.
         ("rate_effect", pa.bool_(), True),
         ("rate_share", pa.float64(), True),
+        # Etiqueta "efecto inflación" (rank/inflation_effect.py): NULL = no evaluado.
+        ("inflation_effect", pa.bool_(), True),
+        ("inflation_share", pa.float64(), True),
     ),
     key=("run_id", "cluster_id", "source", "object_id"),
 )
@@ -284,6 +287,11 @@ RANK_CANDIDATES = TableSpec(
         ("rate_share", pa.float64(), True),
         ("rate_q", pa.float64(), True),
         ("rate_n_tests", pa.int64(), True),
+        # "Efecto inflación": misma lectura que `rate_*`, con la inflación del deflactor.
+        ("inflation_effect", pa.bool_(), True),
+        ("inflation_share", pa.float64(), True),
+        ("inflation_q", pa.float64(), True),
+        ("inflation_n_tests", pa.int64(), True),
     ),
     key=("run_id", "candidate_id"),
 )

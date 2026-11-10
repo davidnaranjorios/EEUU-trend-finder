@@ -43,6 +43,7 @@ from src.detect.text import grid_start
 from src.ingest.fred import SERIES_ATTRS
 from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
+from src.rank import inflation_effect as infl_mod
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank import rate_effect as rate_mod
@@ -716,6 +717,51 @@ def rate_effects(
     return res, summary
 
 
+def inflation_effects(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    clusters: list[list[tuple[str, str]]],
+    cids: list[str],
+    growth: dict[tuple[str, str], GrowthSeries],
+) -> tuple[dict[str, rate_mod.RateResult], dict[str, Any]]:
+    """Etiqueta de efecto inflación por cluster (ver `inflation_effect.py`).
+
+    Mismo criterio que `rate_effects`; el regresor es la inflación del deflactor aprobado
+    (`context.reference_series.deflator`). Sin el deflactor descargado no se evalúa nada."""
+    ref = (cfg["context"]["reference_series"] or {}).get("deflator")
+    summary: dict[str, Any] = {"reference": ref, "available": False}
+    rows = (
+        con.execute(
+            "SELECT date, value FROM series WHERE source = 'fred' AND series_id = ? "
+            "AND vintage_date IS NULL AND value IS NOT NULL ORDER BY date",
+            [ref],
+        ).fetchall()
+        if ref
+        else []
+    )
+    if not rows:
+        return {}, summary
+    levels = {d.year * 12 + d.month - 1: float(v) for d, v in rows}
+    items: dict[str, tuple[np.ndarray, int, str, float, int]] = {}
+    for cid, members in zip(cids, clusters, strict=True):
+        g = next((growth[k] for k in members if k in growth), None)
+        if g is not None:
+            items[cid] = (g.growth, g.last_index, g.grid, g.scale, g.persistence)
+    res = infl_mod.evaluate(items, levels, infl_mod.params_from(cfg))
+    reasons = Counter(r.reason for r in res.values() if not r.evaluated and r.reason)
+    reasons["sin_crecimiento"] = len(clusters) - len(items)
+    summary.update(
+        {
+            "available": True,
+            "n_clusters": len(clusters),
+            "n_evaluated": sum(r.evaluated for r in res.values()),
+            "n_marked": sum(r.rate_effect for r in res.values()),
+            "not_evaluated_by_reason": {k: v for k, v in sorted(reasons.items()) if v},
+        }
+    )
+    return res, summary
+
+
 def _best_by_series(signals: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
     out: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for s in signals:
@@ -792,6 +838,7 @@ def rank_run(
     # Etiqueta "efecto de tasas" por cluster (descriptiva: nunca filtra ni cambia el score).
     all_cids = [cluster_id("c", [f"{s}|{i}" for s, i in m]) for m in clusters]
     rate_by_cid, rate_summary = rate_effects(con, cfg, clusters, all_cids, growth)
+    infl_by_cid, infl_summary = inflation_effects(con, cfg, clusters, all_cids, growth)
     cluster_of = {}
     cluster_rows = []
     cids = []
@@ -810,6 +857,10 @@ def rank_run(
                     "similarity": sim_to_rep.get(k, 1.0 if j == 0 else None),
                     "rate_effect": rate_by_cid[cid].rate_effect if cid in rate_by_cid else None,
                     "rate_share": rate_by_cid[cid].rate_share if cid in rate_by_cid else None,
+                    "inflation_effect": infl_by_cid[cid].rate_effect
+                    if cid in infl_by_cid
+                    else None,
+                    "inflation_share": infl_by_cid[cid].rate_share if cid in infl_by_cid else None,
                 }
             )
 
@@ -1051,6 +1102,18 @@ def rank_run(
                 "rate_n_tests": rate_by_cid[c.candidate_id].n_tests
                 if c.candidate_id in rate_by_cid
                 else None,
+                "inflation_effect": infl_by_cid[c.candidate_id].rate_effect
+                if c.candidate_id in infl_by_cid
+                else None,
+                "inflation_share": infl_by_cid[c.candidate_id].rate_share
+                if c.candidate_id in infl_by_cid
+                else None,
+                "inflation_q": infl_by_cid[c.candidate_id].q_bh
+                if c.candidate_id in infl_by_cid
+                else None,
+                "inflation_n_tests": infl_by_cid[c.candidate_id].n_tests
+                if c.candidate_id in infl_by_cid
+                else None,
             }
         )
         for e in c.evidence:
@@ -1105,6 +1168,7 @@ def rank_run(
         "embeddings": {"model": emb.name, "computed": emb.computed, "reused": emb.reused},
         "link_funnel": funnel,
         "rate_effect": rate_summary,
+        "inflation_effect": infl_summary,
         "naics_coverage": naics_cov,
         "adapter_agencies_unmatched": unmatched_adapter_agencies(fred_names),
     }

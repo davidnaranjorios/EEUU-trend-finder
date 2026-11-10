@@ -318,6 +318,8 @@ def candidates_data(
                 "rate_effect": c.get("rate_effect"),
                 "rate_share": c.get("rate_share"),
                 "rate_q": c.get("rate_q"),
+                "inflation_effect": c.get("inflation_effect"),
+                "inflation_share": c.get("inflation_share"),
                 "phenomenon": build_phenomenon(
                     series,
                     {k: values[k] for k in values if k in {(x["source"], x["id"]) for x in series}},
