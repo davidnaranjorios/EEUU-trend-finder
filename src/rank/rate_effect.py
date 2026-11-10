@@ -39,7 +39,7 @@ dice por qué (`sin_tasa`, `sin_ventana`, `serie_corta`, `pocos_periodos_con_tas
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -270,6 +270,58 @@ def evaluate(
         r.p_orig = orig.p_value
         r.rate_effect = bool(related and orig.p_value <= p.q and (dropped or lost))
     return out
+
+
+def min_growth_periods(p: RateParams, grid: str) -> tuple[int, int] | None:
+    """(exigido hoy, exigido por `slope`) en periodos de crecimiento, o None sin ventana.
+
+    Hoy `evaluate` pide 2·W + max(W, línea base): la ventana de 2·W MÁS la línea base. `slope`
+    pide W + max(W, línea base), porque su línea base (g[:-W]) ya contiene la ventana previa."""
+    w = p.window.get(grid)
+    if w is None:
+        return None
+    base = max(w, p.min_baseline)
+    return 2 * w + base, w + base
+
+
+def breakdown(
+    items: Mapping[str, tuple[np.ndarray, int, str, float, int]],
+    res: Mapping[str, RateResult],
+    p: RateParams,
+    kinds: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Diagnóstico de cobertura (no cambia ninguna decisión): evaluados, marcados y motivos por
+    grilla y por clase de medida del representante, y cuántos clusters `serie_corta` se evaluarían
+    con la exigencia propia de `slope` (propuesta del ADR 0018, NO aplicada).
+
+    `items`: id -> (crecimiento, último índice, grilla, escala, persistencia)."""
+    by_grid: dict[str, dict[str, Any]] = {}
+    by_kind: dict[str, dict[str, Any]] = {}
+    would = Counter()
+    for cid, r in res.items():
+        grid = items[cid][2]
+        for bucket, name in ((by_grid, grid), (by_kind, (kinds or {}).get(cid, "sin_clase"))):
+            row = bucket.setdefault(
+                name, {"clusters": 0, "evaluated": 0, "marked": 0, "reasons": {}}
+            )
+            row["clusters"] += 1
+            row["evaluated"] += int(r.evaluated)
+            row["marked"] += int(r.rate_effect)
+            if not r.evaluated and r.reason:
+                row["reasons"][r.reason] = row["reasons"].get(r.reason, 0) + 1
+        need = min_growth_periods(p, grid)
+        if r.reason == "serie_corta" and need and items[cid][0].size >= need[1]:
+            would[grid] += 1
+    return {
+        "by_grid": by_grid,
+        "by_measure_kind": by_kind,
+        "growth_periods": {
+            g: {"required_now": n[0], "required_by_slope": n[1]}
+            for g in ("M", "Q", "A")
+            if (n := min_growth_periods(p, g))
+        },
+        "serie_corta_evaluable_with_slope_requirement": dict(would),
+    }
 
 
 def params_from(cfg: dict[str, Any]) -> RateParams:

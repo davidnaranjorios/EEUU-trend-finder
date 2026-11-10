@@ -59,6 +59,7 @@ class Evidence:
     link_lag: int | None = None
     measure_kind: str | None = None  # clase de medida de la serie (ADR 0014)
     measure_subtype: str | None = None
+    real_effect: float | None = None  # efecto deflactado de una serie `valor` (ADR 0018)
 
 
 @dataclass

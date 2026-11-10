@@ -48,6 +48,7 @@ from src.rank import measure as measure_mod
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank import rate_effect as rate_mod
+from src.rank import real_effect as real_effect_mod
 from src.rank import watchlist as watch_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
@@ -689,6 +690,7 @@ def rate_effects(
     clusters: list[list[tuple[str, str]]],
     cids: list[str],
     growth: dict[tuple[str, str], GrowthSeries],
+    kinds: dict[tuple[str, str], str] | None = None,
 ) -> tuple[dict[str, rate_mod.RateResult], dict[str, Any]]:
     """Etiqueta de efecto de tasas por cluster de series (ver `rate_effect.py`).
 
@@ -728,24 +730,27 @@ def rate_effects(
             "n_evaluated": sum(r.evaluated for r in res.values()),
             "n_marked": sum(r.rate_effect for r in res.values()),
             "not_evaluated_by_reason": {k: v for k, v in sorted(reasons.items()) if v},
+            "coverage": rate_mod.breakdown(items, res, params, _rep_kinds(cids, clusters, kinds)),
         }
     )
     return res, summary
 
 
-def inflation_effects(
-    con: duckdb.DuckDBPyConnection,
-    cfg: dict[str, Any],
-    clusters: list[list[tuple[str, str]]],
+def _rep_kinds(
     cids: list[str],
-    growth: dict[tuple[str, str], GrowthSeries],
-) -> tuple[dict[str, rate_mod.RateResult], dict[str, Any]]:
-    """Etiqueta de efecto inflación por cluster (ver `inflation_effect.py`).
+    clusters: list[list[tuple[str, str]]],
+    kinds: dict[tuple[str, str], str] | None,
+) -> dict[str, str]:
+    """Clase de medida del representante (primer miembro) de cada cluster."""
+    return {
+        cid: (kinds or {}).get(members[0], "sin_clase")
+        for cid, members in zip(cids, clusters, strict=True)
+    }
 
-    Mismo criterio que `rate_effects`; el regresor es la inflación del deflactor aprobado
-    (`context.reference_series.deflator`). Sin el deflactor descargado no se evalúa nada."""
+
+def deflator_levels(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict[int, float]:
+    """Índice del deflactor aprobado (`context.reference_series.deflator`) por mes, vigente."""
     ref = (cfg["context"]["reference_series"] or {}).get("deflator")
-    summary: dict[str, Any] = {"reference": ref, "available": False}
     rows = (
         con.execute(
             "SELECT date, value FROM series WHERE source = 'fred' AND series_id = ? "
@@ -755,15 +760,33 @@ def inflation_effects(
         if ref
         else []
     )
-    if not rows:
+    return {d.year * 12 + d.month - 1: float(v) for d, v in rows}
+
+
+def inflation_effects(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    clusters: list[list[tuple[str, str]]],
+    cids: list[str],
+    growth: dict[tuple[str, str], GrowthSeries],
+    kinds: dict[tuple[str, str], str] | None = None,
+) -> tuple[dict[str, rate_mod.RateResult], dict[str, Any]]:
+    """Etiqueta de efecto inflación por cluster (ver `inflation_effect.py`).
+
+    Mismo criterio que `rate_effects`; el regresor es la inflación del deflactor aprobado
+    (`context.reference_series.deflator`). Sin el deflactor descargado no se evalúa nada."""
+    ref = (cfg["context"]["reference_series"] or {}).get("deflator")
+    summary: dict[str, Any] = {"reference": ref, "available": False}
+    levels = deflator_levels(con, cfg)
+    if not levels:
         return {}, summary
-    levels = {d.year * 12 + d.month - 1: float(v) for d, v in rows}
     items: dict[str, tuple[np.ndarray, int, str, float, int]] = {}
     for cid, members in zip(cids, clusters, strict=True):
         g = next((growth[k] for k in members if k in growth), None)
         if g is not None:
             items[cid] = (g.growth, g.last_index, g.grid, g.scale, g.persistence)
-    res = infl_mod.evaluate(items, levels, infl_mod.params_from(cfg))
+    infl_params = infl_mod.params_from(cfg)
+    res = infl_mod.evaluate(items, levels, infl_params)
     reasons = Counter(r.reason for r in res.values() if not r.evaluated and r.reason)
     reasons["sin_crecimiento"] = len(clusters) - len(items)
     summary.update(
@@ -773,6 +796,9 @@ def inflation_effects(
             "n_evaluated": sum(r.evaluated for r in res.values()),
             "n_marked": sum(r.rate_effect for r in res.values()),
             "not_evaluated_by_reason": {k: v for k, v in sorted(reasons.items()) if v},
+            "coverage": rate_mod.breakdown(
+                items, res, infl_params, _rep_kinds(cids, clusters, kinds)
+            ),
         }
     )
     return res, summary
@@ -853,8 +879,9 @@ def rank_run(
     clusters += [[k] for k in no_growth + tail]
     # Etiqueta "efecto de tasas" por cluster (descriptiva: nunca filtra ni cambia el score).
     all_cids = [cluster_id("c", [f"{s}|{i}" for s, i in m]) for m in clusters]
-    rate_by_cid, rate_summary = rate_effects(con, cfg, clusters, all_cids, growth)
-    infl_by_cid, infl_summary = inflation_effects(con, cfg, clusters, all_cids, growth)
+    kinds = {k: v.measure.kind for k, v in info.items()}
+    rate_by_cid, rate_summary = rate_effects(con, cfg, clusters, all_cids, growth, kinds)
+    infl_by_cid, infl_summary = inflation_effects(con, cfg, clusters, all_cids, growth, kinds)
     cluster_of = {}
     cluster_rows = []
     cids = []
@@ -1008,9 +1035,11 @@ def rank_run(
                 ev.n_industries = inds.get(tkey)
                 term_evidence_by_cluster[cid][tkey] = ev
     min_sources = rk["min_sources"]
+    defl = deflator_levels(con, cfg)
+    infl = {grid: infl_mod.inflation_by_grid(defl, grid) for grid in ("M", "Q", "A")}
     candidates: list[Candidate] = []
     for cid, members in zip(cids, clusters, strict=True):
-        ev = [_series_evidence(k, by_series[k], info[k]) for k in members]
+        ev = [_series_evidence(k, by_series[k], info[k], growth, infl) for k in members]
         ev += sorted(
             term_evidence_by_cluster.get(cid, {}).values(), key=lambda e: (e.source, e.object_id)
         )
@@ -1175,6 +1204,7 @@ def rank_run(
                     "n_entities": e.n_entities,
                     "measure_kind": e.measure_kind,
                     "measure_subtype": e.measure_subtype,
+                    "real_effect": e.real_effect,
                 }
             )
     by_cid = {c.candidate_id: c for c in candidates}
@@ -1294,6 +1324,9 @@ def phenomena_rows(
                 "watch_n_demand_series": watch[p.phenomenon_id].n_demand_series
                 if p.phenomenon_id in watch
                 else None,
+                "watch_real_effect": watch[p.phenomenon_id].real_effect
+                if p.phenomenon_id in watch
+                else None,
             }
         )
     return rows
@@ -1346,9 +1379,17 @@ def _rep_first(members: list[tuple[str, str]], rep: tuple[str, str]) -> list[tup
 
 
 def _series_evidence(
-    key: tuple[str, str], sigs: list[dict[str, Any]], info: SeriesInfo
+    key: tuple[str, str],
+    sigs: list[dict[str, Any]],
+    info: SeriesInfo,
+    growth: dict[tuple[str, str], GrowthSeries] | None = None,
+    inflation: dict[str, dict[int, float]] | None = None,
 ) -> Evidence:
     best = min(sigs, key=lambda s: s["q_value"])
+    ws, we = min(s["window_start"] for s in sigs), max(s["window_end"] for s in sigs)
+    real = None
+    if info.measure.kind == "valor" and growth and key in growth:
+        real = real_effect_mod.real_effect(growth[key], inflation or {}, ws, we)
     return Evidence(
         kind="series",
         source=key[0],
@@ -1358,10 +1399,11 @@ def _series_evidence(
         effect_size=float(best["effect_size"]),
         detectors=tuple(sorted({s["detector"] for s in sigs})),
         public=not info.copyrighted,
-        window_start=min(s["window_start"] for s in sigs),
-        window_end=max(s["window_end"] for s in sigs),
+        window_start=ws,
+        window_end=we,
         measure_kind=info.measure.kind,
         measure_subtype=info.measure.subtype,
+        real_effect=real,
     )
 
 

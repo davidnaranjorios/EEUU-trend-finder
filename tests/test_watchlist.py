@@ -21,10 +21,10 @@ P = WatchParams(q=0.05, min_effect=1.0)
 W = (date(2020, 1, 1), date(2024, 1, 1))
 
 
-def ev(source, sid, agency, kind, *, q=1e-6, effect=2.0, public=True):
+def ev(source, sid, agency, kind, *, q=1e-6, effect=2.0, public=True, real=None):
     return Evidence(
         "series", source, sid, frozenset({agency}), q, effect, ("slope",), public, *W,
-        measure_kind=kind,
+        measure_kind=kind, real_effect=real,
     )  # fmt: skip
 
 
@@ -45,7 +45,8 @@ def test_one_origin_with_quantity_enters_the_watch_list_and_not_the_ranking():
 
 
 def test_value_series_also_counts_as_demand_evidence():
-    assert watch([ev("bea", "V", "bea", "valor")]).eligible
+    # `valor` (dólares corrientes) solo cuenta con efecto real deflactado (ADR 0018).
+    assert watch([ev("bea", "V", "bea", "valor", real=2.0)]).eligible
 
 
 @pytest.mark.parametrize("kind", ["precio", "tasa", "otro", None])
@@ -63,7 +64,7 @@ def test_two_origins_go_to_the_ranking_not_the_watch_list():
 
 
 def test_rate_or_inflation_effect_excludes_the_quantity_series():
-    evidence = [ev("bea", "V", "bea", "valor")]
+    evidence = [ev("bea", "V", "bea", "valor", real=2.0)]
     w = watch(evidence, marked={"c1": True})
     assert not w.eligible and w.reason == "efecto_tasas_o_inflacion"
     # no evaluado (None) o sin marca (False) no excluye
