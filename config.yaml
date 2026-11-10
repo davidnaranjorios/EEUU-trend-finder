@@ -297,6 +297,8 @@ rank:
     naics_digits: 3
     min_naics_share: 0.25         # peso mínimo de un código dentro del cluster para contar
     min_direction_share: 0.6      # acuerdo mínimo de signo entre las series del cluster
+  measure_kind:                   # ADR 0014: clase de medida (precio, cantidad, valor, tasa, otro)
+    table: config/measure_kind.yaml   # metadatos de agencia: unidades, prefijos oficiales, tipos de tabla
   max_candidates: 50              # tope por tipo de candidato y corrida
   embeddings:
     backend: fastembed            # fastembed (uv sync --group embed) | hashing (tests, sin red)

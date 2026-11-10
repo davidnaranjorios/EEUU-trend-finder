@@ -57,6 +57,8 @@ class Evidence:
     link_validated: bool | None = None  # co-movimiento validado (None: no aplica)
     link_q: float | None = None
     link_lag: int | None = None
+    measure_kind: str | None = None  # clase de medida de la serie (ADR 0014)
+    measure_subtype: str | None = None
 
 
 @dataclass

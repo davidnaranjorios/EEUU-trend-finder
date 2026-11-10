@@ -43,6 +43,7 @@ from src.detect.text import grid_start
 from src.ingest.fred import SERIES_ATTRS
 from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
+from src.rank import measure as measure_mod
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank import rate_effect as rate_mod
@@ -157,6 +158,7 @@ class SeriesInfo:
     rule_id: str | None = None
     duplicates: tuple[str, ...] = ()  # "fuente|serie" de posibles copias de otra agencia
     duplicate_rho: float | None = None
+    measure: measure_mod.Measure = measure_mod.Measure("otro")  # clase de medida (ADR 0014)
 
     @property
     def key(self) -> str:
@@ -223,6 +225,7 @@ def series_info(
     fred_agencies = _fred_agencies(cfg)
     fred_releases = _fred_releases(cfg)
     rules = origin_mod.load_rules(_origin_path(cfg))
+    measure_rules = measure_mod.load_rules(_measure_path(cfg))
     # Las unidades solo se leen de las series con señal; las reglas por unidades las usan si hay.
     out = {}
     for src, sid, cr in keys:
@@ -246,8 +249,20 @@ def series_info(
             org.keys,
             org.chain,
             org.rule_id,
+            measure=measure_mod.classify(
+                measure_rules,
+                source=src,
+                series_id=sid,
+                units=units.get((src, sid), ""),
+                title=title or "",
+            ),
         )
     return out
+
+
+def _measure_path(cfg: dict[str, Any]) -> Any:
+    p = cfg["rank"].get("measure_kind", {}).get("table")
+    return _resolve(p) if p else None
 
 
 def _origin_path(cfg: dict[str, Any]) -> Any:
@@ -1039,6 +1054,9 @@ def rank_run(
                 "n_members": c.n_members,
                 "n_terms": sum(e.kind == "term" for e in c.evidence),
                 "published": c.published,
+                "measure_mix_json": json.dumps(
+                    measure_mod.mix([e.measure_kind for e in c.evidence if e.kind == "series"])
+                ),
                 "rate_effect": rate_by_cid[c.candidate_id].rate_effect
                 if c.candidate_id in rate_by_cid
                 else None,
@@ -1071,6 +1089,8 @@ def rank_run(
                     "link_score": e.link_score,
                     "linked_series": e.linked_series,
                     "n_entities": e.n_entities,
+                    "measure_kind": e.measure_kind,
+                    "measure_subtype": e.measure_subtype,
                 }
             )
     by_cid = {c.candidate_id: c for c in candidates}
@@ -1106,6 +1126,9 @@ def rank_run(
         "link_funnel": funnel,
         "rate_effect": rate_summary,
         "naics_coverage": naics_cov,
+        "measure_kind_coverage": measure_mod.coverage(
+            {k: info[k].measure for k in signal_keys if k in info}
+        ),
         "adapter_agencies_unmatched": unmatched_adapter_agencies(fred_names),
     }
     run_row = {
@@ -1166,6 +1189,8 @@ def phenomena_rows(
                 "by_grouping": c.status != "una_fuente"
                 and not any(by_cid[x].status == "candidato" for x in p.cluster_ids),
                 "published": c.published,
+                "measure_mix_json": json.dumps(p.measure_mix),
+                "no_demand_evidence": p.no_demand_evidence,
             }
         )
     return rows
@@ -1232,6 +1257,8 @@ def _series_evidence(
         public=not info.copyrighted,
         window_start=min(s["window_start"] for s in sigs),
         window_end=max(s["window_end"] for s in sigs),
+        measure_kind=info.measure.kind,
+        measure_subtype=info.measure.subtype,
     )
 
 
