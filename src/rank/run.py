@@ -48,6 +48,7 @@ from src.rank import measure as measure_mod
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank import rate_effect as rate_mod
+from src.rank import watchlist as watch_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
     ClusterParams,
@@ -1070,6 +1071,26 @@ def rank_run(
         PhenomenaParams(pp["naics_digits"], pp["min_naics_share"], pp["min_direction_share"]),
         min_sources,
     )
+    cand_by_cid = {c.candidate_id: c for c in candidates}
+    marked = {
+        cid: bool(
+            (rate_by_cid[cid].rate_effect if cid in rate_by_cid else False)
+            or (infl_by_cid[cid].rate_effect if cid in infl_by_cid else False)
+        )
+        for cid in cids
+    }
+    watch_params = watch_mod.WatchParams(
+        float(cfg["fdr"]["q"]), float(rk["watchlist"]["min_effect"])
+    )
+    watch_by_pid = {
+        p.phenomenon_id: watch_mod.assess_watch(
+            p.candidate,
+            {c: cand_by_cid[c].evidence for c in p.cluster_ids},
+            marked,
+            watch_params,
+        )
+        for p in phenomena
+    }
     phen_cands = [p.candidate for p in phenomena]
     score(phen_cands, rk["weights"], cfg["detect"]["detectors"], rk["max_candidates"])
     members_of = dict(zip(cids, clusters, strict=True))
@@ -1175,6 +1196,13 @@ def rank_run(
             and not any(by_cid[c].status == "candidato" for c in p.cluster_ids)
             for p in phenomena
         ),
+        "watchlist": {
+            "n_in": sum(w.eligible for w in watch_by_pid.values()),
+            "min_effect": watch_params.min_effect,
+            "excluded_by_reason": dict(
+                sorted(Counter(w.reason for w in watch_by_pid.values() if not w.eligible).items())
+            ),
+        },
         "n_unclustered_over_cap": len(tail),
         "n_term_clusters": len(term_clusters),
         "n_links": len(link_rows),
@@ -1214,7 +1242,7 @@ def rank_run(
     _write("clusters", cluster_rows, cfg)
     _write("series_term_links", link_rows, cfg)
     _write("rank_candidates", cand_rows, cfg)
-    _write("rank_phenomena", phenomena_rows(run_id, phenomena, candidates), cfg)
+    _write("rank_phenomena", phenomena_rows(run_id, phenomena, candidates, watch_by_pid), cfg)
     _write("rank_evidence", ev_rows, cfg)
     _write("rank_origin", origin_rows(run_id, candidates, info), cfg)
     _write("rank_context", context_rows, cfg)
@@ -1226,9 +1254,13 @@ def rank_run(
 
 
 def phenomena_rows(
-    run_id: str, phenomena: list[Any], candidates: list[Candidate]
+    run_id: str,
+    phenomena: list[Any],
+    candidates: list[Candidate],
+    watch: dict[str, watch_mod.Watch] | None = None,
 ) -> list[dict[str, Any]]:
     by_cid = {c.candidate_id: c for c in candidates}
+    watch = watch or {}
     rows = []
     for p in phenomena:
         c = p.candidate
@@ -1255,6 +1287,13 @@ def phenomena_rows(
                 "published": c.published,
                 "measure_mix_json": json.dumps(p.measure_mix),
                 "no_demand_evidence": p.no_demand_evidence,
+                "watch": watch[p.phenomenon_id].eligible if p.phenomenon_id in watch else None,
+                "watch_reason": watch[p.phenomenon_id].reason if p.phenomenon_id in watch else None,
+                "watch_effect": watch[p.phenomenon_id].effect if p.phenomenon_id in watch else None,
+                "watch_q": watch[p.phenomenon_id].q_value if p.phenomenon_id in watch else None,
+                "watch_n_demand_series": watch[p.phenomenon_id].n_demand_series
+                if p.phenomenon_id in watch
+                else None,
             }
         )
     return rows

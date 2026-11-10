@@ -95,6 +95,45 @@ def candidate_naics(
     ]
 
 
+def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Fenómenos «en observación» (ADR 0016): de un solo origen, con evidencia de demanda.
+
+    No es el ranking: no tienen rank ni score. Solo salen ids de cluster (hash), conteos y la
+    industria, así que no puede filtrar series con copyright (la elegibilidad se calculó solo
+    sobre evidencia pública). Orden: efecto descendente."""
+    if not rank_run:
+        return []
+    try:
+        rows = _rank_rows(cfg, RANK_PHENOMENA, "rank_phenomena", rank_run["run_id"])
+    except (FileNotFoundError, OSError):
+        return []
+    names = naics_mod.load_tables(cfg, REPO_ROOT).names
+    out = []
+    for r in rows:
+        if not r.get("watch"):
+            continue
+        out.append(
+            {
+                "phenomenon_id": r["phenomenon_id"],
+                "direction": r["direction"],
+                "sources": json.loads(r["sources_json"]),
+                "n_clusters": r["n_clusters"],
+                "n_members": r["n_members"],
+                "measure_mix": json.loads(r.get("measure_mix_json") or "{}"),
+                "window": (r["window_start"], r["window_end"]),
+                "effect": r.get("watch_effect"),
+                "q": r.get("watch_q"),
+                "n_demand_series": r.get("watch_n_demand_series"),
+                "naics": [
+                    {"naics": c, "name": names.get(c), "weight": w}
+                    for c, w in json.loads(r["naics_json"])
+                ],
+                "clusters": json.loads(r["cluster_ids_json"]),
+            }
+        )
+    return sorted(out, key=lambda p: (-(p["effect"] or 0.0), p["phenomenon_id"]))
+
+
 def phenomena_data(
     cfg: dict[str, Any], rank_run: dict[str, Any] | None, published_ids: set[str]
 ) -> list[dict[str, Any]]:

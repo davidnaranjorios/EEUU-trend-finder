@@ -348,6 +348,9 @@ def _validate_rank(r: dict[str, Any]) -> None:
         raise ConfigError(
             "rank.inflation_effect.min_rows_by_grid: un entero >= 8 por grilla M, Q y A"
         )
+    wl = r.get("watchlist") or {}
+    if not isinstance(wl.get("min_effect"), int | float) or wl["min_effect"] <= 0:
+        raise ConfigError("rank.watchlist.min_effect debe ser un número > 0")
     cm = (r.get("links") or {}).get("comove") or {}
     tg = cm.get("text_grid") or {}
     if not isinstance(tg, dict) or any(g not in ("Q", "A") for g in tg.values()):
