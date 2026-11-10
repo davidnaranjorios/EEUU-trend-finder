@@ -291,6 +291,14 @@ rank:
     seed: 20261109
     include_level: true
     min_rows_by_grid: {M: 36, Q: 20, A: 12}
+  # Etiqueta "efecto inflación" (src/rank/inflation_effect.py, ADR 0015): igual que el efecto de
+  # tasas, pero el regresor es la inflación del deflactor aprobado (context.reference_series.
+  # deflator); sin claves nuevas. Solo etiqueta: nunca filtra ni cambia el score.
+  inflation_effect:
+    max_lag: 2
+    min_drop: 0.5
+    seed: 20261110
+    min_rows_by_grid: {M: 36, Q: 20, A: 12}
   # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
   # ventanas solapadas se triangulan juntos (src/rank/phenomena.py). La regla de origen no cambia.
   phenomena:

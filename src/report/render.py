@@ -169,6 +169,10 @@ def guide(
         "códigos oficiales de la agencia, nunca del tema.</dd>",
         "<dt>Sin evidencia de demanda</dt><dd>Etiqueta de un fenómeno cuyo respaldo numérico son "
         "solo precios: puede reflejar costos u oferta. No es un filtro ni cambia el ranking.</dd>",
+        "<dt>Efecto inflación</dt><dd>Etiqueta descriptiva, no una señal ni un filtro: el "
+        "crecimiento del cluster se relaciona de forma significativa con la inflación (IPC-U) y, "
+        "al quitar esa parte, su cambio de pendiente cae o deja de ser significativo. El "
+        "candidato sigue en el ranking con el mismo score.</dd>",
         "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
         "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
         "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "
@@ -540,6 +544,23 @@ def _rate_badge(c: dict[str, Any]) -> str:
     return f' <span class="state rate-effect" title="{esc(title)}">Efecto de tasas{esc(pct)}</span>'
 
 
+def _inflation_badge(c: dict[str, Any]) -> str:
+    """Etiqueta "efecto inflación": solo avisa, nunca filtra ni cambia el score."""
+    if not c.get("inflation_effect"):
+        return ""
+    share = c.get("inflation_share")
+    pct = f" ({share:.0%} del cambio de pendiente)" if share is not None else ""
+    title = (
+        "El crecimiento de este cluster se explica en buena parte por la inflación (IPC-U): al "
+        "quitarla, el cambio de pendiente cae o deja de ser significativo. Etiqueta "
+        "descriptiva: no cambia el ranking."
+    )
+    return (
+        f' <span class="state inflation-effect" title="{esc(title)}">'
+        f"Efecto inflación{esc(pct)}</span>"
+    )
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -558,7 +579,7 @@ def _candidate(c: dict[str, Any]) -> str:
         else ""
     )
     naics = _naics_line(c.get("naics") or [])
-    rate = _rate_badge(c)
+    rate = _rate_badge(c) + _inflation_badge(c)
     return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
  data-state="{esc(state)}">
 <header><span class="rank">#{c["rank"]}</span>{badge}
