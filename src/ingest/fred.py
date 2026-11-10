@@ -27,7 +27,7 @@ from typing import Any
 import pyarrow as pa
 from dotenv import load_dotenv
 
-from src.config import REPO_ROOT, load_config
+from src.config import REPO_ROOT, in_young_scope, load_config
 from src.ingest.http import ApiClient, ApiError, RateLimiter
 from src.ingest.store import UpsertResult, read_table, upsert
 from src.log import get_logger, run
@@ -356,7 +356,11 @@ class FredIngestor:
         historial de publicación solo se guarda para la muestra de `vintages`.
         """
         targets = self._targets(
-            ids, self.cfg["download"]["groups"], category_id, with_reference=category_id is None
+            ids,
+            self.cfg["download"]["groups"],
+            category_id,
+            with_reference=category_id is None,
+            young=True,
         )
         state = self._state(self.paths.fetch_state)
         todo = [r for r in targets if _needs_fetch(r, state.get(r["series_id"]))]
@@ -390,7 +394,9 @@ class FredIngestor:
             raise RuntimeError("download requiere el cliente de la API v2")
         targets = {
             r["series_id"]: r
-            for r in self._targets(None, self.cfg["download"]["groups"], with_reference=True)
+            for r in self._targets(
+                None, self.cfg["download"]["groups"], with_reference=True, young=True
+            )
         }
         attrs = {
             r["series_id"]: r
@@ -616,8 +622,12 @@ class FredIngestor:
         category_id: int | None = None,
         *,
         with_reference: bool = False,
+        young: bool = False,
     ) -> list[dict[str, Any]]:
         """Filas de catálogo de las series objetivo, ordenadas por id.
+
+        `young`: suma las series jóvenes (`eligibility.young`, ADR 0017) de nivel geográfico
+        descargable; solo para descargar valores, nunca para vintages.
 
         `with_reference`: suma las series de referencia metodológica (context.reference_series,
         ADR 0009) aunque el embudo no las clasifique en `groups`: la ficha del fenómeno las
@@ -632,7 +642,13 @@ class FredIngestor:
             rows = lineage.to_pylist()
             last = max(rows, key=lambda r: (r["decided_at"], r["run_id"]))["run_id"]
             ids = [
-                r["series_id"] for r in rows if r["run_id"] == last and r["group_name"] in groups
+                r["series_id"]
+                for r in rows
+                if r["run_id"] == last
+                and (
+                    r["group_name"] in groups
+                    or (young and in_young_scope(r["group_name"], r.get("geo_level"), self.cfg))
+                )
             ]
             if with_reference:
                 refs = (self.cfg.get("context") or {}).get("reference_series") or {}

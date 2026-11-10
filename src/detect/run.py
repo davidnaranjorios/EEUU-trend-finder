@@ -69,6 +69,7 @@ class Series:
     copyrighted: bool
     level: np.ndarray
     first_index: int
+    units: str | None = None
 
 
 @dataclass
@@ -133,14 +134,29 @@ def load_series(
     return out
 
 
+def load_young_series(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> list[Series]:
+    """Series jóvenes (`eligibility.young`, ADR 0017): SOLO para `relative_growth`.
+
+    Los grupos jóvenes (historia corta) no están en `download.groups`, así que `load_series` (que
+    alimenta slope y regime) nunca los ve; aquí se cargan con su nivel geográfico descargable y
+    entre `min_years` y `max_years` de historia. Una serie más vieja no entra."""
+    out: list[Series] = []
+    for source in detect_sources(cfg):
+        out += _load_source(con, cfg, source, None, young=True)
+    return out
+
+
 def _load_source(
     con: duckdb.DuckDBPyConnection,
     cfg: dict[str, Any],
     source: str,
     ids: list[str] | None,
+    young: bool = False,
 ) -> list[Series]:
-    """Series de una fuente: última decisión del embudo por serie, grupos `download.groups`."""
+    """Series de una fuente: última decisión del embudo por serie, grupos `download.groups`
+    (o, con `young`, los grupos de `eligibility.young` con su rango de historia)."""
     min_obs = cfg["eligibility"]["min_obs"]
+    ycfg = cfg["eligibility"].get("young") or {}
     # FRED reclasifica todo el catálogo en cada corrida del embudo: vale su última corrida. Las
     # fuentes de la Fase 4 reprocesan solo las unidades que cambiaron: última decisión por serie.
     latest = (
@@ -148,7 +164,14 @@ def _load_source(
         if source in FULL_RUN_SOURCES
         else "row_number() OVER (PARTITION BY series_id ORDER BY decided_at DESC, run_id DESC) = 1"
     )
-    params: list[Any] = [source, cfg["download"]["groups"], source]
+    params: list[Any] = [source]
+    if young:
+        params += [ycfg["groups"], cfg["download"]["groups"]]
+        ok_filter = "list_contains(?, group_name) AND list_contains(?, geo_level)"
+    else:
+        params += [cfg["download"]["groups"]]
+        ok_filter = "list_contains(?, group_name)"
+    params.append(source)
     id_filter = ""
     if ids is not None:
         id_filter = "AND list_contains(?, s.series_id)"
@@ -156,15 +179,16 @@ def _load_source(
     rel = con.execute(
         f"""
         WITH last AS (
-          SELECT series_id, group_name, copyrighted FROM eligibility WHERE source = ?
+          SELECT series_id, group_name, geo_level, copyrighted FROM eligibility WHERE source = ?
           QUALIFY {latest}
         ), ok AS (
-          SELECT series_id, copyrighted FROM last WHERE list_contains(?, group_name)
+          SELECT series_id, copyrighted FROM last WHERE {ok_filter}
         )
         SELECT s.series_id,
                any_value(s.frequency) AS frequency,
                any_value(s.seasonal_adjustment) AS seasonal_adjustment,
                any_value(ok.copyrighted) AS copyrighted,
+               any_value(s.units) AS units,
                count(*) AS n_obs,
                list(CASE WHEN s.frequency = 'Q' THEN year(s.date) * 4 + (month(s.date) - 1) // 3
                          WHEN s.frequency = 'A' THEN year(s.date)
@@ -184,21 +208,28 @@ def _load_source(
     gi_flat = gi_col.flatten().to_numpy(zero_copy_only=False).astype(np.int64)
     val_flat = val_col.flatten().to_numpy(zero_copy_only=False).astype(float)
     offsets = gi_col.offsets.to_numpy()
-    for i, (sid, freq, sa, cr, n_obs) in enumerate(
+    for i, (sid, freq, sa, cr, units, n_obs) in enumerate(
         zip(
             rel.column("series_id").to_pylist(),
             rel.column("frequency").to_pylist(),
             rel.column("seasonal_adjustment").to_pylist(),
             rel.column("copyrighted").to_pylist(),
+            rel.column("units").to_pylist(),
             rel.column("n_obs").to_pylist(),
             strict=True,
         )
     ):
-        if n_obs < min_obs[freq] or (source, sid) in refs:
+        if (source, sid) in refs:
             continue
         lo, hi = offsets[i], offsets[i + 1]
         level, first = to_grid(gi_flat[lo:hi], val_flat[lo:hi])
-        out.append(Series(source, sid, freq, GRID_OF[freq], sa, bool(cr), level, first))
+        if young:
+            years = level.size / PERIODS_PER_YEAR[GRID_OF[freq]]
+            if not ycfg["min_years"] <= years <= ycfg["max_years"]:
+                continue  # demasiado corta, o más vieja que la ventana: va a slope y regime
+        elif n_obs < min_obs[freq]:
+            continue
+        out.append(Series(source, sid, freq, GRID_OF[freq], sa, bool(cr), level, first, units))
     return out
 
 
@@ -396,6 +427,10 @@ def run_detectors(
             log.info(
                 "detector probado", extra={"fields": {"detector": detector, **stats[detector]}}
             )
+    if cfg["detect"]["relative_growth"]["enabled"]:
+        from src.detect.young import run_young  # importación tardía: young importa este módulo
+
+        stats["relative_growth"] = run_young(cfg, run_id, shard, log)
     return stats
 
 
@@ -499,6 +534,29 @@ def finalize(
     ):
         report["detectors"][det]["approval_alert"] = a["alert"]
         report["detectors"][det]["possible_failure"] = a["possible_failure"]
+    if "relative_growth" in by_det:
+        from src.detect.young import lineage_path
+
+        path = lineage_path(cfg, run_id)
+        lin = json.loads(path.read_text("utf-8")) if path.exists() else {}
+        report["relative_growth"] = {
+            "confidence": cfg["detect"]["relative_growth"]["confidence"],
+            "lineage_file": str(path),
+            "n_young": len(lin),
+            "parent_by_method": dict(Counter(v["how"] for v in lin.values() if "how" in v)),
+            "not_tested_by_reason": dict(
+                sorted(Counter(v["not_tested"] for v in lin.values() if "not_tested" in v).items())
+            ),
+        }
+    if cfg["detect"]["relative_growth"]["births"]["enabled"]:
+        from src.detect import births  # descriptivo: no entra a signals ni al ranking
+
+        try:
+            report["births"] = births.compute(cfg)
+        except Exception as exc:  # el conteo es un extra: su fallo no tumba las familias
+            report["births"] = {"descriptive": True, "error": f"{type(exc).__name__}: {exc}"}
+            if log is not None:
+                log.warning("conteo de nacimientos falló", extra={"fields": {"error": str(exc)}})
     save_report(cfg, report)
     if log is not None:
         log.info("familias cerradas", extra={"fields": {"run_id": run_id, "signals": len(signals)}})

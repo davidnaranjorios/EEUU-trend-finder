@@ -80,6 +80,9 @@ def cfg():
     c = copy.deepcopy(load_config())
     c["fred"].update(page_limit_series=2, page_limit_observations=50, obs_batch_size=2, n_buckets=4)
     c["download"]["v2_page_limit"] = 250
+    # Los tests de descarga parten sin el alcance de series jóvenes (ADR 0017); el suyo propio
+    # está en `test_young_series_are_downloaded_only_when_enabled`.
+    c["eligibility"]["young"]["groups"] = []
     return c
 
 
@@ -249,6 +252,16 @@ def test_only_target_groups_fetched(make, fake):
     fetched = {p["series_id"] for e, p in fake.requests if e == "series/observations"}
     # CCC descontinuada, DDD frecuencia no soportada, EEE historia corta (grupo "nuevas").
     assert fetched == {"AAA", "BBB", "FFF"}
+
+
+def test_young_series_are_downloaded_only_when_enabled(make, fake, cfg):
+    cfg["eligibility"]["young"]["groups"] = ["nuevas"]  # EEE: historia corta, nivel nacional
+    ing = prepare(make)
+    ing.observations()
+    fetched = {p["series_id"] for e, p in fake.requests if e == "series/observations"}
+    assert fetched == {"AAA", "BBB", "EEE", "FFF"}  # la joven nacional entra; CCC y DDD no
+    # Los vintages siguen mirando solo `vintages.groups`: la joven nunca entra a la muestra.
+    assert "EEE" not in {r["series_id"] for r in ing._targets(None, cfg["vintages"]["groups"])}
 
 
 def test_reference_series_are_downloaded_outside_target_groups(make, fake, cfg):
