@@ -277,6 +277,8 @@ RANK_CANDIDATES = TableSpec(
         ("n_members", pa.int64(), False),
         ("n_terms", pa.int64(), False),
         ("published", pa.bool_(), False),
+        # Mezcla de clases de medida de sus series: {"precio": 2, "cantidad": 1}.
+        ("measure_mix_json", pa.string(), True),
         # "Efecto de tasas": etiqueta descriptiva, nunca filtra. `rate_share` = fracción del
         # cambio de pendiente que explica la tasa; `rate_q`/`rate_n_tests`: q de BH y tamaño de
         # la familia de clusters contra la que se corrigió. NULL = no evaluado.
@@ -308,6 +310,9 @@ RANK_EVIDENCE = TableSpec(
         ("link_score", pa.float64(), True),
         ("linked_series", pa.string(), True),
         ("n_entities", pa.int64(), True),
+        # Clase de medida de la serie (rank/measure.py): precio, cantidad, valor, tasa u otro.
+        ("measure_kind", pa.string(), True),
+        ("measure_subtype", pa.string(), True),
     ),
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
@@ -354,6 +359,10 @@ RANK_PHENOMENA = TableSpec(
         # Triangulado solo al juntar clusters: ningún cluster llegaba a 2 fuentes por separado.
         ("by_grouping", pa.bool_(), False),
         ("published", pa.bool_(), False),
+        # Mezcla de clases de medida y etiqueta `sin_evidencia_de_demanda` (ADR 0014): True si
+        # todo su respaldo numérico son precios; NULL si no se puede afirmar. Solo etiqueta.
+        ("measure_mix_json", pa.string(), True),
+        ("no_demand_evidence", pa.bool_(), True),
     ),
     key=("run_id", "phenomenon_id"),
 )

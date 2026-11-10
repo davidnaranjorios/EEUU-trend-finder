@@ -164,6 +164,11 @@ def guide(
         "de la tasa de corto plazo (T-bill a 3 meses) y, al quitar esa parte, su cambio de "
         "pendiente cae o deja de ser significativo. El candidato sigue en el ranking con el "
         "mismo score.</dd>",
+        "<dt>Clase de medida</dt><dd>Qué mide cada serie: precio (incluido el costo laboral), "
+        "cantidad, valor nominal (precio × cantidad) o tasa. Sale de las unidades y de los "
+        "códigos oficiales de la agencia, nunca del tema.</dd>",
+        "<dt>Sin evidencia de demanda</dt><dd>Etiqueta de un fenómeno cuyo respaldo numérico son "
+        "solo precios: puede reflejar costos u oferta. No es un filtro ni cambia el ranking.</dd>",
         "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
         "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
         "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "
@@ -224,6 +229,31 @@ def _origin_rows(s: dict[str, Any]) -> str:
     return out
 
 
+# Tooltip de la clase de medida (fuera de TIPS: ese diccionario es de estadística, no de medida).
+CLASS_TIP = (
+    "Qué mide la serie: precio, cantidad, valor nominal (precio × cantidad), tasa o razón. Sale "
+    "de las unidades y los códigos oficiales de la agencia, no del tema. Es descriptiva: no "
+    "cambia el ranking ni el score."
+)
+MEASURE_LABELS = {
+    "precio": "precio",
+    "cantidad": "cantidad",
+    "valor": "valor (nominal)",
+    "tasa": "tasa o razón",
+    "otro": "sin clasificar",
+}
+
+
+def measure_label(kind: str | None, subtype: str | None = None) -> str:
+    """ "precio (costo laboral)", "cantidad"...: la clase de medida de una serie (ADR 0014)."""
+    base = MEASURE_LABELS.get(kind or "otro", "sin clasificar")
+    return f"{base} (costo laboral)" if subtype == "costo_laboral" else base
+
+
+def _measure_mix(mix: dict[str, int]) -> str:
+    return ", ".join(f"{n} {MEASURE_LABELS.get(k, k)}" for k, n in mix.items()) or "—"
+
+
 def _series_block(s: dict[str, Any]) -> str:
     dets = ", ".join(DETECTOR_NAMES.get(d, d) for d in s["detectors"])
     w = s["window"]
@@ -238,7 +268,8 @@ def _series_block(s: dict[str, Any]) -> str:
 <div><h3>{esc(s["title"])}</h3>{sentences}
 <dl><dt>Fuente</dt><dd>{esc(src_name(s["source"]))} · {esc(s["id"])}</dd>
 <dt>Agencia</dt><dd>{esc(agencies)}</dd>
-{_origin_rows(s)}<dt>Unidades</dt>
+{_origin_rows(s)}<dt><abbr title="{esc(CLASS_TIP)}">Clase</abbr></dt>
+<dd>{esc(measure_label(s.get("measure_kind"), s.get("measure_subtype")))}</dd><dt>Unidades</dt>
 <dd>{esc(s["units"])} ({esc(s["frequency"])}, {esc(s["seasonal_adjustment"])})</dd>
 <dt>Detector</dt><dd>{esc(dets)}</dd>
 <dt>{tip("q (BH)", "q")}</dt><dd>{fq(s["q_value"])}</dd>
@@ -550,6 +581,14 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
         else f'<code title="cluster de una sola fuente, sin ficha propia">{esc(c["id"])}</code>'
         for c in p["clusters"]
     )
+    mix = esc(_measure_mix(p.get("measure_mix") or {}))
+    demand = (
+        '<p class="plain demand-warning"><strong>Sin evidencia de demanda:</strong> todo su '
+        "respaldo numérico son precios (sin cantidad ni valor real). Un cambio de precios puede "
+        "reflejar costos u oferta y no demanda. Etiqueta descriptiva: no cambia el ranking.</p>"
+        if p.get("no_demand_evidence")
+        else ""
+    )
     grouping = (
         '<p class="plain">Ningún cluster llega solo a 2 fuentes independientes: la triangulación '
         "sale de juntarlos (misma industria, misma dirección, ventanas que se solapan).</p>"
@@ -565,7 +604,8 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 {esc(p["direction"])}{win}</span></header>
 <div>{_sources_chips(p["sources"])}</div>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
-{grouping}<p class="muted">Clusters: {clusters}</p>
+{demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
+<p class="muted">Clusters: {clusters}</p>
 </section>"""
 
 

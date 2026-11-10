@@ -229,7 +229,8 @@ de crecimientos + embeddings de títulos), cruces término–serie con embedding
 (fastembed + bge-small-en-v1.5, umbral nulo por término desde `term_freq`), triangulación,
 score con pesos en `config.yaml` y sitio estático con ranking, dashboard y explorador, con
 barrera de copyright (`src/report/guard.py`). Diseño: ADR 0009. Independencia por ORIGEN del
-dato (`config/data_origin.yaml` + detector de duplicados, `src/rank/origin.py`): ADR 0010.
+dato (`config/data_origin.yaml` + detector de duplicados, `src/rank/origin.py`): ADR 0010. Clase de medida (precio,
+cantidad, valor, tasa) por serie (`config/measure_kind.yaml`, `src/rank/measure.py`): ADR 0014.
 Uso: `uv sync --group embed`, `uv run python -m src.rank run` y `uv run python -m src.report
 build`; en Actions, `.github/workflows/reporte.yml` (publica en GitHub Pages; otro destino con la
 variable `PUBLISH_TARGET`: cloudflare_pages o none). Tablas en `processed/rank/`:
