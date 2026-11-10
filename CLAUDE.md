@@ -30,6 +30,9 @@ El sistema propone candidatos. La interpretación final la hace un humano.
 4. **Triangulación.** Un candidato solo entra al ranking final si tiene respaldo en al menos
    dos fuentes independientes (p. ej., una serie numérica más señal de texto, o dos
    agencias distintas).
+   Excepción aprobada por David el 2026-11-10 (ADR 0016): una lista separada «en observación» (🟡)
+   muestra fenómenos de un solo origen que pasan FDR y tienen evidencia de demanda (cantidad o valor);
+   no es el ranking final, no entra al score y sus fenómenos no se presentan como triangulados.
 5. **Sin información del futuro.** El backtest usa datos tal como estaban publicados en cada
    fecha (vintages de ALFRED). Nada de datos revisados en evaluaciones históricas.
 6. **Evidencia antes que afirmaciones.** No declares una fase terminada sin mostrar el output

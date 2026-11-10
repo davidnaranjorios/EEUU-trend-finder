@@ -376,6 +376,21 @@ def _validate_rank(r: dict[str, Any]) -> None:
     mr = re_.get("min_rows_by_grid") or {}
     if any(not isinstance(mr.get(g), int) or mr[g] < 8 for g in ("M", "Q", "A")):
         raise ConfigError("rank.rate_effect.min_rows_by_grid: un entero >= 8 por grilla M, Q y A")
+    ie = r.get("inflation_effect") or {}
+    if not isinstance(ie.get("max_lag"), int) or ie["max_lag"] < 0:
+        raise ConfigError("rank.inflation_effect.max_lag debe ser un entero >= 0")
+    if not isinstance(ie.get("min_drop"), int | float) or not 0 < ie["min_drop"] <= 1:
+        raise ConfigError("rank.inflation_effect.min_drop debe estar en (0, 1]")
+    if not isinstance(ie.get("seed"), int):
+        raise ConfigError("rank.inflation_effect.seed debe ser un entero")
+    imr = ie.get("min_rows_by_grid") or {}
+    if any(not isinstance(imr.get(g), int) or imr[g] < 8 for g in ("M", "Q", "A")):
+        raise ConfigError(
+            "rank.inflation_effect.min_rows_by_grid: un entero >= 8 por grilla M, Q y A"
+        )
+    wl = r.get("single_origin") or {}
+    if not isinstance(wl.get("min_effect"), int | float) or wl["min_effect"] <= 0:
+        raise ConfigError("rank.single_origin.min_effect debe ser un número > 0")
     cm = (r.get("links") or {}).get("comove") or {}
     tg = cm.get("text_grid") or {}
     if not isinstance(tg, dict) or any(g not in ("Q", "A") for g in tg.values()):

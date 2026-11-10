@@ -170,6 +170,14 @@ def guide(
         "códigos oficiales de la agencia, nunca del tema.</dd>",
         "<dt>Sin evidencia de demanda</dt><dd>Etiqueta de un fenómeno cuyo respaldo numérico son "
         "solo precios: puede reflejar costos u oferta. No es un filtro ni cambia el ranking.</dd>",
+        "<dt>Efecto inflación</dt><dd>Etiqueta descriptiva, no una señal ni un filtro: el "
+        "crecimiento del cluster se relaciona de forma significativa con la inflación (IPC-U) y, "
+        "al quitar esa parte, su cambio de pendiente cae o deja de ser significativo. El "
+        "candidato sigue en el ranking con el mismo score.</dd>",
+        "<dt>En observación</dt><dd>Lista separada del ranking (🟡): fenómenos de un solo origen "
+        "que pasan el control de falsos descubrimientos y tienen evidencia de demanda (series de "
+        "cantidad o valor sin efecto de tasas ni de inflación). No están triangulados, no entran "
+        "al score y no se presentan como candidatos del ranking.</dd>",
         "<dt>Ficha del fenómeno</dt><dd>Contexto descriptivo, no una señal: las series del "
         "cluster en base 100, transformaciones (interanual, anualizada, real y per cápita solo "
         "con unidades nominales), relacionadas elegidas por los datos (misma rama de categoría, "
@@ -541,6 +549,23 @@ def _rate_badge(c: dict[str, Any]) -> str:
     return f' <span class="state rate-effect" title="{esc(title)}">Efecto de tasas{esc(pct)}</span>'
 
 
+def _inflation_badge(c: dict[str, Any]) -> str:
+    """Etiqueta "efecto inflación": solo avisa, nunca filtra ni cambia el score."""
+    if not c.get("inflation_effect"):
+        return ""
+    share = c.get("inflation_share")
+    pct = f" ({share:.0%} del cambio de pendiente)" if share is not None else ""
+    title = (
+        "El crecimiento de este cluster se explica en buena parte por la inflación (IPC-U): al "
+        "quitarla, el cambio de pendiente cae o deja de ser significativo. Etiqueta "
+        "descriptiva: no cambia el ranking."
+    )
+    return (
+        f' <span class="state inflation-effect" title="{esc(title)}">'
+        f"Efecto inflación{esc(pct)}</span>"
+    )
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -559,7 +584,7 @@ def _candidate(c: dict[str, Any]) -> str:
         else ""
     )
     naics = _naics_line(c.get("naics") or [])
-    rate = _rate_badge(c)
+    rate = _rate_badge(c) + _inflation_badge(c)
     return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
  data-state="{esc(state)}">
 <header><span class="rank">#{c["rank"]}</span>{badge}
@@ -610,6 +635,26 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 </section>"""
 
 
+def _watch_card(p: dict[str, Any]) -> str:
+    naics = "; ".join(f"{n['naics']} {n['name'] or ''} ({n['weight']:.0%})" for n in p["naics"])
+    ws, we = p["window"]
+    win = f" · ventana {esc(ws)} a {esc(we)}" if ws and we else ""
+    clusters = " ".join(f"<code>{esc(c)}</code>" for c in p["clusters"])
+    return f"""<section class="card watch" id="{esc(p["phenomenon_id"])}">
+<header><span class="state watch-flag">🟡 En observación</span>
+<span>efecto {fnum(p["effect"], 2)} · q {fnum(p["q"], 4)}</span>
+<span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
+{esc(p["direction"])}{win}</span></header>
+<p class="plain watch-warning"><strong>Un solo origen: no triangulado.</strong> No es un candidato \
+del ranking ni entra al score; pasa FDR y tiene {p["n_demand_series"]} serie(s) de cantidad o \
+valor sin efecto de tasas ni de inflación.</p>
+<div>{_sources_chips(p["sources"])}</div>
+<p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
+<p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
+<p class="muted">Clusters: {clusters}</p>
+</section>"""
+
+
 def _tile(k: str, v: Any) -> str:
     return f'<div class="tile"><div class="v">{esc(v)}</div><div class="k">{esc(k)}</div></div>'
 
@@ -625,6 +670,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         _tile("Clusters", fnum(rr.get("n_clusters"))),
         _tile("Fenómenos", fnum(len(data.get("phenomena") or []))),
         _tile("Con ≥ 2 fuentes", fnum(rr.get("n_candidates"))),
+        _tile("En observación (1 origen)", fnum(len(data.get("watchlist") or []))),
         _tile("Publicados", fnum(rr.get("n_published"))),
         _tile("Una sola fuente (descartados)", fnum(rr.get("n_single_source"))),
         "</div>",
@@ -670,6 +716,13 @@ def ranking_page(data: dict[str, Any]) -> str:
         '<div id="rank-list">'
         + (concat(*(_candidate(c) for c in series)) if series else none)
         + "</div>",
+        f"<h2>🟡 En observación ({len(data.get('watchlist') or [])})</h2>",
+        '<p class="lead watch-lead">Lista separada del ranking: fenómenos de <strong>un solo '
+        "origen</strong> que pasan FDR y tienen evidencia de demanda (cantidad o valor). No están "
+        "triangulados, no entran al score y no son candidatos del ranking; sirven para vigilarlos "
+        "hasta que aparezca un segundo origen.</p>",
+        concat(*(_watch_card(p) for p in data.get("watchlist") or []))
+        or '<p class="muted">Sin fenómenos en observación esta semana.</p>',
         f"<h2>Candidatos solo de texto ({len(text)})</h2>",
         '<p class="muted">Términos emergentes parecidos en EDGAR y en el Federal Register.</p>',
         concat(*(_candidate(c) for c in text)) if text else none,
