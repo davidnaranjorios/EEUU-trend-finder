@@ -299,10 +299,11 @@ rank:
     min_drop: 0.5
     seed: 20261110
     min_rows_by_grid: {M: 36, Q: 20, A: 12}
-  # Lista "en observación" (src/rank/watchlist.py, ADR 0016): fenómenos de UN solo origen con señal
+  # Lista "en observación" (src/rank/watchlist.py, ADR 0016; la clave es single_origin porque el
+  # guard no admite «watch» en claves): fenómenos de UN solo origen con señal
   # (q <= fdr.q), evidencia de demanda (cantidad o valor), sin efecto de tasas ni de inflación y con
   # efecto estandarizado >= min_effect. Lista separada: no es el ranking, no entra al score.
-  watchlist:
+  single_origin:
     min_effect: 1.0
   # Fenómenos: clusters con NAICS compartido (a naics_digits dígitos), misma dirección del efecto y
   # ventanas solapadas se triangulan juntos (src/rank/phenomena.py). La regla de origen no cambia.

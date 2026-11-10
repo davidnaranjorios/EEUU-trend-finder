@@ -1080,7 +1080,7 @@ def rank_run(
         for cid in cids
     }
     watch_params = watch_mod.WatchParams(
-        float(cfg["fdr"]["q"]), float(rk["watchlist"]["min_effect"])
+        float(cfg["fdr"]["q"]), float(rk["single_origin"]["min_effect"])
     )
     watch_by_pid = {
         p.phenomenon_id: watch_mod.assess_watch(

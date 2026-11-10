@@ -113,8 +113,14 @@ def test_schema_rejects_a_watch_row_that_is_triangulated_published_or_ranked():
                  RANK_PHENOMENA)  # fmt: skip
 
     check()
-    for bad in ({"n_sources": 2, "n_sources_public": 2}, {"rank": 1}, {"score": 0.5},
-                {"status": "candidato", "n_sources": 2, "n_sources_public": 2, "published": True}):  # fmt: skip
+    triangulated = {"status": "candidato", "n_sources": 2, "n_sources_public": 2}
+    cases = [
+        {"n_sources": 2, "n_sources_public": 2},
+        {"rank": 1},
+        {"score": 0.5},
+        {**triangulated, "published": True},
+    ]
+    for bad in cases:
         with pytest.raises(SchemaError):
             check(**bad)
 
@@ -122,7 +128,7 @@ def test_schema_rejects_a_watch_row_that_is_triangulated_published_or_ranked():
 def test_config_validates_min_effect():
     cfg = json.loads(json.dumps(load_config()))
     validate_config(cfg)
-    cfg["rank"]["watchlist"]["min_effect"] = 0
+    cfg["rank"]["single_origin"]["min_effect"] = 0
     with pytest.raises(ConfigError):
         validate_config(cfg)
 
@@ -171,8 +177,5 @@ def test_report_has_a_separate_watch_section_with_the_warning(tmp_path):
     rank_run(fx.cfg, "rank_watch2")
     site = build_site(fx.cfg)
     html = (Path(site["site_dir"]) / "index.html").read_text("utf-8")
-    assert (
-        "En observación" in html
-        and "no entran al score" in html.replace("\n", " ")
-        or ("no entra al score" in html)
-    )
+    assert "🟡 En observación" in html
+    assert "Sin fenómenos en observación esta semana" in html or "Un solo origen" in html

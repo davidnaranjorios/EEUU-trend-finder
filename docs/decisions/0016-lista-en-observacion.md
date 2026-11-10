@@ -19,7 +19,7 @@ demanda pero respaldados por un único origen del dato. Hoy desaparecen del repo
   2. señal: q ≤ `fdr.q` (las señales ya pasaron BH),
   3. al menos una serie `cantidad` o `valor` (ADR 0014) en un cluster **sin** efecto de tasas
      (ADR 0013) ni efecto inflación (ADR 0015),
-  4. efecto estandarizado (por la sd robusta del crecimiento) ≥ `rank.watchlist.min_effect`
+  4. efecto estandarizado (por la sd robusta del crecimiento) ≥ `rank.single_origin.min_effect` (la clave no lleva «watch»: el guard del principio 1 lo rechaza en claves de `config.yaml`)
      (1,0 por defecto; configurable).
 - Un cluster con efecto no evaluado (NULL) no se excluye: no saber no es un efecto. Es un límite:
   una serie corta que no se pudo evaluar puede entrar aunque su aceleración sea inflación.
