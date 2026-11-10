@@ -49,3 +49,28 @@ rules:
     match: {source: fred, release_id: 205, series_id_regex: "^L[CRF]"}
     origin: bureau of labor statistics
     chain: [BLS, OCDE MEI]
+  - id: bea_price_indexes_bls
+    # Índices de precios y deflactores de BEA (NIPA, NIUnderlyingDetail, GDPbyIndustry y
+    # UnderlyingGDPbyIndustry): BEA los arma sobre todo con índices de BLS (PPI, IPC y precios de
+    # importación). Se identifican por la descripción oficial de la tabla ("Price Indexes",
+    # "Implicit Price Deflators", "in Prices"), no por tema. Las tablas de cantidad (Chain-Type
+    # Quantity Indexes, Chained Dollars) y de valor nominal NO casan: siguen con su agencia.
+    # Fuentes (ADR 0013, sección 10): NIPA Handbook, cap. 4, p. 4-25 (dic. 2023) y Survey of Current
+    # Business, marzo de 1998, "Gross Product by Industry Price Measures".
+    match:
+      source: bea
+      series_id_regex: "^(?:NIPA|NIUnderlyingDetail|GDPbyIndustry|UnderlyingGDPbyIndustry):"
+      title_regex: "(?i)price indexes?|price deflators?|\\bin prices\\b"
+    origin: U.S. Bureau of Economic Analysis
+    also_origin: [U.S. Bureau of Labor Statistics]
+    chain: ["BLS (PPI, IPC, precios de importación)", "BEA (índice de precios o deflactor)"]
+  - id: bea_price_indexes_bls_via_fred
+    # Los mismos índices de precios de BEA cuando llegan vía FRED (agencia BEA); se reconocen por el
+    # título de FRED: "Implicit Price Deflator", "Chain-type Price Index", "Price Indexes".
+    match:
+      source: fred
+      agency: U.S. Bureau of Economic Analysis
+      title_regex: "(?i)price index|price indexes|price deflator|implicit price|chain-type price"
+    origin: U.S. Bureau of Economic Analysis
+    also_origin: [U.S. Bureau of Labor Statistics]
+    chain: ["BLS (PPI, IPC, precios de importación)", "BEA (índice de precios o deflactor)"]

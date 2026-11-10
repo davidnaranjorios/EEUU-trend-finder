@@ -183,3 +183,75 @@ Federal Register quedaban ~6–15 puntos y casi nada de potencia.
   `comove_tested` deberían subir y `comove_bh` dejar de ser 0 donde haya relación real. Nuevas
   claves en `link_funnel`: `comove_tested_grid_Q` y `comove_tested_grid_A`.
 - Los términos de EDGAR no cambian de grilla; no se esperan cambios en sus enlaces.
+
+## 10. Índices de precios de BEA construidos con precios de BLS (rama `claude/origen-bea-ppi`)
+Corrida b23cf89a: el único candidato publicado (c7cf98c7e3ab5) triangulaba precios de
+computadoras y electrónica con BEA (Table 2BUI «Implicit Price Deflators for Manufacturing and
+Trade Sales»; GDPbyIndustry «Chain-Type Price Indexes for Value Added / Gross Output») y BLS (PPI
+por subsector). Si BEA arma esos índices con precios de BLS, no son independientes por ORIGEN (mismo
+caso que HELOC/Z.1, ADR 0010).
+
+**Verificación en documentación oficial de BEA (2026-11-10)**
+- NIPA Handbook, cap. 4 «Estimating Methods» (actualizado en diciembre de 2023), p. 4-25:
+  «BEA's primary source of indexes to deflate GDP and its components is BLS, which provides detailed
+  price indexes—including consumer price indexes, producer price indexes, and international price
+  indexes.» Añade: «In cases where quality-adjusted indexes have not been available, BEA has
+  developed its own indexes», con los ejemplos de índices hedónicos propios de computadoras (años
+  80 y principios de los 90; «as BLS began publishing quality-adjusted PPIs for computers and
+  peripheral equipment in the 1990s, BEA adjusted its methodologies to incorporate them»),
+  semiconductores, conmutadores telefónicos digitales, software y fotocopiadoras.
+  https://www.bea.gov/resources/methodologies/nipa-handbook/pdf/chapter-04.pdf
+- Survey of Current Business, marzo de 1998, «Gross Product by Industry Price Measures»
+  (el detalle por industria; es un documento antiguo y no hay uno equivalente reciente que haya
+  podido leer): «Detailed price indexes for manufacturing and wholesale trade are primarily producer
+  price indexes (PPI's) from the Bureau of Labor Statistics (BLS). Price indexes for farm products are
+  from the U.S. Department of Agriculture, and price indexes for mineral products are mostly from the
+  U.S. Department of Interior and the U.S. Department of Energy. Price indexes for selected
+  products—including computers, semiconductors, digital telephone switching equipment, and selected
+  equipment purchased by the U.S. Department of Defense—are from the national income and product
+  accounts. Price indexes for retail trade and for services are primarily consumer price indexes
+  (CPI's), or they are derived from the CPI's.» Para los insumos intermedios: «Detailed price
+  indexes for inputs of manufactured goods are from BLS: Primarily PPI's for domestic goods and
+  international price indexes for imports. These indexes are supplemented by selected price indexes
+  from the NIPA's.»
+  https://apps.bea.gov/scb/pdf/national/inputout/1998/0398gpo.pdf
+
+**Qué se concluye (y qué no)**
+- La fuente principal de los índices de precios y deflactores de BEA es BLS, en sus tres
+  versiones (PPI, IPC y precios de importación). Por eso el origen compartido es la **agencia**
+  BLS y no «PPI»: cubre las tres sin afirmar más de lo verificado.
+- No es el 100 %: los índices propios de BEA (computadoras con ajuste de calidad, semiconductores,
+  conmutadores, software) y los de USDA, Interior y Energía no son BLS. Se resuelve por el lado
+  conservador (error de principio 4: contar una fuente de menos es menos grave que publicar un
+  candidato de una sola fuente real): el índice de precios de BEA hereda **ambos** orígenes, el de
+  BEA y el de BLS. Un índice de precios de BEA y una serie de BLS cuentan como una fuente; uno de BEA
+  y una serie de una agencia sin relación siguen siendo dos.
+- No se agregaron USDA, Interior ni Energía como orígenes: solo se verificó BLS como fuente
+  principal y no hay series de esas agencias en el universo que lo justifique.
+
+**Reglas** (`config/data_origin.yaml`; clave nueva `also_origin`, además de `inherits_from`)
+- `bea_price_indexes_bls`: `source: bea`, datasets NIPA, NIUnderlyingDetail, GDPbyIndustry y
+  UnderlyingGDPbyIndustry (los cuatro cuya metodología se verificó) y título de tabla con «Price
+  Indexes», «Implicit Price Deflators» o «in Prices» (descripción oficial de la tabla, p. ej. T10104,
+  U002BUI, GDPbyIndustry 11 y 18, UnderlyingGDPbyIndustry 215 y 225). Las tablas de cantidad
+  («Chain-Type Quantity Indexes», «Chained Dollars»), de valor nominal y de otros datasets
+  (Regional, ITA, FixedAssets...) no casan y conservan su agencia.
+- `bea_price_indexes_bls_via_fred`: la misma regla para series que llegan vía FRED con agencia BEA
+  y título «Implicit Price Deflator», «Chain-type Price Index» o «Price Indexes».
+- Alcance mayor que el pedido: el encargo hablaba de índices «por industria»; el NIPA Handbook
+  afirma la fuente BLS para los deflactores de GDP y sus componentes en general, así que se
+  incluyeron también los índices de precios de las NIPA (PCE, inversión, exportaciones...). Si
+  prefieres limitarlo a los índices por industria, basta quitar `NIPA` y `NIUnderlyingDetail`
+  excepto `U002BUI` del `series_id_regex`.
+
+**Tests** (`tests/test_origin.py`): ids y títulos reales de BEA (API consultada el 2026-11-09).
+BEA-precios + BLS-PPI → 1 fuente; BEA-cantidades y valor nominal + BLS-PPI → 2 (no se sobrecorrige);
+BEA-precios + Census → 2; los mismos índices vía FRED; y el esquema `also_origin`.
+
+**Candidatos que se espera que caigan de b23cf89a** (sin acceso a los datos de la corrida; criterio
+para revisarlos con la auditoría): los candidatos y fenómenos cuya evidencia de BEA sean solo
+series de las tablas de precios de arriba y cuya otra fuente sea BLS. El candidato
+c7cf98c7e3ab5 cumple ese criterio según la descripción del encargo (2BUI y GDPbyIndustry de precios
+más PPI de BLS) y debería pasar a una sola fuente. Los fenómenos BLS+Census no cambian con esta
+regla; los BEA+BLS cambian solo si todo el respaldo de BEA es de precios.
+

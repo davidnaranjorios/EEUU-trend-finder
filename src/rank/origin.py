@@ -27,6 +27,9 @@ _ID_FIELDS = frozenset({"source", "release_id", "agency"})
 _DESC_FIELDS = frozenset({"series_id_regex", "units_regex", "title_regex"})
 MATCH_KEYS = _ID_FIELDS | _DESC_FIELDS
 DEFAULT_PATH = REPO_ROOT / "config" / "data_origin.yaml"
+# Claves de una regla: obligatorias y opcionales (herencia de otros orígenes).
+RULE_REQUIRED = frozenset({"id", "match", "origin", "chain"})
+RULE_OPTIONAL = frozenset({"inherits_from", "also_origin"})
 
 
 @dataclass(frozen=True)
@@ -35,8 +38,9 @@ class Rule:
     match: Mapping[str, Any]
     origin: str
     chain: tuple[str, ...]
-    # Orígenes de los componentes de un agregado (`inherits_from`): además del propio, la serie
-    # comparte identidad con todo lo que se arma con ellos.
+    # Orígenes de los componentes de un agregado (`inherits_from`) u orígenes adicionales
+    # nombrados (`also_origin`): además del propio, la serie comparte identidad con todo lo que se
+    # arma con ellos (p. ej. un índice de precios de BEA construido con precios de BLS).
     also: frozenset[str] = frozenset()
 
 
@@ -62,10 +66,12 @@ def validate_table(data: Any) -> list[Rule]:
         where = f"rules[{i}]"
         if (
             not isinstance(r, dict)
-            or not {"id", "match", "origin", "chain"} <= set(r)
-            or set(r) - {"id", "match", "origin", "chain", "inherits_from"}
+            or not RULE_REQUIRED <= set(r)
+            or set(r) - RULE_REQUIRED - RULE_OPTIONAL
         ):
-            errors.append(f"{where}: claves id, match, origin, chain (y opcional inherits_from)")
+            errors.append(
+                f"{where}: claves id, match, origin, chain (opcionales: inherits_from, also_origin)"
+            )
             continue
         if not isinstance(r["id"], str) or not r["id"] or r["id"] in seen:
             errors.append(f"{where}: id vacío o repetido")
@@ -99,7 +105,13 @@ def validate_table(data: Any) -> list[Rule]:
         ):
             errors.append(f"{where}.inherits_from: ids de reglas anteriores")
             continue
-        also = frozenset(known[x].origin for x in parents)
+        extra = r.get("also_origin", [])
+        if not isinstance(extra, list) or any(
+            not isinstance(x, str) or not agency_key(x) for x in extra
+        ):
+            errors.append(f"{where}.also_origin: lista de nombres de agencia u origen")
+            continue
+        also = frozenset(known[x].origin for x in parents) | frozenset(agency_key(x) for x in extra)
         rules.append(Rule(r["id"], m, agency_key(r["origin"]), tuple(chain), also))
     if errors:
         raise ValueError("data_origin inválida: " + "; ".join(errors))
