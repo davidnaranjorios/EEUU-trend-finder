@@ -1,0 +1,74 @@
+# Clase de medida de cada serie (ADR 0014; aprobada por David el 2026-11-10 como METADATOS DE
+# AGENCIA, no como temas): precio, cantidad, valor, tasa u otro. Solo contiene unidades, prefijos
+# oficiales de códigos de encuesta y descriptores del tipo de medida o de tabla ("Price Indexes",
+# "Chain-Type Quantity Indexes", "Percent Change"). NUNCA industrias, productos ni palabras clave:
+# `tests/test_measure.py` lo verifica (vocabulario de descriptores y ninguna industria de NAICS).
+# Cada regla: `match` (AND de source / id_regex / units_regex / title_regex) y `kind`; subtype
+# `costo_laboral` = precio del trabajo (salarios y compensación por hora). Gana la primera que casa;
+# sin regla, la serie es `otro`. Las reglas más específicas van primero.
+version: 1
+rules:
+  # --- Tasas (porcentajes y razones) antes que precios: el cambio porcentual de un índice de precios
+  # es una tasa, no un precio.
+  - id: tasa_titulo_cambio_porcentual
+    kind: tasa
+    match: {title_regex: "(?i)percent changes?|percentage|contributions? to percent"}
+  - id: tasa_unidades_porcentaje
+    kind: tasa
+    match: {units_regex: "(?i)percent|ratio|\\brate\\b"}
+
+  # --- Precio del trabajo (salarios y compensación por hora, índice de costo laboral).
+  - id: costo_laboral_bls_eci
+    kind: precio
+    subtype: costo_laboral
+    match: {source: bls, id_regex: "^CI[US]"}
+  - id: costo_laboral_por_hora
+    kind: precio
+    subtype: costo_laboral
+    match: {units_regex: "(?i)(dollars?|cents) per hour|hourly (earnings|compensation|wages?)"}
+  - id: costo_laboral_titulo
+    kind: precio
+    subtype: costo_laboral
+    match:
+      title_regex: "(?i)hourly (earnings|compensation|wages?)|(compensation|earnings) per hour|employment cost index"
+
+  # --- Precios: prefijos oficiales de las encuestas de precios de BLS (CPI-U, CPI-W, C-CPI-U,
+  # PPI por industria y por producto, precios de importación y exportación) y descriptores de
+  # índices de precios en el título (FRED, BEA, Census).
+  - id: precio_bls_encuestas
+    kind: precio
+    match: {source: bls, id_regex: "^(?:CU[SU]R|CW[SU]R|SU[SU]R|PC[US]|WP[US]|EI[US])"}
+  - id: precio_titulo_indice
+    kind: precio
+    match:
+      title_regex: "(?i)price indexes?|price deflators?|implicit price|chain-type price|consumer price|producer price|import price|export price"
+  - id: precio_unidades_por_unidad
+    kind: precio
+    match: {units_regex: "(?i)(dollars?|cents) per "}
+
+  # --- Cantidades: índices de cantidad, valores reales (dólares encadenados) y conteos.
+  - id: cantidad_indice_de_cantidad
+    kind: cantidad
+    match: {title_regex: "(?i)quantity indexes?"}
+  - id: cantidad_real_unidades
+    kind: cantidad
+    match: {units_regex: "(?i)chained"}
+  - id: cantidad_real_titulo
+    kind: cantidad
+    match: {title_regex: "(?i)chained dollars|\\breal\\b"}
+
+  # --- Valor nominal (precio × cantidad): importes en dólares corrientes.
+  - id: valor_dolares
+    kind: valor
+    match: {units_regex: "(?i)dollars"}
+  - id: valor_bea_nivel_en_millones
+    kind: valor
+    match: {source: bea, units_regex: "x10\\^(6|9)"}
+  - id: valor_bea_tabla_nominal
+    kind: valor
+    match: {title_regex: "(?i)\\b(value added|gross output|intermediate inputs)\\b"}
+
+  # --- Conteos de personas, unidades, horas y empleos (después de los importes en dólares).
+  - id: cantidad_conteos
+    kind: cantidad
+    match: {units_regex: "(?i)persons|\\bnumber\\b|\\bunits\\b|\\bhours\\b|employees|\\bjobs\\b|^thousands\\b|^millions$"}

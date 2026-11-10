@@ -125,6 +125,8 @@ def phenomena_data(
                 "n_clusters": r["n_clusters"],
                 "n_members": r["n_members"],
                 "by_grouping": r["by_grouping"],
+                "measure_mix": json.loads(r.get("measure_mix_json") or "{}"),
+                "no_demand_evidence": r.get("no_demand_evidence"),
                 "window": (r["window_start"], r["window_end"]),
                 "naics": [
                     {"naics": c, "name": names.get(c), "weight": w}
@@ -228,6 +230,8 @@ def candidates_data(
                     "frequency": m.get("frequency") or "",
                     "seasonal_adjustment": m.get("seasonal_adjustment") or "",
                     "detectors": e["detectors"].split(","),
+                    "measure_kind": e.get("measure_kind"),
+                    "measure_subtype": e.get("measure_subtype"),
                     "q_value": e["q_value"],
                     "effect_size": e["effect_size"],
                     "window": [e["window_start"], e["window_end"]],

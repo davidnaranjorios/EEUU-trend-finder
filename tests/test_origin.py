@@ -298,3 +298,150 @@ def test_inherits_from_must_reference_earlier_rules():
     data["rules"][0]["inherits_from"] = ["no_existe"]
     with pytest.raises(ValueError):
         validate_table(data)
+
+
+# --- BEA: índices de precios construidos con precios de BLS (ADR 0013, sección 10) ---------------
+
+CENSUS = frozenset({agency_key("U.S. Census Bureau")})
+BEA_AGENCY = frozenset({agency_key("U.S. Bureau of Economic Analysis")})
+BLS_AGENCY = frozenset({agency_key("U.S. Bureau of Labor Statistics")})
+
+# Ids y títulos reales que produce el adaptador de BEA (API consultada el 2026-11-09).
+BEA_PRICE_SERIES = [
+    (
+        "GDPbyIndustry:11:334:A",
+        "Computer and electronic products — Chain-Type Price Indexes for Value Added by "
+        "Industry (A) (Q)",
+    ),
+    (
+        "GDPbyIndustry:18:334:A",
+        "Computer and electronic products — Chain-Type Price Indexes for Gross Output by "
+        "Industry (A) (Q)",
+    ),
+    (
+        "UnderlyingGDPbyIndustry:225:334:A",
+        "Computer and electronic products — U.Chain-Type Price Indexes for Gross Output by "
+        "Industry (A)",
+    ),
+    (
+        "NIUnderlyingDetail:U002BUI:PK30.2:A",
+        "Manufacturing industries — Table 2BUI. Implicit Price Deflators for Manufacturing and "
+        "Trade Sales [Index base 2017, 1997 forward, NAICS] (A) (Q) (M)",
+    ),
+    (
+        "NIPA:T10104:A191RG.1:A",
+        "Gross domestic product — Table 1.1.4. Price Indexes for Gross Domestic Product (A) (Q)",
+    ),
+    (
+        "NIPA:T20307:DGDSRG.2:A",  # "Percent Change From Preceding Period in Prices..."
+        "Goods — Table 2.3.7. Percent Change From Preceding Period in Prices for Personal "
+        "Consumption Expenditures by Major Type of Product (A) (Q)",
+    ),
+]
+BEA_QUANTITY_SERIES = [
+    (
+        "GDPbyIndustry:8:334:A",
+        "Computer and electronic products — Chain-Type Quantity Indexes for Value Added by "
+        "Industry (A) (Q)",
+    ),
+    (
+        "GDPbyIndustry:1:334:A",
+        "Computer and electronic products — Value Added by Industry (A) (Q)",
+    ),
+    (
+        "NIPA:T10106:A191RX.1:A",
+        "Gross domestic product — Table 1.1.6. Real Gross Domestic Product, Chained Dollars "
+        "(A) (Q)",
+    ),
+    (
+        "NIPA:T10105:A191RC.1:A",
+        "Gross domestic product — Table 1.1.5. Gross Domestic Product (A) (Q)",
+    ),
+]
+
+
+def _bea(series_id, title):
+    return resolve_origin(
+        RULES, source="bea", series_id=series_id, agencies=BEA_AGENCY, title=title
+    )
+
+
+def _bls_ppi():
+    return resolve_origin(
+        RULES,
+        source="bls",
+        series_id="PCU334513334513",
+        agencies=BLS_AGENCY,
+        title="PPI Industry data for Instruments and Related Products Manufacturing",
+    )
+
+
+@pytest.mark.parametrize(("sid", "title"), BEA_PRICE_SERIES)
+def test_bea_price_indexes_share_the_origin_of_bls_prices(sid, title):
+    o = _bea(sid, title)
+    assert o.rule_id == "bea_price_indexes_bls"
+    assert o.keys == BEA_AGENCY | BLS_AGENCY
+    assert _sources(o, _bls_ppi()) == 1  # BEA-precios + BLS-PPI: una sola fuente
+    assert format_chain(o.chain).startswith("BLS (PPI, IPC, precios de importación)")
+
+
+@pytest.mark.parametrize(("sid", "title"), BEA_QUANTITY_SERIES)
+def test_bea_quantities_and_nominal_values_are_not_overcorrected(sid, title):
+    o = _bea(sid, title)
+    assert o.rule_id is None and o.keys == BEA_AGENCY  # conservan su agencia
+    assert _sources(o, _bls_ppi()) == 2  # BEA-cantidades + BLS-PPI: dos fuentes
+
+
+def test_bea_price_series_stay_independent_of_unrelated_agencies():
+    census = resolve_origin(
+        RULES, source="census", series_id="x", agencies=CENSUS, title="Retail sales"
+    )
+    assert _sources(_bea(*BEA_PRICE_SERIES[0]), census) == 2
+
+
+def test_bea_price_rule_is_limited_to_the_bea_price_datasets():
+    # Otro dataset de BEA con la palabra "price" en el título no casa: solo los cuatro datasets
+    # de cuentas nacionales e industriales cuya metodología se verificó.
+    o = _bea("Regional:SAGDP9:SAGDP9.1:A", "Real GDP by state, price index note")
+    assert o.rule_id is None
+
+
+@pytest.mark.parametrize(
+    ("sid", "title", "expected"),
+    [
+        ("A191RD3Q086SBEA", "Gross Domestic Product: Implicit Price Deflator", True),
+        ("DPCERG3Q086SBEA", "Personal Consumption Expenditures: Chain-type Price Index", True),
+        ("A713RD3A086NBEA", "Implicit price deflator for final sales to domestic purchasers", True),
+        ("PCEPI", "Personal Consumption Expenditures: Chain-type Price Index", True),
+        ("GDPC1", "Real Gross Domestic Product", False),
+        ("A191RL1Q225SBEA", "Real Gross Domestic Product", False),
+    ],
+)
+def test_bea_price_indexes_arriving_via_fred_follow_the_same_rule(sid, title, expected):
+    o = resolve_origin(
+        RULES, source="fred", series_id=sid, agencies=BEA_AGENCY, release_ids=[53], title=title
+    )
+    assert (o.rule_id == "bea_price_indexes_bls_via_fred") is expected
+    assert (_sources(o, _bls_ppi()) == 1) is expected
+
+
+def test_fred_rule_requires_the_bea_agency():
+    # Un índice de precios de otra agencia en FRED no se une a BLS por esta regla.
+    o = resolve_origin(
+        RULES,
+        source="fred",
+        series_id="X",
+        agencies=CENSUS,
+        title="Import Price Index (End Use): All Commodities",
+    )
+    assert o.rule_id is None
+
+
+def test_also_origin_schema_is_validated():
+    data = yaml.safe_load(Path("config/data_origin.yaml").read_text("utf-8"))
+    assert any("also_origin" in r for r in data["rules"])
+    for bad in ("bls", [1], [""], {"a": 1}):
+        d = yaml.safe_load(Path("config/data_origin.yaml").read_text("utf-8"))
+        d["rules"][-1]["also_origin"] = bad
+        with pytest.raises(ValueError):
+            validate_table(d)

@@ -26,6 +26,7 @@ from typing import Any
 
 import numpy as np
 
+from src.rank import measure as measure_mod
 from src.rank.cluster import cluster_id
 from src.rank.triangulate import Candidate, Evidence, assess
 
@@ -46,6 +47,8 @@ class Phenomenon:
     window_start: Any
     window_end: Any
     candidate: Candidate = field(repr=False, default=None)  # type: ignore[assignment]
+    measure_mix: dict[str, int] = field(default_factory=dict)  # clases de medida de sus series
+    no_demand_evidence: bool | None = None  # todo su respaldo son precios (ADR 0014)
 
 
 def code_prefixes(code: str, digits: int) -> list[str]:
@@ -161,6 +164,7 @@ def group_phenomena(
         cids = [c.candidate_id for c in grp]
         pid = cluster_id("p", cids)
         cand = assess(Candidate(pid, "phenomenon", ev, sum(c.n_members for c in grp)), min_sources)
+        kinds = [e.measure_kind for e in ev if e.kind == "series"]
         ws, we = window_of(ev)
         acc: dict[str, float] = defaultdict(float)
         for c in grp:
@@ -176,6 +180,8 @@ def group_phenomena(
                 ws,
                 we,
                 cand,
+                measure_mod.mix(kinds),
+                measure_mod.no_demand_evidence(kinds),
             )
         )
     return sorted(out, key=lambda p: p.phenomenon_id)
