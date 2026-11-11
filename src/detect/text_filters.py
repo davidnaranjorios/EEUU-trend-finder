@@ -4,7 +4,8 @@ Funciones puras, sin listas de temas: la única lista que se lee es `text_detect
 (frases de boilerplate aprobadas por David; solo se pasa como argumento desde la configuración).
 
 - `is_boilerplate` / `noun_like` / `specific_mask`: filtro de especificidad.
-- `drift_adjust`: corrige la deriva del corpus con la mediana de términos de prevalencia parecida.
+- `drift_adjust` / `drift_adjust_by_group`: corrige la deriva del corpus con la mediana de términos
+  de prevalencia parecida (por sección).
 - `emerging_stat_break`: T con el punto de quiebre estimado (máximo sobre el largo del segmento).
 """
 
@@ -88,6 +89,28 @@ def drift_adjust(
     for chunk in np.array_split(order, n_bins):
         rel = x[chunk] - level[chunk, None]
         drift[chunk] = np.median(rel, axis=0)
+    return x - drift, drift
+
+
+def drift_adjust_by_group(
+    x: np.ndarray, baseline_cols: slice, n_bins: int, min_bin: int, groups: list[str]
+) -> tuple[np.ndarray, np.ndarray]:
+    """`drift_adjust` dentro de cada grupo (la sección del documento), nunca entre grupos.
+
+    Cada sección tiene su propio denominador (documentos de ese tipo por periodo). Una serie
+    censurada en el piso (conteo imputado constante) se mueve solo con ese denominador; si los
+    cuantiles mezclan secciones, la mediana de otra sección con un denominador distinto se le
+    resta como "deriva" y la serie constante parece crecer (medido en el Federal Register: 88
+    términos de `rule` corregidos con la mediana de `notice`, ADR 0021). Con una sola sección el
+    resultado es idéntico a `drift_adjust`."""
+    drift = np.zeros_like(x)
+    by_group: dict[str, list[int]] = {}
+    for i, g in enumerate(groups):
+        by_group.setdefault(g, []).append(i)
+    for rows in by_group.values():
+        idx = np.array(rows)
+        _, d = drift_adjust(x[idx], baseline_cols, n_bins, min_bin)
+        drift[idx] = d
     return x - drift, drift
 
 

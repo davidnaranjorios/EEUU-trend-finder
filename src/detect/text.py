@@ -54,7 +54,12 @@ import numpy as np
 from src.config import REPO_ROOT, load_config
 from src.detect.approval import alert_flags, latest_runs
 from src.detect.run import signal_id, table_root, write
-from src.detect.text_filters import drift_adjust, emerging_stat_break, specific_mask
+from src.detect.text_filters import (
+    drift_adjust,
+    drift_adjust_by_group,
+    emerging_stat_break,
+    specific_mask,
+)
 from src.log import get_logger, run
 from src.schemas import DETECTOR_RUNS, DETECTOR_TESTS, SIGNALS
 from src.stats.bootstrap import (
@@ -67,6 +72,8 @@ from src.stats.bootstrap import (
 from src.stats.fdr import TailConfig, bh_adjust, bootstrap_p, by_adjust
 
 DETECTOR = "text_emerging"
+# T por debajo de esto es ruido de punto flotante (series constantes), no un efecto: p = 1.
+MIN_STAT = 1e-9
 SUBPERIODS = {("Q", "A"): 4, ("M", "A"): 12, ("M", "Q"): 3, ("M", "M"): 1, ("Q", "Q"): 1}
 
 
@@ -138,6 +145,7 @@ def load_matrix(
     unigram_max_share: float = 1.0,
     min_industries: int = 0,
     docs_files: Sequence[Path] = (),
+    recent_rows_periods: int = 0,
 ) -> TermMatrix:
     """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla.
 
@@ -145,6 +153,11 @@ def load_matrix(
     los subperiodos medidos de los últimos `recent` periodos de la grilla) es menor: un término
     que solo usa una agencia (p. ej. el nombre de quien firma sus avisos) no es un fenómeno
     amplio. Los términos sin medida (NULL, particiones anteriores al esquema 2) no se excluyen.
+
+    Con `recent_rows_periods` > 0 se excluyen los términos SIN NINGUNA fila (conteo >= el mínimo de
+    la ingesta) en los últimos `recent_rows_periods` periodos de la grilla: un término que en toda
+    la ventana reciente quedó censurado en el piso no puede mostrar que emerge, y antes pasaba el
+    filtro de amplitud porque "sin filas" se leía como "sin medida" (ADR 0021).
     """
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
@@ -230,6 +243,20 @@ def load_matrix(
             "keep.section AND b.term = keep.term AND b.amp < ?)",
             [min_entities],
         )
+    n_no_recent = 0
+    if recent_rows_periods > 0 and complete:
+        rr_grid = set(complete[-recent_rows_periods:])
+        rr_subs = sorted({p for _, p, _ in tot if to_grid(p, grid) in rr_grid})
+        n_no_recent = con.execute(
+            "SELECT count(*) FROM keep k WHERE NOT EXISTS (SELECT 1 FROM tf WHERE "
+            "tf.section = k.section AND tf.term = k.term AND tf.period IN (SELECT unnest(?)))",
+            [rr_subs],
+        ).fetchone()[0]
+        con.execute(
+            "DELETE FROM keep WHERE NOT EXISTS (SELECT 1 FROM tf WHERE tf.section = keep.section "
+            "AND tf.term = keep.term AND tf.period IN (SELECT unnest(?)))",
+            [rr_subs],
+        )
     n_all = con.execute("SELECT count(*) FROM (SELECT DISTINCT section, term FROM tf)").fetchone()[
         0
     ]
@@ -280,6 +307,7 @@ def load_matrix(
         "excluidos_pocas_industrias": n_few_ind,
         "excluidos_amplitud": int(n_narrow),
         "sin_medida_amplitud": int(n_unmeasured),
+        "excluidos_sin_filas_recientes": int(n_no_recent),
     }
     if not keys or not complete:
         con.close()
@@ -361,9 +389,11 @@ def term_test(
     k, r = params.persistence, params.recent
     t_arr, l_arr = emerging_stat_break(x, params.window, k, r)
     t_obs, length = float(t_arr), int(l_arr)
-    if t_obs <= 0:
-        return t_obs, 1.0, "empirical", length
     base = x[:-r]
+    # Sin efecto (o solo ruido de punto flotante) o con una línea base constante no hay nulo que
+    # calibrar: una serie sin variación no es evidencia de nada (ADR 0021).
+    if t_obs <= MIN_STAT or float(np.ptp(base)) <= MIN_STAT:
+        return t_obs, 1.0, "empirical", length
     null = ar_null(base, idx, fit_ar1(base, params.phi_margin))
     t_null = emerging_stat_break(null, params.window, k, r)[0]
     p, method = bootstrap_p(t_obs, t_null, params.tail)
@@ -442,7 +472,9 @@ def priority_scores(
 _PER_YEAR = {"A": 1, "Q": 4, "M": 12, "W": 52, "D": 365}
 
 
-def break_year_histogram(signals: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def break_year_histogram(
+    signals: Sequence[dict[str, Any]], estimable: bool = True
+) -> dict[str, Any]:
     """Años de quiebre (inicio de la ventana) de las señales BH y bandera de artefacto.
 
     Si más de la mitad de las señales (con al menos 10) cae en un solo año, el quiebre no es
@@ -450,6 +482,17 @@ def break_year_histogram(signals: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """
     hist = Counter(s["window_start"].year for s in signals)
     n = sum(hist.values())
+    if not estimable:
+        # Con persistencia == `recent` el largo del segmento solo puede valer `recent`: todas las
+        # ventanas empiezan en el mismo periodo por construcción y el histograma no dice nada
+        # del corpus (ADR 0021). La bandera no se puede evaluar: no se levanta.
+        return {
+            "by_year": {str(y): hist[y] for y in sorted(hist)},
+            "n": n,
+            "artifact_suspect": False,
+            "modal_year": None,
+            "break_estimable": False,
+        }
     year, top = hist.most_common(1)[0] if hist else (None, 0)
     return {
         "by_year": {str(y): hist[y] for y in sorted(hist)},
@@ -486,6 +529,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         unigram_max_share=td["unigram_max_share"],
         min_industries=td["min_sic2"].get(source, 0),
         docs_files=sorted((processed / "text_docs" / source).glob("*/*.parquet")),
+        recent_rows_periods=persistence if td.get("require_recent_rows", True) else 0,
     )
     g = len(m.periods)
     if g < window + recent + 3:
@@ -496,7 +540,11 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
     x = logit_share(m.counts, m.totals)
     # Deriva del corpus: cada término contra la mediana de los de prevalencia base parecida.
     if td["drift"]["bins"] > 0:  # bins = 0 desactiva la corrección (solo para comparar)
-        x, _ = drift_adjust(x, slice(0, g - recent), td["drift"]["bins"], td["drift"]["min_bin"])
+        base_cols, bins, min_bin = slice(0, g - recent), td["drift"]["bins"], td["drift"]["min_bin"]
+        if td["drift"].get("by_section", True):
+            x, _ = drift_adjust_by_group(x, base_cols, bins, min_bin, [k[0] for k in m.keys])
+        else:
+            x, _ = drift_adjust(x, base_cols, bins, min_bin)
     params = TermTestParams(
         window,
         persistence,
@@ -597,7 +645,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "min_doc_count": cfg["text"]["min_doc_count"],
         "calibration": cal,
         "prefiltro": m.excluded,
-        "break_years": break_year_histogram(signals),
+        "break_years": break_year_histogram(signals, recent > persistence),
     }
     runs = [
         {
@@ -632,7 +680,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "prefiltro": m.excluded,
         "bh_rate": len(signals) / len(results) if results else 0.0,
         "approval_alert": alert,
-        "break_years": break_year_histogram(signals),
+        "break_years": break_year_histogram(signals, recent > persistence),
         "top": [(s["object_id"], round(s["effect_size"], 3), s["q_value"]) for s in top],
         "top_priority": [
             {
