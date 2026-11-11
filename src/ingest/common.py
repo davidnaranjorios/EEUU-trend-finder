@@ -21,8 +21,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections import Counter
@@ -44,6 +46,11 @@ from src.schemas import ELIGIBILITY, SERIES, SERIES_META, TableSpec
 
 # Código de salida cuando una corrida acotada deja trabajo pendiente (igual que fred.py).
 EXIT_PENDING = 10
+# Código de salida del watchdog: el proceso siguió vivo pasado el presupuesto más su margen.
+EXIT_WATCHDOG = 11
+# Filas entre comprobaciones del presupuesto dentro de una unidad y entre líneas de progreso.
+DEADLINE_CHECK_ROWS = 20_000
+PROGRESS_ROWS = 1_000_000
 # Días por periodo, para estimar observaciones a partir de las fechas.
 PERIOD_DAYS = {"D": 7 / 5, "W": 7.0, "M": 30.44, "Q": 91.31, "A": 365.25}
 # Bytes por fila en Parquet (medido en FRED, ADR 0002).
@@ -181,6 +188,26 @@ def resolve(path: str) -> Path:
 # --- ingestor común ---------------------------------------------------------------------------
 
 
+class BudgetExceeded(Exception):
+    """Se agotó el presupuesto de la corrida (o el tope de una unidad) a mitad de un trabajo.
+
+    No es un error: el trabajo interrumpido no deja estado (el estado por unidad se guarda solo
+    al terminarla) y las escrituras ya hechas son upserts, así que la corrida siguiente repite la
+    unidad sin duplicar nada."""
+
+
+def rss_mb() -> float | None:
+    """Memoria residente del proceso en MB (Linux: /proc/self/status); None si no se puede leer."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 class SourceIngestor:
     """crawl / download / update sobre un `SourceAdapter`."""
 
@@ -205,6 +232,23 @@ class SourceIngestor:
         self._clock = clock
         self._sleep = sleep
         self.log = logger or logging.getLogger(__name__)
+        # Presupuesto duro (instante en `clock`): se mira también dentro de cada unidad.
+        self._deadline: float | None = None
+        self._check_rows = int(self.scfg.get("deadline_check_rows", DEADLINE_CHECK_ROWS))
+        self._progress_rows = int(self.scfg.get("progress_rows", PROGRESS_ROWS))
+        # Tope de una sola unidad (min): una unidad enorme no se come el presupuesto de las demás.
+        unit_max_min = self.scfg.get("unit_max_min")
+        self._unit_max_s = None if unit_max_min is None else float(unit_max_min) * 60
+
+    # --- presupuesto duro --------------------------------------------------------------------
+
+    def _check_deadline(self, where: str, unit_deadline: float | None = None) -> None:
+        """Lanza `BudgetExceeded` si pasó el presupuesto de la corrida o el tope de la unidad."""
+        now = self._clock()
+        if self._deadline is not None and now > self._deadline:
+            raise BudgetExceeded(f"presupuesto de la corrida agotado ({where})")
+        if unit_deadline is not None and now > unit_deadline:
+            raise BudgetExceeded(f"tope de la unidad agotado ({where})")
 
     # --- crawl + embudo ----------------------------------------------------------------------
 
@@ -224,7 +268,33 @@ class SourceIngestor:
         decided_at = self._now().replace(microsecond=0)
         refresh = timedelta(days=self.scfg["catalog_refresh_days"])
         t0 = self._clock()
+        self._deadline = None if budget_s is None else t0 + budget_s
         stats: Counter[str] = Counter(units=len(units))
+        try:
+            self._crawl_units(
+                units, state, full, run_id, today, decided_at, refresh, t0, budget_s, stats
+            )
+        finally:
+            self._deadline = None
+        if not stats["units_pending"] and not stats["units_failed"]:
+            self._save_cursor("last_crawl_ok")
+        out = dict(stats)
+        self.log.info("crawl terminado", extra={"fields": {"source": self.source, **out}})
+        return out
+
+    def _crawl_units(
+        self,
+        units: list[Unit],
+        state: dict[str, dict[str, Any]],
+        full: bool,
+        run_id: str,
+        today: date,
+        decided_at: datetime,
+        refresh: timedelta,
+        t0: float,
+        budget_s: float | None,
+        stats: Counter[str],
+    ) -> None:
         for unit in units:
             prev = state.get(unit.unit_id)
             if (
@@ -239,19 +309,42 @@ class SourceIngestor:
             if budget_s is not None and self._clock() - t0 > budget_s:
                 stats["units_pending"] += 1
                 continue
-            got = self._retrying(
-                unit, lambda u=unit: self._crawl_unit(u, run_id, decided_at, today)
+            t_unit = self._clock()
+            self.log.info(
+                "crawl: unidad iniciada",
+                extra={"fields": {"source": self.source, "unit": unit.unit_id, "rss_mb": rss_mb()}},
             )
+            try:
+                got = self._retrying(
+                    unit, lambda u=unit: self._crawl_unit(u, run_id, decided_at, today)
+                )
+            except BudgetExceeded as exc:
+                self.log.warning(
+                    "crawl: unidad interrumpida por el presupuesto; sigue en la próxima corrida",
+                    extra={
+                        "fields": {"source": self.source, "unit": unit.unit_id, "why": str(exc)}
+                    },
+                )
+                stats["units_pending"] += 1
+                stats["units_interrupted"] += 1
+                continue
             if got is None:
                 stats["units_failed"] += 1
                 continue
             stats += got
             stats["units_processed"] += 1
-        if not stats["units_pending"] and not stats["units_failed"]:
-            self._save_cursor("last_crawl_ok")
-        out = dict(stats)
-        self.log.info("crawl terminado", extra={"fields": {"source": self.source, **out}})
-        return out
+            self.log.info(
+                "crawl: unidad terminada",
+                extra={
+                    "fields": {
+                        "source": self.source,
+                        "unit": unit.unit_id,
+                        "seconds": round(self._clock() - t_unit, 1),
+                        "series": got.get("series", 0),
+                        "rss_mb": rss_mb(),
+                    }
+                },
+            )
 
     def _retrying(self, unit: Unit, fn: Callable[[], Any]) -> Any:
         """Corre `fn` reintentando si la conexión se corta a mitad de un archivo.
@@ -299,7 +392,9 @@ class SourceIngestor:
             )
             rules: Counter[str] = Counter()
             max_detail: dict[str, str] = {}
-            for raw in self.adapter.catalog_rows(unit):
+            for i, raw in enumerate(self.adapter.catalog_rows(unit)):
+                if i % self._check_rows == 0:
+                    self._check_deadline(f"crawl {unit.unit_id}")
                 r = {**raw, "source": self.source, "unit": unit.unit_id}
                 d = row_rule(r, max_stale, today)
                 if d is None:
@@ -341,6 +436,7 @@ class SourceIngestor:
                 catalog_buf: list[dict[str, Any]] = []
 
                 def flush(force: bool = False) -> None:
+                    self._check_deadline(f"crawl {unit.unit_id} escritura")
                     if lineage_buf and (force or len(lineage_buf) >= size):
                         self._write_lineage(lineage_buf, run_id, decided_at)
                         stats["lineage_rows"] += len(lineage_buf)
@@ -369,47 +465,76 @@ class SourceIngestor:
     def download(
         self, *, max_units: int | None = None, budget_s: float | None = None
     ) -> dict[str, Any]:
-        """Valores vigentes de las series objetivo, unidad por unidad. Reanudable."""
+        """Valores vigentes de las series objetivo, unidad por unidad. Reanudable.
+
+        El presupuesto es duro: se mira entre unidades y también DENTRO de cada una (lectura y
+        escritura). Una unidad interrumpida no deja estado y se repite en la corrida siguiente,
+        pero pasa al final de la cola para no quitarle el turno a las demás."""
         targets = self.targets()
         by_unit: dict[str, set[str]] = {}
         for sid, unit in targets.items():
             by_unit.setdefault(unit, set()).add(sid)
         units = {u.unit_id: u for u in self.adapter.list_units()}
         state = self._unit_state("values")
+        interrupted = self._unit_state("values_interrupted")
         t0 = self._clock()
+        self._deadline = None if budget_s is None else t0 + budget_s
         stats: Counter[str] = Counter(target_series=len(targets), target_units=len(by_unit))
         total = UpsertResult()
         pending = 0
-        for unit_id in sorted(by_unit):
-            unit = units.get(unit_id)
-            if unit is None:
-                stats["units_missing"] += 1
-                continue
-            # El presupuesto se mira antes de `values_version`: en BEA esa versión es una
-            # consulta de datos, y sin presupuesto no hay nada que hacer con ella.
-            out_of_budget = budget_s is not None and self._clock() - t0 > budget_s
-            if (max_units is not None and stats["units_fetched"] >= max_units) or out_of_budget:
-                pending += 1
-                continue
-            version = self.adapter.values_version(unit)
-            prev = state.get(unit_id)
-            if (
-                prev is not None
-                and version is not None
-                and prev["version"] == version
-                and prev["n_series"] == len(by_unit[unit_id])
-            ):
-                stats["units_unchanged"] += 1
-                continue
-            got = self._retrying(unit, lambda u=unit: self._fetch_unit(u, by_unit[u.unit_id]))
-            if got is None:
-                stats["units_failed"] += 1
-                pending += 1
-                continue
-            res, n_rows = got
-            total += res
-            self._set_state(unit_id, "values", version, len(by_unit[unit_id]), n_rows)
-            stats["units_fetched"] += 1
+
+        def stale(unit_id: str) -> bool:
+            """¿Se interrumpió después de su último éxito? Entonces va al final de la cola."""
+            mark, done = interrupted.get(unit_id), state.get(unit_id)
+            return mark is not None and (done is None or mark["done_at"] > done["done_at"])
+
+        try:
+            for unit_id in sorted(by_unit, key=lambda u: (stale(u), u)):
+                unit = units.get(unit_id)
+                if unit is None:
+                    stats["units_missing"] += 1
+                    continue
+                # El presupuesto se mira antes de `values_version`: en BEA esa versión es una
+                # consulta de datos, y sin presupuesto no hay nada que hacer con ella.
+                out_of_budget = budget_s is not None and self._clock() - t0 > budget_s
+                if (max_units is not None and stats["units_fetched"] >= max_units) or out_of_budget:
+                    pending += 1
+                    continue
+                version = self.adapter.values_version(unit)
+                prev = state.get(unit_id)
+                if (
+                    prev is not None
+                    and version is not None
+                    and prev["version"] == version
+                    and prev["n_series"] == len(by_unit[unit_id])
+                ):
+                    stats["units_unchanged"] += 1
+                    continue
+                try:
+                    got = self._retrying(
+                        unit, lambda u=unit: self._fetch_unit(u, by_unit[u.unit_id])
+                    )
+                except BudgetExceeded as exc:
+                    self.log.warning(
+                        "unidad interrumpida por el presupuesto; se repite en la próxima corrida",
+                        extra={"fields": {"source": self.source, "unit": unit_id, "why": str(exc)}},
+                    )
+                    self._set_state(
+                        unit_id, "values_interrupted", version, len(by_unit[unit_id]), 0
+                    )
+                    stats["units_interrupted"] += 1
+                    pending += 1
+                    continue
+                if got is None:
+                    stats["units_failed"] += 1
+                    pending += 1
+                    continue
+                res, n_rows = got
+                total += res
+                self._set_state(unit_id, "values", version, len(by_unit[unit_id]), n_rows)
+                stats["units_fetched"] += 1
+        finally:
+            self._deadline = None
         stats["units_pending"] = pending
         if pending == 0:
             self.paths.initial_done.parent.mkdir(parents=True, exist_ok=True)
@@ -424,26 +549,82 @@ class SourceIngestor:
         return out
 
     def _fetch_unit(self, unit: Unit, series_ids: set[str]) -> tuple[UpsertResult, int]:
+        """Lee y escribe los valores de una unidad con memoria acotada y el reloj a la vista.
+
+        - La deduplicación de (serie, fecha) es POR LOTE: cada lote se vacía al escribirse. Una
+          observación repetida en otro lote es un upsert idempotente (mismo valor), así que no hace
+          falta recordar todas las claves de la unidad (con decenas de millones de filas, ese
+          conjunto no cabía en la memoria del runner).
+        - Cada `deadline_check_rows` filas y antes de cada escritura se mira el presupuesto de la
+          corrida y el tope de la unidad (`unit_max_min`); al pasarse se lanza `BudgetExceeded`.
+        - Log de inicio, progreso (filas, segundos, memoria), lectura y escritura por unidad."""
         res = UpsertResult()
         n_rows = 0
         batch: list[dict[str, Any]] = []
         size = self.scfg.get("write_batch_rows", 500_000)
         seen: set[tuple[str, date]] = set()
-        for r in self.adapter.fetch_values(unit, series_ids):
+        t_start = self._clock()
+        unit_deadline = None if self._unit_max_s is None else t_start + self._unit_max_s
+        read_s = write_s = 0.0
+        base = {"source": self.source, "unit": unit.unit_id}
+        self.log.info(
+            "unidad iniciada",
+            extra={"fields": {**base, "series": len(series_ids), "rss_mb": rss_mb()}},
+        )
+
+        def write() -> None:
+            nonlocal res, n_rows, batch, write_s
+            self._check_deadline(f"escritura {unit.unit_id}", unit_deadline)
+            t = self._clock()
+            res += self._write_values(batch)
+            write_s += self._clock() - t
+            n_rows += len(batch)
+            batch = []
+            seen.clear()
+
+        t_read = self._clock()
+        for i, r in enumerate(self.adapter.fetch_values(unit, series_ids), 1):
+            if i % self._check_rows == 0:
+                self._check_deadline(f"lectura {unit.unit_id}", unit_deadline)
+            if i % self._progress_rows == 0:
+                self.log.info(
+                    "unidad en progreso",
+                    extra={
+                        "fields": {
+                            **base,
+                            "filas_leidas": i,
+                            "seconds": round(self._clock() - t_start, 1),
+                            "rss_mb": rss_mb(),
+                        }
+                    },
+                )
             if r["series_id"] not in series_ids:
                 continue
             key = (r["series_id"], r["date"])
-            if key in seen:  # la misma observación en dos archivos de una unidad
+            if key in seen:  # la misma observación en dos archivos de un mismo lote
                 continue
             seen.add(key)
             batch.append({**r, "source": self.source, "vintage_date": None})
             if len(batch) >= size:
-                res += self._write_values(batch)
-                n_rows += len(batch)
-                batch = []
+                read_s += self._clock() - t_read
+                write()
+                t_read = self._clock()
+        read_s += self._clock() - t_read
         if batch:
-            res += self._write_values(batch)
-            n_rows += len(batch)
+            write()
+        self.log.info(
+            "unidad terminada",
+            extra={
+                "fields": {
+                    **base,
+                    "filas_escritas": n_rows,
+                    "lectura_s": round(read_s, 1),
+                    "escritura_s": round(write_s, 1),
+                    "seconds": round(self._clock() - t_start, 1),
+                    "rss_mb": rss_mb(),
+                }
+            },
+        )
         return res, n_rows
 
     def update(self, *, budget_s: float | None = None, run_id: str = "manual") -> dict[str, Any]:
@@ -837,6 +1018,7 @@ def main(
     adapter = make_adapter(cfg, paths, log)
     ing = SourceIngestor(adapter, cfg, paths, logger=log)
     budget_s = args.budget_min * 60 if args.budget_min is not None else None
+    watchdog = start_watchdog(budget_s, float(ing.scfg.get("hard_grace_min", 10)) * 60, log)
     try:
         with run([source], resolve(cfg["logging"]["runs_file"])) as record:
             with record.stage(args.cmd):
@@ -852,9 +1034,42 @@ def main(
             record.n_series[source] = int(crawl_stats.get("series", 0))
             record.details = {"command": args.cmd, **stats}
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         adapter.close()
     print(json.dumps(stats, indent=2, ensure_ascii=False, default=str))
     return EXIT_PENDING if pending(stats) else 0
+
+
+def start_watchdog(
+    budget_s: float | None,
+    grace_s: float,
+    log: logging.Logger,
+    exit_fn: Callable[[int], Any] = os._exit,
+) -> threading.Timer | None:
+    """Red de seguridad dentro del proceso: si sigue vivo pasado el presupuesto + el margen
+    (`hard_grace_min`), lo registra y termina con `EXIT_WATCHDOG`.
+
+    El presupuesto duro de `SourceIngestor` mira el reloj entre filas; este hilo cubre lo que
+    bloquea sin devolver el control (una lectura de red que gotea, una escritura colgada). Lo
+    hecho queda: las escrituras son upserts atómicos (`store.recover` limpia un swap a medias) y
+    el estado por unidad solo se guarda al terminar cada una. `exit_fn` se inyecta en los tests."""
+    if budget_s is None:
+        return None
+
+    def fire() -> None:
+        log.error(
+            "watchdog: el proceso sigue vivo pasado el presupuesto y su margen; se termina",
+            extra={"fields": {"budget_s": budget_s, "grace_s": grace_s, "rss_mb": rss_mb()}},
+        )
+        for h in log.handlers + logging.getLogger().handlers:
+            h.flush()
+        exit_fn(EXIT_WATCHDOG)
+
+    timer = threading.Timer(budget_s + grace_s, fire)
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def pending(stats: dict[str, Any]) -> bool:

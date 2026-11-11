@@ -151,6 +151,10 @@ fred:
 
 # Fuentes de la Fase 4 (ADR 0007). Solo parámetros de acceso y de escritura: las unidades
 # (encuestas, tablas, datasets) salen del catálogo de cada fuente, nunca de esta lista.
+# Presupuesto duro (ADR 0019): `--budget-min` se mira también DENTRO de cada unidad (cada
+# deadline_check_rows filas y antes de cada escritura); `unit_max_min` acota una sola unidad para
+# que una enorme no se coma el turno de las demás; `hard_grace_min` es el margen del watchdog
+# (presupuesto + margen y el proceso se termina); progress_rows = filas entre líneas de progreso.
 # Keys en el entorno: BLS_API_KEY, BEA_API_KEY, CENSUS_API_KEY; download.bls.gov exige un
 # User-Agent con contacto, que se lee de SEC_USER_AGENT (decisión del 2026-11-03).
 sources:
@@ -163,6 +167,8 @@ sources:
     timeout_s: 300
     catalog_refresh_days: 30
     write_batch_rows: 500000
+    unit_max_min: 40              # tope de una sola unidad (ADR 0019)
+    hard_grace_min: 10            # margen del watchdog sobre el presupuesto
     # Parte del presupuesto de `update` que puede usar el crawl cuando ya hay series objetivo;
     # el resto queda para la descarga (sin objetivos aún, el crawl usa todo).
     crawl_budget_share: 0.5
@@ -178,6 +184,8 @@ sources:
     # presupuesto semanal y la fuente recorrería el catálogo sin descargar nunca.
     catalog_refresh_days: 90
     write_batch_rows: 500000
+    unit_max_min: 40              # tope de una sola unidad (ADR 0019)
+    hard_grace_min: 10            # margen del watchdog sobre el presupuesto
     crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
   census:
@@ -187,6 +195,8 @@ sources:
     timeout_s: 300
     catalog_refresh_days: 30
     write_batch_rows: 500000
+    unit_max_min: 40              # tope de una sola unidad (ADR 0019)
+    hard_grace_min: 10            # margen del watchdog sobre el presupuesto
     crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
 
