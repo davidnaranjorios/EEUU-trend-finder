@@ -41,7 +41,7 @@ escalación de `config.yaml`; una sola familia: ruido AR(1) mayoritario + quiebr
 - Efecto en BH: con B_esc = 99.999, 0 de 12 quiebres de 10 sd pasan con m = 260.772; con
   B_esc = 999.999, pasan 7 de 12.
 - **Por qué antes había 304 BH:** con m = 48.699 BH exige p ≤ 3,1e-4 para k = 304. Esos
-  descubrimientos tenían p del orden de 1e-4–3e-4. Con m = 260.772 exige p ≤ 5,8e-5 para k = 304
+  descubrimientos tenían, por inferencia (no están los p de esa corrida en el artefacto), p del orden de 1e-4–3e-4. Con m = 260.772 exige p ≤ 5,8e-5 para k = 304
   y p ≤ 1,9e-7 para el primero: ninguna serie lo cumple. El 70 % de m son anuales (BLS) que
   nunca aportan señales y diluyen la corrección.
 - El nulo de CUSUM se arma sobre la serie que contiene el quiebre; medido con 20 series por fuerza,
