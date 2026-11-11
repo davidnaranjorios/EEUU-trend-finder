@@ -197,8 +197,9 @@ def evaluate(
         if not dr or (p.include_level and not lv):
             out[cid].reason = "sin_tasa"
             continue
-        # `slope` necesita ventana 2W y una línea base de al menos max(W, min_baseline).
-        if g.size < 2 * w + max(w, p.min_baseline):
+        # Misma exigencia que `slope` (ADR 0018 propuesta 1, medida en ADR 0023): su línea base
+        # g[:-W] ya contiene la ventana previa, así que basta W + max(W, min_baseline).
+        if g.size < w + max(w, p.min_baseline):
             out[cid].reason = "serie_corta"
             continue
         d = design(dr, last, g.size, p.max_lag, lv, int(p.min_rows.get(grid, 20)))
@@ -273,10 +274,10 @@ def evaluate(
 
 
 def min_growth_periods(p: RateParams, grid: str) -> tuple[int, int] | None:
-    """(exigido hoy, exigido por `slope`) en periodos de crecimiento, o None sin ventana.
+    """(exigido antes del ADR 0023, exigido ahora = el de `slope`) en periodos de crecimiento.
 
-    Hoy `evaluate` pide 2·W + max(W, línea base): la ventana de 2·W MÁS la línea base. `slope`
-    pide W + max(W, línea base), porque su línea base (g[:-W]) ya contiene la ventana previa."""
+    Antes `evaluate` pedía 2·W + max(W, línea base): la ventana de 2·W MÁS la línea base. Ahora
+    pide W + max(W, línea base), igual que `slope` (su línea base g[:-W] ya contiene la ventana)."""
     w = p.window.get(grid)
     if w is None:
         return None
