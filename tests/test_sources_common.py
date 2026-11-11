@@ -151,7 +151,9 @@ def test_crawl_budget_leaves_units_pending_and_resumes(tmp_path):
     adapter = SyntheticAdapter()
     ing, _ = _ing(tmp_path, adapter)
     ing._clock = _Clock()
-    first = ing.crawl(run_id="r1", budget_s=15)
+    # El reloj falso avanza 10 s por consulta y desde el ADR 0019 también se consulta dentro de
+    # cada unidad (presupuesto duro): el presupuesto cubre la primera unidad, no la segunda.
+    first = ing.crawl(run_id="r1", budget_s=70)
     assert first["units_processed"] >= 1 and first["units_pending"] >= 1
     assert pending({"crawl": first})
     ing._clock = _Clock()
