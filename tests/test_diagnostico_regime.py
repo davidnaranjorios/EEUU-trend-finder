@@ -9,11 +9,40 @@ from __future__ import annotations
 
 import numpy as np
 
-from eval.diagnostico_regime import ar1, bh_count, params
 from src.config import load_config
-from src.detect.family import Item, run_family
+from src.detect.family import FamilyParams, Item, run_family
+from src.stats.fdr import TailConfig, bh_adjust
 
 ESC = 20_000
+
+# Las funciones del script `eval/diagnostico_regime.py` se repiten aquí a propósito: importar
+# `eval` desde un test contamina sys.modules y rompe test_isolation (src nunca carga eval).
+
+
+def ar1(rng: np.random.Generator, n: int, phi: float) -> np.ndarray:
+    e = rng.normal(size=n + 50)
+    x = np.zeros(n + 50)
+    for t in range(1, n + 50):
+        x[t] = phi * x[t - 1] + e[t]
+    return x[50:]
+
+
+def params(cfg: dict, escalate: int) -> FamilyParams:
+    d = cfg["detect"]
+    cal = cfg["fdr"]["calibration"]
+    return FamilyParams(
+        n_resamples=cal["n_resamples"],
+        block_length=cal["block_length"],
+        seed=cal["seed"],
+        phi_margin=d["phi_margin"],
+        regime_escalate=escalate,
+        tail=TailConfig(**d["tail"]),
+    )
+
+
+def bh_count(p_signal: np.ndarray, m: int, q: float = 0.05) -> int:
+    p = np.concatenate([p_signal, np.ones(m - p_signal.size)])
+    return int((bh_adjust(p) <= q).sum())
 
 
 def test_strong_break_detected_but_p_is_pinned_to_escalation_floor():
