@@ -11,8 +11,20 @@ No hay mapeos escritos a mano ni listas de industrias: el padre sale de
      (el ancestro más cercano);
    - `total_encuesta`: si ninguna serie con NAICS sirve, el total de la unidad: la serie de la
      misma medida sin anclaje de industria. Solo si es única; con varias candidatas no se elige.
-Una serie sin padre no se evalúa y el motivo queda registrado (`sin_naics`, `sin_padre`,
-`padre_ambiguo`).
+4. si la serie no tiene NAICS (FRED casi nunca lo trae) o ningún método anterior sirve, el agregado
+   más cercano por título dentro del árbol del catálogo (ADR 0020; `titulo_agregado`):
+   - FRED: la misma categoría oficial (`category_path`) y, si ahí no hay, sus categorías
+     ANCESTRAS (hasta `max_tree_levels` niveles). Gana el nivel más cercano con candidatas;
+   - BLS, BEA y Census: la misma unidad (encuesta, tabla o dataset);
+   - la candidata tiene la misma medida (fuente, frecuencia, unidades, ajuste), es al menos tan
+     antigua como la joven, y su título comparte con el de la joven un PREFIJO de al menos
+     `min_common_tokens` palabras (sin palabras de función). En la misma categoría el título del
+     padre debe estar contenido en el de la joven (la joven lo especializa); en una categoría
+     ancestra basta el prefijo común y que no sea más específico. Entre varias, el prefijo más
+     largo y, a igual prefijo, el título más corto (el más general); un empate real entre títulos
+     distintos es `padre_ambiguo` y no se elige.
+   No se mira ningún dato: solo título, categoría, unidades, frecuencia, ajuste y fecha de inicio.
+Una serie sin padre no se evalúa y el motivo queda registrado (`sin_padre`, `padre_ambiguo`).
 """
 
 from __future__ import annotations
@@ -21,6 +33,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date
 
 from src.rank.naics import Link, NaicsTables, normalize_name
 
@@ -37,6 +50,7 @@ class Meta:
     units: str
     seasonal_adjustment: str
     frequency: str
+    start: date | None = None  # inicio de la serie (series_meta.start_date)
 
     @property
     def key(self) -> Key:
@@ -46,8 +60,49 @@ class Meta:
 @dataclass(frozen=True)
 class Parent:
     key: Key
-    how: str  # "naics_prefijo" | "total_encuesta"
+    how: str  # "naics_prefijo" | "total_encuesta" | "titulo_agregado"
     code: str | None = None  # NAICS del padre (None en el total)
+    level: int | None = None  # niveles por encima de la categoría de la joven (titulo_agregado)
+
+
+# Palabras de función de un título (no son temas): no cuentan como prefijo común.
+FUNCTION_WORDS = frozenset("a an and by for from in of on or per the to with".split())
+
+
+@dataclass(frozen=True)
+class ParentParams:
+    min_common_tokens: int = 2  # palabras mínimas del prefijo común de títulos
+    max_tree_levels: int = 3  # categorías ancestras que se miran en el árbol de FRED
+
+
+def title_tokens(title: str) -> tuple[str, ...]:
+    """Palabras del título en minúsculas, sin puntuación ni palabras de función."""
+    return tuple(
+        w for w in re.findall(r"[a-z0-9]+", (title or "").lower()) if w not in FUNCTION_WORDS
+    )
+
+
+def common_prefix(a: tuple[str, ...], b: tuple[str, ...]) -> int:
+    n = 0
+    for x, y in zip(a, b, strict=False):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def category_chain(m: Meta, params: ParentParams) -> list[tuple[int, str]]:
+    """(nivel, categoría) de la serie: nivel 0 = su categoría y, en FRED, sus ancestras."""
+    out: dict[str, int] = {}
+    for path in units_of_catalog(m):
+        if m.source != "fred":
+            out.setdefault(path, 0)
+            continue
+        parts = [p.strip() for p in path.split(">")]
+        for level in range(0, min(params.max_tree_levels, len(parts) - 1) + 1):
+            cat = " > ".join(parts[: len(parts) - level])
+            out[cat] = min(out.get(cat, level), level)
+    return sorted(((lv, c) for c, lv in out.items()), key=lambda x: (x[0], x[1]))
 
 
 def units_of_catalog(m: Meta) -> frozenset[str]:
@@ -93,23 +148,42 @@ def find_parent(
     child: Meta,
     universe: Mapping[Key, tuple[Meta, str | None]],
     tables: NaicsTables,
+    params: ParentParams | None = None,
 ) -> tuple[Parent | None, str | None]:
     """(padre, motivo): `motivo` explica por qué no hay padre (None si lo hay).
 
-    `universe`: clave -> (metadatos, código NAICS propio) de todas las series candidatas."""
+    `universe`: clave -> (metadatos, código NAICS propio) de las series candidatas (las de la
+    categoría de la joven y de sus ancestras). Orden de los métodos: `naics_prefijo`,
+    `total_encuesta` y, si la serie no tiene NAICS o esos no sirven, `titulo_agregado`."""
+    params = params or ParentParams()
     code = universe[child.key][1] if child.key in universe else None
-    if code is None:
-        return None, "sin_naics"
+    reason: str | None = "sin_padre"
+    if code is not None:
+        parent, reason = _by_naics(child, code, universe, tables)
+        if parent is not None:
+            return parent, None
+        if reason == "padre_ambiguo":  # dos candidatas por NAICS: no se salta a otro método
+            return None, reason
+    by_title, why = _by_title(child, universe, params)
+    if by_title is not None:
+        return by_title, None
+    # `padre_ambiguo` de cualquiera de los métodos se informa; si no, no había candidata.
+    return None, "padre_ambiguo" if "padre_ambiguo" in (reason, why) else "sin_padre"
+
+
+def _by_naics(
+    child: Meta,
+    code: str,
+    universe: Mapping[Key, tuple[Meta, str | None]],
+    tables: NaicsTables,
+) -> tuple[Parent | None, str | None]:
     sig = signature(child.title, code, tables)
     cat = units_of_catalog(child)
     same: list[tuple[Meta, str | None]] = []
     for key, (m, c) in universe.items():
         if (
             key != child.key
-            and m.source == child.source
-            and m.frequency == child.frequency
-            and m.units == child.units
-            and m.seasonal_adjustment == child.seasonal_adjustment
+            and same_measure(m, child)
             and units_of_catalog(m) & cat
             and signature(m.title, c, tables) == sig
         ):
@@ -128,6 +202,59 @@ def find_parent(
     if len(totals) == 1:
         return Parent((child.source, totals[0]), "total_encuesta", None), None
     return None, "padre_ambiguo" if totals else "sin_padre"
+
+
+def same_measure(a: Meta, b: Meta) -> bool:
+    """Misma fuente, frecuencia, unidades y ajuste estacional."""
+    return (
+        a.source == b.source
+        and a.frequency == b.frequency
+        and a.units == b.units
+        and a.seasonal_adjustment == b.seasonal_adjustment
+    )
+
+
+def _by_title(
+    child: Meta,
+    universe: Mapping[Key, tuple[Meta, str | None]],
+    params: ParentParams,
+) -> tuple[Parent | None, str | None]:
+    """El agregado más cercano por título dentro del árbol de categorías (ver el docstring)."""
+    child_tok = title_tokens(child.title)
+    if len(child_tok) < params.min_common_tokens:
+        return None, None
+    by_path: dict[str, list[Key]] = defaultdict(list)
+    for key, (m, _) in universe.items():
+        if key != child.key:
+            for path in units_of_catalog(m):
+                by_path[path].append(key)
+    for level, path in category_chain(child, params):
+        scored: list[tuple[tuple[int, int, date, str], Meta]] = []
+        for key in by_path.get(path, ()):
+            m = universe[key][0]
+            tok = title_tokens(m.title)
+            cp = common_prefix(tok, child_tok)
+            if (
+                not same_measure(m, child)
+                or tok == child_tok
+                or cp < params.min_common_tokens
+                or (m.start is not None and child.start is not None and m.start > child.start)
+            ):
+                continue
+            if level == 0 and cp != len(tok):  # misma categoría: el padre debe estar contenido
+                continue
+            if level > 0 and len(tok) > len(child_tok):  # una ancestra no es más específica
+                continue
+            scored.append(((-cp, len(tok), m.start or date.max, m.series_id), m))
+        if not scored:
+            continue
+        scored.sort(key=lambda x: x[0])
+        top = scored[0]
+        tied = [x for x in scored if x[0][:2] == top[0][:2] and x[1].title != top[1].title]
+        if tied:
+            return None, "padre_ambiguo"
+        return Parent(top[1].key, "titulo_agregado", None, level), None
+    return None, None
 
 
 def index_by_family(

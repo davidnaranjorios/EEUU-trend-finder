@@ -126,7 +126,8 @@ def test_parent_must_share_survey_measure_units_adjustment_and_frequency():
     other = _uni([child, ("parent3", f"Hours Worked, {names[p3]}", {})])  # otra medida
     assert find_parent(other[("bls", "child")][0], other, TABLES)[0] is None
     nocode = _uni([("c", "Employment Level", {}), ("t", "Employment Level", {})])
-    assert find_parent(nocode[("bls", "c")][0], nocode, TABLES) == (None, "sin_naics")
+    # Sin NAICS ya no es un callejón sin salida (ADR 0020): se busca por título; no hay candidata.
+    assert find_parent(nocode[("bls", "c")][0], nocode, TABLES) == (None, "sin_padre")
 
 
 # --- estadístico y FDR sobre ruido ---------------------------------------------------------

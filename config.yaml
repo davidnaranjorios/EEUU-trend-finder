@@ -110,6 +110,11 @@ detect:
     confidence: yellow
     phi_margin: 5.0
     min_periods: {M: 36, Q: 24, A: 12}   # diferencias de crecimiento mínimas en común con el padre
+    # Padre por título dentro del árbol del catálogo (ADR 0020): FRED (categoría y ancestras) y
+    # unidad de BLS, BEA y Census. Solo metadatos; ninguna palabra del tema.
+    parent:
+      min_common_tokens: 2          # palabras mínimas del prefijo común de títulos
+      max_tree_levels: 3            # categorías ancestras de FRED que se miran
     # Nacimiento de series (descriptivo): cuántas series nuevas aparecen por agencia y NAICS.
     births:
       enabled: true
