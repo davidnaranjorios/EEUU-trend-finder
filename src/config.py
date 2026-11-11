@@ -131,6 +131,10 @@ def _validate_relative(d: dict[str, Any], young: dict[str, Any]) -> None:
     mp = rg.get("min_periods") or {}
     if any(not isinstance(mp.get(g), int) or mp[g] < 8 for g in GRIDS):
         raise ConfigError("detect.relative_growth.min_periods: un entero >= 8 por grilla M, Q y A")
+    pp = rg.get("parent") or {}
+    for key in ("min_common_tokens", "max_tree_levels"):
+        if not isinstance(pp.get(key), int) or pp[key] < 1:
+            raise ConfigError(f"detect.relative_growth.parent.{key} debe ser un entero >= 1")
     b = rg.get("births") or {}
     if not isinstance(b.get("enabled"), bool):
         raise ConfigError("detect.relative_growth.births.enabled debe ser true o false")

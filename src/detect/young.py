@@ -19,7 +19,15 @@ import duckdb
 from src.catalog import connect
 from src.config import REPO_ROOT
 from src.detect import run as drun
-from src.detect.parents import Key, Meta, find_parent, index_by_family, own_code, units_of_catalog
+from src.detect.parents import (
+    Key,
+    Meta,
+    ParentParams,
+    category_chain,
+    find_parent,
+    index_by_family,
+    own_code,
+)
 from src.detect.relative import DETECTOR, Pair, RelParams, difference, run_family
 from src.ingest.store import bucket_of
 from src.rank import naics as naics_mod
@@ -47,11 +55,12 @@ def load_meta(con: duckdb.DuckDBPyConnection, series: dict[Key, drun.Series]) ->
         "_ykeys", pa.table({"source": [k[0] for k in keys], "series_id": [k[1] for k in keys]})
     )
     rows = con.execute(
-        "SELECT k.source, k.series_id, any_value(m.title), any_value(m.category_path) "
+        "SELECT k.source, k.series_id, any_value(m.title), any_value(m.category_path), "
+        "any_value(m.start_date) "
         "FROM _ykeys k LEFT JOIN series_meta m USING (source, series_id) GROUP BY ALL"
     ).fetchall()
     out = {}
-    for src, sid, title, path in rows:
+    for src, sid, title, path, start in rows:
         s = series[(src, sid)]
         out[(src, sid)] = Meta(
             src,
@@ -61,8 +70,14 @@ def load_meta(con: duckdb.DuckDBPyConnection, series: dict[Key, drun.Series]) ->
             s.units or "",
             s.seasonal_adjustment or "",
             s.frequency,
+            start,
         )
     return out
+
+
+def parent_params(cfg: dict[str, Any]) -> ParentParams:
+    pc = cfg["detect"]["relative_growth"]["parent"]
+    return ParentParams(int(pc["min_common_tokens"]), int(pc["max_tree_levels"]))
 
 
 def lineage_path(cfg: dict[str, Any], run_id: str) -> Path:
@@ -101,6 +116,7 @@ def run_young(
     )
     universe = {k: (m, own_code(links.get(k))) for k, m in meta.items()}
     by_unit = index_by_family(universe)
+    pparams = parent_params(cfg)
 
     pairs: list[Pair] = []
     owners: list[tuple[drun.Series, Key, str]] = []
@@ -110,8 +126,10 @@ def run_young(
     rg = d["relative_growth"]
     for s in sorted(young, key=lambda x: (x.source, x.series_id)):
         child = meta[(s.source, s.series_id)]
-        cand_keys = {k for u in units_of_catalog(child) for k in by_unit.get(u, [])}
-        parent, reason = find_parent(child, {k: universe[k] for k in cand_keys}, tables)
+        cand_keys = {k for _, path in category_chain(child, pparams) for k in by_unit.get(path, [])}
+        parent, reason = find_parent(
+            child, {k: universe[k] for k in cand_keys | {child.key}}, tables, pparams
+        )
         ckey = f"{s.source}|{s.series_id}"
         if parent is None:
             reasons[reason or "sin_padre"] += 1
@@ -165,6 +183,7 @@ def run_young(
             "how": parent.how,
             "parent_naics": parent.code,
             "child_naics": universe[(s.source, s.series_id)][1],
+            "tree_level": parent.level,
             "periods": int(diff[0].size),
         }
 
