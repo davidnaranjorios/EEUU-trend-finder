@@ -238,6 +238,14 @@ def _validate_sources(src: dict[str, Any]) -> None:
         share = s.get("crawl_budget_share", 0.5)
         if not isinstance(share, int | float) or not 0 < share <= 1:
             raise ConfigError(f"sources.{name}.crawl_budget_share debe estar en (0, 1]")
+        for key in ("unit_max_min", "hard_grace_min"):
+            v = s.get(key)
+            if v is not None and (not isinstance(v, int | float) or v <= 0):
+                raise ConfigError(f"sources.{name}.{key} debe ser null o positivo (minutos)")
+        for key in ("deadline_check_rows", "progress_rows"):
+            v = s.get(key)
+            if v is not None and (not isinstance(v, int) or v < 1):
+                raise ConfigError(f"sources.{name}.{key} debe ser un entero positivo")
         agg = s.get("lineage_aggregate_min_series")
         if agg is not None and (not isinstance(agg, int) or agg < 2):
             raise ConfigError(

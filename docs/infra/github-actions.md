@@ -83,3 +83,14 @@ from src.catalog import connect_r2; from src.config import load_config
 con = connect_r2(load_config()['storage'])
 print(con.sql('SELECT group_name, count(*) FROM eligibility GROUP BY 1'))"
 ```
+
+## Fuentes de la Fase 4: presupuesto y cortes (ADR 0019)
+
+`infra/sources_update.sh` corre BLS, BEA y Census después de FRED. Cada fuente tiene un presupuesto de
+60 min (`SOURCES_BUDGET_MIN`) que se respeta también dentro de cada unidad, un watchdog en el proceso y un
+`timeout` por fuente (presupuesto + `SOURCES_GRACE_MIN`, 15). Una fuente colgada se mata, se sincroniza a R2
+lo que dejó hecho y se sigue con la siguiente; la sincronización también tiene `timeout`
+(`SOURCES_SYNC_TIMEOUT_MIN`, 30). `SOURCES_TOTAL_MIN` (240) reparte el tiempo entre fuentes. Lo cortado se
+reanuda en la corrida siguiente. En el log, buscar `unidad iniciada`, `unidad en progreso` (con `rss_mb`) y
+`unidad terminada` (con `lectura_s` y `escritura_s`); `units_interrupted` en el resumen cuenta las unidades que
+no cupieron.
