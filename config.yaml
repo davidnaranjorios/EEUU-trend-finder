@@ -237,7 +237,9 @@ text_detect:
   # nulo. `recent` es solo el tope de L, no un corte fijo.
   # Deriva del corpus: cada término se mide contra la mediana de cambio de los términos con
   # prevalencia base parecida (cuantiles de la línea base); el nulo se arma sobre esa serie corregida.
-  drift: {bins: 20, min_bin: 30}
+  drift: {bins: 20, min_bin: 30, by_section: true}   # por sección: ADR 0021 (antes mezclaba secciones)
+  # Un término sin ninguna fila en los últimos `persistencia` periodos no entra a la familia (ADR 0021).
+  require_recent_rows: true
   # Especificidad: unigramas con prevalencia media >= esto se excluyen (prevalencia base alta),
   # y todo n-grama debe tener al menos un token con forma de sustantivo (heurística de
   # sufijos, sin modelos ni licencias externas; src/detect/text_filters.py).
