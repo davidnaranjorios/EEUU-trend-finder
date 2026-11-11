@@ -34,7 +34,7 @@ todo nulo es la FDR y debe quedar ≤ q = 0,05.
 | Q | 53 | 0,9 | 0,007 | 0,000 |
 | M | 130 | 0,3 | 0,013 | 0,000 |
 | M | 130 | 0,7 | 0,000 | 0,000 |
-| M | 130 | 0,9 | (ver abajo) | (ver abajo) |
+| M | 130 | 0,9 | 0,013 | 0,000 |
 
 Todo dentro de lo esperado (≤ 1,3 % frente a q = 5 %). La exigencia es conservadora porque la
 etiqueta exige relación en niveles Y en diferencias, pérdida de pendiente y pendiente original
