@@ -1,0 +1,74 @@
+name: Validate shared agent context and Graphify
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/agent-context-validation.yml'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/STATE.md'
+      - 'docs/agent-context.md'
+      - 'scripts/setup_graphify.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graphify:
+    name: Build and query Graphify code graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GRAPHIFY_BACKEND: none
+      GRAPHIFY_QUERY_LOG_DISABLE: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Validate shell script syntax
+        run: bash -n scripts/setup_graphify.sh
+
+      - name: Install Graphify, both assistant skills, and extract graph
+        run: bash scripts/setup_graphify.sh
+
+      - name: Check index exists and query it
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s graphify-out/graph.json
+          graphify --version
+          graphify query "How are the ingestion modules connected to ranking?" > /tmp/graphify-query.txt
+          test -s /tmp/graphify-query.txt
+          test -f .agents/skills/graphify/SKILL.md
+          test -f .claude/skills/graphify/SKILL.md
+          echo "Graphify graph built, both project skills created, query returned output."
+
+  python-checks:
+    name: Python lint and test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Synchronize dependencies
+        run: uv sync --python 3.11
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Pytest
+        run: uv run pytest -q
