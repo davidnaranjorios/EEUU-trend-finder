@@ -1,0 +1,61 @@
+name: Validate shared agent context and Graphify
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/agent-context-validation.yml'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/STATE.md'
+      - 'docs/agent-context.md'
+      - 'scripts/setup_graphify.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graphify:
+    name: Build and query Graphify code graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GRAPHIFY_BACKEND: none
+      GRAPHIFY_QUERY_LOG_DISABLE: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Validate shell script syntax
+        run: bash -n scripts/setup_graphify.sh
+
+      - name: Install Graphify, both assistant skills, and extract graph
+        run: bash scripts/setup_graphify.sh
+
+      - name: Check index exists and query it
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s graphify-out/graph.json
+          graphify --version
+          # Natural-language searches can return a nonzero status when no
+          # graph node matches. Prefer a known project symbol; print diagnostics.
+          matched=0
+          for question in "src/ingest/fred.py" "src/rank" "fred"; do
+            echo "Graphify query: $question"
+            if graphify query "$question" > /tmp/graphify-query.txt 2>&1; then
+              if test -s /tmp/graphify-query.txt; then
+                matched=1
+                sed -n '1,12p' /tmp/graphify-query.txt
+                break
+              fi
+            fi
+            cat /tmp/graphify-query.txt
+          done
+          test "$matched" -eq 1
+          test -f .codex/skills/graphify/SKILL.md
+          test -f .claude/skills/graphify/SKILL.md
+          echo "Graphify graph built, both project skills created, query returned output."
