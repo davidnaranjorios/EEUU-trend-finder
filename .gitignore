@@ -8,3 +8,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Graphify generated local knowledge graph (rebuild on demand)
+graph.json
+graphify-out/
+GRAPH_REPORT.md

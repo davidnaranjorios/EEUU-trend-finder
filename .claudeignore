@@ -1,0 +1,4 @@
+# Graphify generated outputs: avoid prompt-cache churn after extraction
+graph.json
+graphify-out/
+GRAPH_REPORT.md
