@@ -1,0 +1,39 @@
+name: Publish interactive Graphify graph
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/graph/**'
+      - '.github/workflows/graph-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graph-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check exported graph
+        run: test -s docs/graph/index.html
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload graph website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/graph
+      - name: Deploy graph website
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -34,3 +34,11 @@ Ejecutar la instalación y extracción local en un entorno Codex/Claude Code con
 
 ## Última transferencia
 2026-11-11 — Preparación de protocolo de memoria y scripts de instalación; ver PR de esta rama. **No se ha realizado una auditoría funcional del pipeline.**
+
+## Publicación del grafo en Pages (2026-11-12)
+
+- Preparada una exportación HTML del JSON existente: 3.477 nodos, Graphify 0.9.107.
+- `graphify export html` finalizó correctamente; el hash del JSON no cambió.
+- `docs/graph/index.html` contiene el visor; el JSON no se versiona.
+- El workflow `graph-pages.yml` publica solo ese directorio al cambiar en main o por ejecución manual; no instala Graphify ni extrae código.
+- Pendiente: fusionar el PR, seleccionar GitHub Actions como fuente en Settings → Pages y verificar el primer despliegue. Instrucciones: `docs/graph-pages.md`.
