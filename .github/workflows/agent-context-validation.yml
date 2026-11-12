@@ -41,9 +41,22 @@ jobs:
           set -euo pipefail
           test -s graphify-out/graph.json
           graphify --version
-          graphify query "How are the ingestion modules connected to ranking?" > /tmp/graphify-query.txt
-          test -s /tmp/graphify-query.txt
-          test -f .agents/skills/graphify/SKILL.md
+          # Natural-language searches can return a nonzero status when no
+          # graph node matches. Prefer a known project symbol; print diagnostics.
+          matched=0
+          for question in "src/ingest/fred.py" "src/rank" "fred"; do
+            echo "Graphify query: $question"
+            if graphify query "$question" > /tmp/graphify-query.txt 2>&1; then
+              if test -s /tmp/graphify-query.txt; then
+                matched=1
+                sed -n '1,12p' /tmp/graphify-query.txt
+                break
+              fi
+            fi
+            cat /tmp/graphify-query.txt
+          done
+          test "$matched" -eq 1
+          test -f .codex/skills/graphify/SKILL.md
           test -f .claude/skills/graphify/SKILL.md
           echo "Graphify graph built, both project skills created, query returned output."
 
