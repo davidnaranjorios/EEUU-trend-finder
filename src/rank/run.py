@@ -44,11 +44,13 @@ from src.ingest.fred import SERIES_ATTRS
 from src.ingest.store import read_table, upsert
 from src.log import get_logger, run
 from src.rank import inflation_effect as infl_mod
+from src.rank import marks as marks_mod
 from src.rank import measure as measure_mod
 from src.rank import naics as naics_mod
 from src.rank import origin as origin_mod
 from src.rank import rate_effect as rate_mod
 from src.rank import real_effect as real_effect_mod
+from src.rank import trajectory as traj_mod
 from src.rank import watchlist as watch_mod
 from src.rank.agencies import series_agencies, text_agencies, unmatched_adapter_agencies
 from src.rank.cluster import (
@@ -86,6 +88,7 @@ from src.schemas import (
     SERIES_TERM_LINKS,
     SIGNALS,
 )
+from src.stats.transform import grid_index
 
 PARTITION = "rank"
 N_BUCKETS = 8
@@ -748,8 +751,12 @@ def _rep_kinds(
     }
 
 
-def deflator_levels(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict[int, float]:
-    """Índice del deflactor aprobado (`context.reference_series.deflator`) por mes, vigente."""
+def deflator_filled(
+    con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]
+) -> tuple[dict[int, float], set[int]]:
+    """Índice del deflactor aprobado (`context.reference_series.deflator`) por mes, vigente, con
+    los meses faltantes aislados interpolados (`rank.inflation_effect.max_gap_months`) y el
+    conjunto de meses estimados (marca `inflacion_estimada`)."""
     ref = (cfg["context"]["reference_series"] or {}).get("deflator")
     rows = (
         con.execute(
@@ -760,7 +767,46 @@ def deflator_levels(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict
         if ref
         else []
     )
-    return {d.year * 12 + d.month - 1: float(v) for d, v in rows}
+    raw = {d.year * 12 + d.month - 1: float(v) for d, v in rows}
+    gap = int(cfg["rank"]["inflation_effect"].get("max_gap_months", 1))
+    return infl_mod.fill_gaps(raw, gap) if gap > 0 else (raw, set())
+
+
+def recession_months(
+    con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]
+) -> list[tuple[int, float]]:
+    """Indicador mensual de recesión (`context.reference_series.recessions`): (mes, 0/1)."""
+    ref = (cfg["context"]["reference_series"] or {}).get("recessions")
+    if not ref:
+        return []
+    rows = con.execute(
+        "SELECT date, value FROM series WHERE source = 'fred' AND series_id = ? "
+        "AND vintage_date IS NULL AND value IS NOT NULL ORDER BY date",
+        [ref],
+    ).fetchall()
+    return [(d.year * 12 + d.month - 1, float(v)) for d, v in rows]
+
+
+def trajectories(
+    con: duckdb.DuckDBPyConnection,
+    cfg: dict[str, Any],
+    keys: list[tuple[str, str]],
+    months: list[tuple[int, float]],
+    p: traj_mod.TrajectoryParams,
+) -> dict[tuple[str, str], str | None]:
+    """Etiqueta de trayectoria por serie, sobre sus niveles reales (ver `trajectory.py`)."""
+    starts = {grid: traj_mod.recession_starts(months, grid) for grid in ("M", "Q", "A")}
+    return {
+        (s.source, s.series_id): traj_mod.classify(
+            s.level, s.first_index, s.grid, starts[s.grid], p
+        )[0]
+        for s in load_series(con, cfg, ids=keys)
+    }
+
+
+def deflator_levels(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict[int, float]:
+    """Índice del deflactor por mes (con huecos aislados interpolados)."""
+    return deflator_filled(con, cfg)[0]
 
 
 def inflation_effects(
@@ -1035,11 +1081,17 @@ def rank_run(
                 ev.n_industries = inds.get(tkey)
                 term_evidence_by_cluster[cid][tkey] = ev
     min_sources = rk["min_sources"]
-    defl = deflator_levels(con, cfg)
+    defl, defl_est = deflator_filled(con, cfg)
     infl = {grid: infl_mod.inflation_by_grid(defl, grid) for grid in ("M", "Q", "A")}
+    traj = trajectories(
+        con, cfg, signal_keys, recession_months(con, cfg), traj_mod.params_from(cfg)
+    )
     candidates: list[Candidate] = []
     for cid, members in zip(cids, clusters, strict=True):
-        ev = [_series_evidence(k, by_series[k], info[k], growth, infl) for k in members]
+        ev = [
+            _series_evidence(k, by_series[k], info[k], growth, infl, traj.get(k), defl_est)
+            for k in members
+        ]
         ev += sorted(
             term_evidence_by_cluster.get(cid, {}).values(), key=lambda e: (e.source, e.object_id)
         )
@@ -1182,6 +1234,10 @@ def rank_run(
                 "inflation_n_tests": infl_by_cid[c.candidate_id].n_tests
                 if c.candidate_id in infl_by_cid
                 else None,
+                "sin_evidencia_demanda": marks_mod.sin_evidencia_demanda(c.evidence),
+                "origen_posiblemente_compartido": marks_mod.origen_posiblemente_compartido(
+                    c.evidence
+                ),
             }
         )
         for e in c.evidence:
@@ -1205,6 +1261,8 @@ def rank_run(
                     "measure_kind": e.measure_kind,
                     "measure_subtype": e.measure_subtype,
                     "real_effect": e.real_effect,
+                    "trajectory": e.trajectory,
+                    "inflacion_estimada": e.inflation_estimated,
                 }
             )
     by_cid = {c.candidate_id: c for c in candidates}
@@ -1317,6 +1375,9 @@ def phenomena_rows(
                 "published": c.published,
                 "measure_mix_json": json.dumps(p.measure_mix),
                 "no_demand_evidence": p.no_demand_evidence,
+                "trajectory": p.trajectory,
+                "sin_evidencia_demanda": p.sin_evidencia_demanda,
+                "origen_posiblemente_compartido": p.origen_compartido,
                 "watch": watch[p.phenomenon_id].eligible if p.phenomenon_id in watch else None,
                 "watch_reason": watch[p.phenomenon_id].reason if p.phenomenon_id in watch else None,
                 "watch_effect": watch[p.phenomenon_id].effect if p.phenomenon_id in watch else None,
@@ -1384,12 +1445,21 @@ def _series_evidence(
     info: SeriesInfo,
     growth: dict[tuple[str, str], GrowthSeries] | None = None,
     inflation: dict[str, dict[int, float]] | None = None,
+    trajectory: str | None = None,
+    estimated_months: set[int] | None = None,
 ) -> Evidence:
     best = min(sigs, key=lambda s: s["q_value"])
     ws, we = min(s["window_start"] for s in sigs), max(s["window_end"] for s in sigs)
     real = None
+    estimated = None
     if info.measure.kind == "valor" and growth and key in growth:
         real = real_effect_mod.real_effect(growth[key], inflation or {}, ws, we)
+        if real is not None:
+            grid = growth[key].grid
+            hi = grid_index(we, grid)
+            lo = 2 * grid_index(ws, grid) - hi - 1  # ventana de la señal y previa de igual largo
+            step = 12 // infl_mod.PER_YEAR[grid]
+            estimated = any(lo <= m // step <= hi for m in estimated_months or ())
     return Evidence(
         kind="series",
         source=key[0],
@@ -1404,6 +1474,10 @@ def _series_evidence(
         measure_kind=info.measure.kind,
         measure_subtype=info.measure.subtype,
         real_effect=real,
+        trajectory=trajectory,
+        inflation_estimated=estimated,
+        chain=info.chain,
+        possible_duplicates=bool(info.duplicates),
     )
 
 

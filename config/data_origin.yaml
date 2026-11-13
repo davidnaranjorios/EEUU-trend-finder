@@ -74,3 +74,12 @@ rules:
     origin: U.S. Bureau of Economic Analysis
     also_origin: [U.S. Bureau of Labor Statistics]
     chain: ["BLS (PPI, IPC, precios de importación)", "BEA (índice de precios o deflactor)"]
+  - id: cleveland_fed_cpi_measures_bls
+    # Mediana y media recortada del IPC del Fed de Cleveland (MEDCPIM158SFRBCLE, MEDCPIM094SFRBCLE,
+    # TRMMEANCPIM159SFRBCLE y equivalentes): se calculan con los componentes del IPC de BLS, así
+    # que NO son una fuente independiente del IPC (ADR 0025). Se identifican por el prefijo del id
+    # y el sufijo del Fed de Cleveland, no por tema. Fuente: Cleveland Fed, "Median CPI" y
+    # "Trimmed-Mean CPI" (metodología: componentes del CPI de BLS reponderados).
+    match: {source: fred, series_id_regex: "^(?:MEDCPI|TRMMEANCPI)\\w*SFRBCLE$"}
+    origin: bureau of labor statistics
+    chain: [BLS (IPC), Fed de Cleveland (mediana / media recortada)]

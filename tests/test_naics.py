@@ -372,3 +372,17 @@ def test_title_name_still_works_when_the_id_has_no_code(tables):
     # Sin código en el id, BEA y Census siguen cayendo al nombre oficial completo del título.
     got = nx.series_links({("bea", "NIPA:T10101:X:A"): "Value added | Retail trade"}, tables)
     assert got[("bea", "NIPA:T10101:X:A")][0][2] == "nombre_oficial"
+
+
+def test_enumeration_word_does_not_anchor_an_industry(tables):
+    # ADR 0025: «Utilities» (NAICS 22) como palabra suelta de una enumeración no ancla nada.
+    for title in ("Housing and utilities", "Housing, utilities, and fuels"):
+        assert nx.series_links({("fred", "x"): title}, tables) == {}
+    got = nx.series_links({("fred", "y"): "Value added | Utilities"}, tables)
+    assert [c for c, _, _ in got[("fred", "y")]] == ["22"]
+
+
+def test_official_name_with_trailing_qualifier_still_anchors(tables):
+    title = "Total Revenue for 623: Nursing and Residential Care Facilities, All Establishments"
+    got = nx.series_links({("fred", "z"): title}, tables)
+    assert [c for c, _, _ in got[("fred", "z")]] == ["623"]

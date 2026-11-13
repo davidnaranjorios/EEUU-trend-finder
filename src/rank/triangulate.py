@@ -60,6 +60,12 @@ class Evidence:
     measure_kind: str | None = None  # clase de medida de la serie (ADR 0014)
     measure_subtype: str | None = None
     real_effect: float | None = None  # efecto deflactado de una serie `valor` (ADR 0018)
+    trajectory: str | None = None  # etiqueta de trayectoria de la serie (ADR 0025)
+    inflation_estimated: bool | None = None  # el efecto real usó un mes de inflación interpolado
+    chain: tuple[
+        str, ...
+    ] = ()  # cadena de origen del dato (marca `origen_posiblemente_compartido`)
+    possible_duplicates: bool = False  # posibles copias de otra agencia (ADR 0010)
 
 
 @dataclass

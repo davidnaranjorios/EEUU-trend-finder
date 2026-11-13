@@ -14,7 +14,8 @@ Métodos (columna `metodo` de `naics_links`):
   (`config/naics/bea_industry_naics.csv`, peso repartido). Los agregados sin NAICS quedan sin fila.
 - `nombre_oficial`: un tramo del título (limitado por comas, "and" o separadores) es el nombre
   oficial NAICS 2022 COMPLETO. Un título que lista varios sectores reparte el peso entre todos los
-  que casan; los fragmentos de un nombre más largo no cuentan.
+  que casan; los fragmentos de un nombre más largo no cuentan, y un tramo con palabras que no son
+  nombres oficiales («Housing and utilities») no asigna nada (ADR 0025).
 - `heredado_cluster`: una serie sin código hereda del cluster solo los NAICS que reúnen más de
   `rank.naics.cluster_majority` del peso de los miembros con código propio. Es una estimación.
 - `sic_concordancia`: un término de texto recibe los NAICS de las empresas que lo mencionan: SIC de
@@ -128,7 +129,8 @@ def names_in_text(text: str, tables: NaicsTables) -> list[str]:
     Un nombre casa si cubre palabras consecutivas del tramo que empiezan y terminan en un límite
     (inicio/fin, coma o "and"), así "Accommodation" no casa dentro de "Accommodation and Food
     Services" y el nombre más largo gana. Los tramos no se solapan: un título que lista varios
-    sectores devuelve todos los que casan, en orden de aparición."""
+    sectores devuelve todos los que casan, en orden de aparición. Un tramo solo cuenta si TODAS sus
+    palabras forman nombres oficiales completos: «Housing and utilities» no recibe NAICS 22."""
     out: list[tuple[int, int, str]] = []  # (tramo, posición, código)
     for si, seg in enumerate(NAME_SPLIT_RE.split(text or "")):
         words, comma = _tokens(seg)
@@ -149,6 +151,21 @@ def names_in_text(text: str, tables: NaicsTables) -> list[str]:
             for k in range(i, j):
                 taken[k] = True
             out.append((si, i, tables.by_name[" ".join(words[i:j])]))
+        first = next((k for k, t in enumerate(taken) if t), n)
+        last = max((k for k, t in enumerate(taken) if t), default=-1)
+        # Medida antes del nombre («All Employees, Construction») o calificador después
+        # («Nursing and Residential Care Facilities, All Establishments»): solo tras una coma, y
+        # nunca una continuación de enumeración («..., and fuels»).
+        lead_ok = first == 0 or comma[first - 1]
+        trail_ok = last + 1 >= n or (comma[last] and words[last + 1] != "and")
+        if n and any(
+            not t and w != "and" and not ((k < first and lead_ok) or (k > last and trail_ok))
+            for k, (t, w) in enumerate(zip(taken, words, strict=True))
+        ):
+            # El tramo tiene palabras que no son nombres oficiales («Housing and utilities»):
+            # una palabra dentro de una enumeración no ancla la industria (ADR 0025).
+            while out and out[-1][0] == si:
+                out.pop()
     codes: list[str] = []
     for _, _, code in sorted(out):
         if code not in codes:
