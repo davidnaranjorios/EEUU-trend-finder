@@ -213,6 +213,17 @@ text:
   workers: 4                      # procesos de análisis (HTML -> secciones -> n-gramas)
   seed: 20261103                  # muestras de medición (--sample)
   open_refresh_hours: 20          # un periodo abierto se reprocesa como mucho una vez por corrida
+  # Presupuesto por corrida (ADR 0026): GitHub corta el job a las 6 h; no se empieza un periodo que
+  # no quepa. `period_margin` multiplica el periodo más lento de la corrida (o la estimación inicial).
+  run_budget_minutes: 330         # 5 h 30
+  period_margin: 1.25
+  period_seconds_estimate: {edgar: 1500, federal_register: 180}
+  # Inventario de estructura (ADR 0026): umbrales de lectura del informe, sin ningún tema.
+  structure:
+    birth_min_share: 0.05         # una sección «nace» el primer año con >= 5 % de los documentos
+    format_jump: 0.30             # cambio de cobertura entre años que se marca como cambio de formato
+    firm_thresholds: [5, 20, 50]  # tamaños de industria (empresas) que se cuentan por año
+    facts_per_period: 4           # 10-K por trimestre cuyos hechos XBRL se sondean (solo cobertura)
 
 # Detector de términos emergentes (Fase 3, parte B; ADR 0008). Solo parámetros, sin palabras.
 text_detect:
@@ -287,7 +298,7 @@ edgar:
   timeout_s: 120
   min_chars: 2000                 # secciones más cortas (p. ej. "no aplica") -> muy_corta
   closed_grace_days: 7            # un trimestre se congela 7 días después de terminar
-  reprocess_below_schema: 5       # v5: sic_top_json (SIC de 4 dígitos; v4: n_industries) obliga a volver a bajar los periodos cerrados
+  reprocess_below_schema: 6       # v6: text_structure (ADR 0026); v5: sic_top_json; v4: n_industries. Obliga a volver a bajar los periodos cerrados
   submissions_api_max_ciks: 500   # más CIK que esto: se usa submissions.zip (una descarga)
   submissions_zip_max_age_hours: 20
 
@@ -300,7 +311,7 @@ federal_register:
   timeout_s: 120
   min_chars: 300
   closed_grace_days: 3
-  reprocess_below_schema: 3       # re-procesa los meses sin n_entities normalizado (ADR 0008)
+  reprocess_below_schema: 6       # v3: n_entities normalizado (ADR 0008); v6: text_structure (ADR 0026)
 
 # Ranking (Fase 5, ADR 0009): clusters, cruces término–serie, triangulación y score. Solo
 # parámetros: ningún tema, término ni serie.

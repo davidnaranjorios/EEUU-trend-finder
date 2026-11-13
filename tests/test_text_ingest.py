@@ -194,7 +194,7 @@ def test_edgar_rerun_is_idempotent(cfg, tmp_path):
         only_periods=["2024Q1"],
     )
     assert read_all(processed, "edgar") == first
-    assert len(parquet_files(processed)) == len(files) == 3  # una partición por tabla
+    assert len(parquet_files(processed)) == len(files) == 4  # una partición por tabla
 
 
 def test_edgar_resumes_after_interruption(cfg, tmp_path):
@@ -443,8 +443,8 @@ def test_old_schema_periods_are_reprocessed_only_where_configured(cfg, tmp_path)
     now = datetime.now(UTC)
     assert state.needs_run("2024-01", 20, now, min_schema=3)  # FR: se re-procesa
     assert not state.needs_run("2024-01", 20, now, min_schema=1)  # EDGAR: no
-    assert cfg["federal_register"]["reprocess_below_schema"] == 3
-    assert cfg["edgar"]["reprocess_below_schema"] == 5
+    assert cfg["federal_register"]["reprocess_below_schema"] == 6
+    assert cfg["edgar"]["reprocess_below_schema"] == 6
     state.mark("2024-01", closed=True, run_id="r2", stats={"docs": 1, "rows": {}})
     assert not state.needs_run("2024-01", 20, now, min_schema=3)
 

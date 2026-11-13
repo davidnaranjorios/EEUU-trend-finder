@@ -100,7 +100,14 @@ class FakeEdgar:
     @staticmethod
     def company(cik: int) -> dict[str, str]:
         """Nombre y SIC del emisor (el CIK 101 es de una industria y los demás de otra)."""
-        return {"name": f"Company {cik} Inc", "sic": "2834" if cik == 101 else "7372"}
+        return {
+            "name": f"Company {cik} Inc",
+            "sic": "2834" if cik == 101 else "7372",
+            "stateOfIncorporation": "DE",
+            "fiscalYearEnd": "1231",
+            "category": "Large accelerated filer" if cik == 101 else "",
+            "addresses": {"business": {"stateOrCountry": "CA"}},
+        }
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -127,6 +134,13 @@ class FakeEdgar:
                 return httpx.Response(404, json={})
             body = {"cik": cik, "filings": {"recent": self.subs[cik]}, **self.company(cik)}
             return httpx.Response(200, json=body)
+        if path.startswith("/api/xbrl/companyfacts/CIK"):
+            cik = int(path.removeprefix("/api/xbrl/companyfacts/CIK").removesuffix(".json"))
+            if cik != 101:
+                return httpx.Response(404, json={})
+            facts = {"Assets": {"units": {"USD": [{"accn": "0000000001-24-000001", "val": 1}]}}}
+            facts["Other"] = {"units": {"USD": [{"accn": "9999999999-99-999999", "val": 2}]}}
+            return httpx.Response(200, json={"facts": {"us-gaap": facts}})
         if path in self.docs:
             if self.fail_after is not None:
                 if self.fail_after <= 0:

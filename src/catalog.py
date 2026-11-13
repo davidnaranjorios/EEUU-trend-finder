@@ -31,6 +31,7 @@ from src.schemas import (
     TERM_FREQ,
     TEXT_DOCS,
     TEXT_INGEST,
+    TEXT_STRUCTURE,
     VINTAGE_LINEAGE,
     TableSpec,
 )
@@ -45,6 +46,7 @@ VIEWS: dict[str, tuple[str, TableSpec]] = {
     "text_docs": ("text_docs", TEXT_DOCS),
     "term_freq": ("term_freq", TERM_FREQ),
     "text_ingest": ("lineage/text_ingest", TEXT_INGEST),
+    "text_structure": ("text_structure", TEXT_STRUCTURE),  # ADR 0026
 }
 # Salidas de los detectores (Fase 2). Solo en la conexión local: en Actions se consultan sobre la
 # copia traída de R2, y sobre R2 una vista sin archivos fallaría antes de la primera corrida.
@@ -65,7 +67,7 @@ DETECT_VIEWS: dict[str, tuple[str, TableSpec]] = {
     "rank_phenomena": ("processed/rank/rank_phenomena", RANK_PHENOMENA),
 }
 # Nombre del subdirectorio de partición: bucket de dos dígitos (series) o periodo (texto).
-PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*"}
+PARTITION_GLOB = {"text_docs": "*", "term_freq": "*", "text_ingest": "*", "text_structure": "*"}
 # Credenciales de R2 en .env (nombres estándar de S3, que también leen rclone y DuckDB).
 # Nunca van en config.yaml.
 R2_ENV = ("CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")

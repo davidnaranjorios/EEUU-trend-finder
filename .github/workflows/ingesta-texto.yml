@@ -16,6 +16,10 @@ on:
         description: "Fuentes, separadas por espacio"
         default: "federal_register edgar"
         required: false
+      chain:
+        description: "Si queda trabajo, lanzar otra corrida al terminar (reprocesamiento completo)"
+        type: boolean
+        default: true
 
 concurrency:
   group: ingesta
@@ -23,6 +27,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # para encadenar la corrida siguiente cuando quedan periodos (ADR 0026)
 
 jobs:
   texto:
@@ -55,6 +60,20 @@ jobs:
           processed/lineage/text_ingest processed/ingest_state/text logs
       - name: Ingesta de texto
         run: infra/run_texto.sh
+      - name: Encadenar la corrida siguiente
+        # run_texto.sh deja `.pending` si agotó el presupuesto de 5 h 30 con periodos pendientes.
+        # El grupo de concurrencia pone la nueva corrida en cola hasta que esta termine.
+        if: ${{ success() && (github.event_name == 'schedule' || inputs.chain) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s data/processed/ingest_state/.pending ]; then
+            echo "Quedan periodos ($(sort -u data/processed/ingest_state/.pending | tr '\n' ' ')): lanzo la siguiente corrida"
+            gh workflow run ingesta-texto.yml --ref "${GITHUB_REF_NAME}" \
+              -f sources="${TEXT_SOURCES}" -f chain=true
+          else
+            echo "Sin periodos pendientes: fin del encadenado"
+          fi
       - name: Resumen
         if: always()
         run: |
