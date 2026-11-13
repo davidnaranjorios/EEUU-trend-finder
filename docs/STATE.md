@@ -2,6 +2,8 @@
 
 Actualizado el 2026-11-13. Reglas y metodología: `CLAUDE.md`; decisiones: `docs/decisions/`.
 Pendientes y problemas conocidos: [`docs/pendientes.md`](pendientes.md).
+**Objetivo del producto** (aprobado por David el 2026-11-06): fichas de oportunidad de negocio de
+9 dimensiones por industria NAICS; plan en [`docs/rediseno-oportunidades.md`](rediseno-oportunidades.md).
 
 ## Qué corre hoy
 - Ingesta (FRED, BLS, BEA, Census) y de texto (EDGAR, Federal Register) en GitHub Actions,
