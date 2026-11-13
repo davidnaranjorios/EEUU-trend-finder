@@ -8,7 +8,7 @@ Instalar `uv` si no está disponible. Luego:
 - Windows PowerShell: `./scripts/setup_graphify.ps1`
 - Linux/macOS: `bash scripts/setup_graphify.sh`
 
-Los scripts usan `uv tool install graphifyy` (paquete oficial, comando CLI `graphify`) e instalan las skills con `graphify install --project` y `graphify install --project --platform codex`. Generan índice solo del código mediante `graphify extract . --code-only` (sin proveedor LLM para documentación). Los archivos de las skills generados bajo `.claude/skills/graphify/` y `.agents/skills/graphify/` pueden versionarse tras **revisarlos**; no se incluyen aquí porque no se han podido generar/verificar en un entorno ejecutable.
+El script `setup_graphify.sh` instala `graphifyy==0.9.107` con `uv tool` y corre `graphify extract . --code-only`: extracción por AST, determinista, sin IA ni claves (~5–10 s). El grafo no se versiona (`graphify-out/` en `.gitignore`); se regenera en cada sesión. No se publica ninguna página del grafo.
 
 Comprobar `graphify --help` y `graphify query "How do ingestion and ranking connect?"` después de la extracción. Si una versión cambia la sintaxis, consultar la ayuda de la versión instalada y ajustar el script.
 

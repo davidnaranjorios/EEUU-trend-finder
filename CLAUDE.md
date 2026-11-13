@@ -281,3 +281,11 @@ Verificadas abriendo la fuente el 2026-10-20 (metadatos de doi.org o texto del p
 | Zhou et al. (2026), "BackTrend: Evaluating Scientific Weak-Signal Prediction via Backward Reconstruction", arXiv [2609.24921](https://arxiv.org/abs/2609.24921) | F1 máximo 10,1 % (set-level, juez LLM; DeepSeek-R1-0528); Coverage@10 máx. 18,5 % | Verificado (abstract y Tabla 2) |
 | Hanley & Hoberg (2019), "Dynamic Interpretation of Emerging Risks in the Financial Sector", *Review of Financial Studies* 32(12), 4543–4603 | Alerta "as early as mid-2005"; DOI [10.1093/rfs/hhz023](https://doi.org/10.1093/rfs/hhz023) | Verificado (abstract y doi.org) |
 | Boutaleb, Picault & Grosjean (2024), BERTrend, arXiv [2411.05930](https://arxiv.org/abs/2411.05930) | Método de temas para señales débiles; código `rte-france/BERTrend`, MPL-2.0 | Verificado 2026-11-03 (ADR 0006): no se integra por ahora |
+
+## Navegación con el grafo
+
+Antes de abrir archivos para ubicar código, consulta el grafo (ahorra tokens):
+- Preparar en una sesión nueva (~10 s, sin claves): `bash scripts/setup_graphify.sh`.
+- Consultar: `graphify query "dónde se calcula el efecto de tasas"`; también
+  `graphify explain "<símbolo>"` y `graphify path "A" "B"`. Si salen demasiados nodos, afina la pregunta.
+- El grafo da archivo y línea (`src=… loc=L…`); lee solo esos rangos. Se regenera con el mismo comando.

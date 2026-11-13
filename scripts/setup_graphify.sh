@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
+# Genera graphify-out/graph.json (AST determinista, sin IA ni claves; ~10 s).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v uv >/dev/null || { echo "Install uv first." >&2; exit 1; }
-uv tool install graphifyy
-command -v graphify >/dev/null || { echo "Graphify not in PATH; run uv tool update-shell and restart your shell." >&2; exit 1; }
-graphify install --project
-graphify install --project --platform codex
+uv tool install graphifyy==0.9.107 >/dev/null
+export PATH="$HOME/.local/bin:$PATH"
 graphify extract . --code-only
-printf '%s\n' "Graphify prepared. Try: graphify query 'How do ingestion and ranking connect?'"
-printf '%s\n' "Review generated assistant skills before committing."
+printf '%s\n' "Listo. Consulta: graphify query 'dónde se calcula el efecto de tasas'"

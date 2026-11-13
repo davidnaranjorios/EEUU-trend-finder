@@ -56,6 +56,4 @@ jobs:
             cat /tmp/graphify-query.txt
           done
           test "$matched" -eq 1
-          test -f .codex/skills/graphify/SKILL.md
-          test -f .claude/skills/graphify/SKILL.md
-          echo "Graphify graph built, both project skills created, query returned output."
+          echo "Graphify graph built, query returned output."
