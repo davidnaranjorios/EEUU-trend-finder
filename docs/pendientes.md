@@ -32,7 +32,7 @@ retome; nada de esto está en curso.
 
 ## Plan del rediseño (sin empezar)
 
-Etapas 2 a 5 de `docs/plan.md`: métricas de mercado por NAICS (SUSB, CBP, BDS, Economic Census,
+Etapas 2 a 5 de [`docs/rediseno-oportunidades.md`](rediseno-oportunidades.md): métricas de mercado por NAICS (SUSB, CBP, BDS, Economic Census,
 PPI/JOLTS/PCE, USAspending), clasificación, resumen semanal y ficha con LLM vía OpenRouter
 (necesita el secret `OPENROUTER_API_KEY` y el modelo que elija David). Se decide después de que
 David revise la primera ficha hecha a mano.
