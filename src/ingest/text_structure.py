@@ -19,23 +19,12 @@ from typing import Any
 
 import duckdb
 
-EDGAR_FIELDS = (
-    "sic",
-    "state_incorporation",
-    "state_business",
-    "fiscal_year_end",
-    "filer_category",
-    "items_json",
-    "facts_n_concepts",
-)
-FR_FIELDS = (
-    "doc_type",
-    "agency",
-    "subagency",
-    "cfr_json",
-    "topics_json",
-    "significant",
-    "format_json",
+from src.schemas import TEXT_STRUCTURE
+
+# Campos que se miden: todas las columnas de la tabla salvo la clave, el periodo y la fecha. Salen
+# del esquema, no de una lista escrita aquí; los que una fuente no trae salen con 0 %.
+FIELDS = tuple(
+    f.name for f in TEXT_STRUCTURE.schema if f.name not in (*TEXT_STRUCTURE.key, "period", "date")
 )
 
 
@@ -288,7 +277,7 @@ def build_report(processed: Path, cfg: dict[str, Any], today: date | None = None
         "Año = año de presentación. Los metadatos del emisor (industria, estado, cierre fiscal, "
         "categoría) salen de `submissions` en su estado ACTUAL: no son el valor histórico del "
         "momento de la presentación.",
-        "### 1.1 Cobertura por campo y año\n\n" + coverage(con, "edgar", EDGAR_FIELDS),
+        "### 1.1 Cobertura por campo y año\n\n" + coverage(con, "edgar", FIELDS),
     ]
     t_items, t_births = items_by_year(con, float(sc["birth_min_share"]))
     parts += [
@@ -297,7 +286,7 @@ def build_report(processed: Path, cfg: dict[str, Any], today: date | None = None
         "### 1.4 Empresas por industria y año\n\n"
         + firms_by_industry(con, list(sc["firm_thresholds"])),
         "## 2. Registro Federal",
-        "### 2.1 Cobertura por campo y año\n\n" + coverage(con, "federal_register", FR_FIELDS),
+        "### 2.1 Cobertura por campo y año\n\n" + coverage(con, "federal_register", FIELDS),
         "### 2.2 Documentos por tipo, agencias y subagencias\n\n" + fr_types_by_year(con),
         "## 3. Cambios de formato por año\n\n" + format_changes(con, float(sc["format_jump"])),
         "## 4. Datos financieros estructurados de la SEC (companyfacts)\n\n"
