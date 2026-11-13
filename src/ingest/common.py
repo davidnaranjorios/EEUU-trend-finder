@@ -377,7 +377,12 @@ class SourceIngestor:
         """
         from src.eligibility import classify_rows, normalize_title, row_rule
 
-        max_stale = self.cfg["eligibility"]["max_staleness_days"]
+        cfg = self.cfg
+        max_stale = cfg["eligibility"]["max_staleness_days"]
+        if self.scfg.get("ignore_staleness"):
+            # Fuentes anuales de referencia (ADR 0024): el último dato publicado es el vigente.
+            max_stale = {k: 10**6 for k in max_stale}
+            cfg = {**cfg, "eligibility": {**cfg["eligibility"], "max_staleness_days": max_stale}}
         threshold = self.scfg.get("lineage_aggregate_min_series")
         spill_rows = self.scfg.get("spill_rows", SPILL_ROWS)
         stats: Counter[str] = Counter()
@@ -449,7 +454,7 @@ class SourceIngestor:
                     lineage_buf.extend(batch)
                     flush()
                 for shard in active.batches():
-                    decisions = classify_rows(shard, self.cfg, today)
+                    decisions = classify_rows(shard, cfg, today)
                     lineage_buf.extend(decisions)
                     catalog_buf.extend(shard)
                     for d in decisions:

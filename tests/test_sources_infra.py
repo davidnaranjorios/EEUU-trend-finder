@@ -65,4 +65,12 @@ def test_one_failing_source_does_not_stop_the_others(tmp_path):
         "sync processed/series/bea",
         "run src.ingest.census",
         "sync processed/series/census",
+        "run src.ingest.cbp",
+        "sync processed/series/cbp",
+        "run src.ingest.bds",
+        "sync processed/series/bds",
+        "run src.ingest.econcensus",
+        "sync processed/series/econcensus",
+        "run src.market",  # tabla derivada de mercado, tras las fuentes de mercado
+        "sync processed/market",
     ]

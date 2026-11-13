@@ -75,6 +75,11 @@ rules:
     subtype: poblacion
     match: {source: bls, id_regex: "^LN[SU]", title_regex: "(?i)\\bpopulation level\\b"}
 
+  # --- Nómina (importes en dólares aunque la unidad diga «thousands»: ADR 0014, 2026-11-13).
+  - id: valor_nomina
+    kind: valor
+    match: {title_regex: "(?i)\\bpayrolls?\\b"}
+
   # --- Conteos de personas, unidades, horas y empleos (después de los importes en dólares).
   - id: cantidad_conteos
     kind: cantidad

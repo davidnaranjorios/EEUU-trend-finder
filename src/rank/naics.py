@@ -48,9 +48,15 @@ TOKEN_RE = re.compile(r"[a-z0-9]+|,")
 # Formatos de id de BLS con el código de industria dentro: (fuentes donde aplica, regex).
 # PPI industria: PCU + industria (2–6 dígitos, o "31-33" con guiones de relleno) + producto.
 # JOLTS: JT + S|U + industria (6 dígitos) + estado, área, tamaño, elemento y tasa.
+MARKET_SOURCES = frozenset({"cbp", "bds", "econcensus"})
 ID_FORMATS: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
     (frozenset({"bls", "fred"}), re.compile(r"^PCU(\d{2}-\d{2}(?=-)|\d{2,6})")),
     (frozenset({"bls"}), re.compile(r"^JT[SU](\d{6})\d{9}[A-Z]{2}[A-Z]$")),
+    # Fuentes de mercado de Census (ADR 0024): `<fuente>:<variable>:<NAICS>[:<clase>]`.
+    (
+        MARKET_SOURCES,
+        re.compile(r"^(?:cbp|bds|econcensus):[A-Za-z0-9_]+:(\d{2}-\d{2}|\d{2,6})(?::|$)"),
+    ),
 )
 
 Link = tuple[str, float, str]  # (naics, peso, metodo)
@@ -227,6 +233,32 @@ def bea_links(series_id: str, tables: NaicsTables) -> list[tuple[str, float]]:
     return sorted(acc.items())
 
 
+def market_links(series_id: str, tables: NaicsTables) -> tuple[list[tuple[str, float]], str]:
+    """(NAICS 2022, peso) y método de un código de CBP, BDS o el Censo Económico que no es de 2022.
+
+    Primero la concordancia oficial de 2017 a 2022 (peso repartido). Si el código es de una
+    vintage más antigua y no está en ella, el ancestro más específico que sigue vigente en 2022
+    (prefijo o rango de sector, p. ej. `44-45`): una industria vieja se ancla a la que la
+    contiene."""
+    for sources, pat in ID_FORMATS:
+        m = pat.match(series_id or "") if sources is MARKET_SOURCES else None
+        if not m or m.group(1) in tables.names:
+            continue
+        code = m.group(1)
+        if code in tables.to2022:
+            return list(tables.to2022[code]), "concordancia_naics"
+        for n in range(len(code) - 1, 1, -1):
+            pre = code[:n]
+            if pre in tables.names:
+                return [(pre, 1.0)], "ancestro_naics"
+            if n == 2:
+                for rng in tables.names:
+                    lo, _, hi = rng.partition("-")
+                    if hi and lo <= pre <= hi:
+                        return [(rng, 1.0)], "ancestro_naics"
+    return [], ""
+
+
 def id_codes(source: str, series_id: str, tables: NaicsTables) -> list[str]:
     """NAICS embebido en el id propio de la serie (ver ID_FORMATS), validado contra la tabla."""
     for sources, pat in ID_FORMATS:
@@ -271,6 +303,8 @@ def series_links(
             weighted, method = census_codes(key[1], tables), "codigo_en_id"
         elif key[0] == "bea":
             weighted, method = bea_links(key[1], tables), "concordancia_bea"
+        elif key[0] in MARKET_SOURCES:
+            weighted, method = market_links(key[1], tables)
         if weighted:
             out[key] = [(c, w, method) for c, w in weighted]
             continue

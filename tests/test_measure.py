@@ -303,6 +303,7 @@ DESCRIPTORS = {
     "employees",
     "jobs",
     "thousands",
+    "payrolls",
     "millions",
     "x",
     # sintaxis de regex y conectores
@@ -474,3 +475,75 @@ def test_census_qfr_item_codes_stay_unclassified_until_their_meaning_is_verified
     code = sid.rsplit("=", 1)[1]
     title = f"Quarterly Financial Report | Industry list: x | item type: {code}"
     assert kind("census", sid, code, title) == ("otro", None)
+
+
+@pytest.mark.parametrize(
+    ("sid", "title", "expected"),
+    [
+        (
+            "CES6562310057",
+            "Aggregate weekly payrolls of all employees, thousands, nursing care facilities, SA",
+            "valor",
+        ),
+        (
+            "CES6562310017",
+            "Indexes of aggregate weekly payrolls of all employees, nursing care facilities, SA",
+            "valor",
+        ),
+        ("CES6562310001", "All employees, thousands, nursing care facilities, SA", "cantidad"),
+    ],
+)
+def test_payroll_series_are_value_not_quantity(sid, title, expected):
+    # Nota B de la ficha 001: la unidad «thousands» no convierte una nómina en conteo.
+    assert kind("bls", sid, "Thousands of Persons", title)[0] == expected
+    assert kind("bls", sid, "Thousands", title)[0] == expected
+
+
+# Series de mercado de Census (ADR 0024): unidades y títulos que produce el adaptador.
+@pytest.mark.parametrize(
+    ("source", "sid", "units", "title", "expected"),
+    [
+        ("cbp", "cbp:ESTAB:6231", "Number", "Number of establishments, NAICS 6231", "cantidad"),
+        ("cbp", "cbp:EMP:6231", "Number", "Number of employees, NAICS 6231", "cantidad"),
+        (
+            "cbp",
+            "cbp:PAYANN:6231",
+            "Thousands of dollars",
+            "Annual payroll ($1,000), NAICS 6231",
+            "valor",
+        ),
+        (
+            "econcensus",
+            "econcensus:RCPTOT:6231",
+            "Thousands of dollars",
+            "Sales, value of shipments, or revenue ($1,000), NAICS 6231",
+            "valor",
+        ),
+        (
+            "econcensus",
+            "econcensus:CR4:6231",
+            "Percent",
+            (
+                "Sales, value of shipments, or revenue of largest firms (percent), "
+                "4 largest firms, NAICS 6231"
+            ),
+            "tasa",
+        ),
+        (
+            "bds",
+            "bds:ESTABS_ENTRY_RATE:6231",
+            "Percent",
+            "Rate of establishments born during the last 12 months, NAICS 6231",
+            "tasa",
+        ),
+        (
+            "econcensus",
+            "econcensus:FIRM_SIZE:6231:510",
+            "Number",
+            "Number of firms, Firms operated entire year with less than 5 employees, NAICS 6231",
+            "cantidad",
+        ),
+    ],
+)
+def test_market_series_get_their_measure_class(source, sid, units, title, expected):
+    assert kind(source, sid, units, title)[0] == expected

@@ -225,6 +225,8 @@ unidad, presupuesto de minutos) y un adaptador por fuente; BLS por archivos masi
 corrida semanal en `infra/sources_update.sh`. Decisiones y linaje agregado por unidad: ADR 0007.
 **Terminado cuando:** cada fuente pasa el mismo test de esquema e idempotencia
 (`tests/test_sources_contract.py`).
+Bloque 2 (2026-11-13, ADR 0024): `cbp`, `bds` y `econcensus` por NAICS, solo métricas de mercado para
+las fichas (fuera de `detect.sources`); `uv run python -m src.market build` arma `market/naics_metrics`.
 
 ### Fase 5 — Triangulación, deduplicación y ranking
 Hecho: detectores numéricos sobre las 4 fuentes en una familia, identidad de fuente por agencia

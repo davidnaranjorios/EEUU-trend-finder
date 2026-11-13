@@ -153,6 +153,10 @@ def _validate_relative(d: dict[str, Any], young: dict[str, Any]) -> None:
         raise ConfigError("eligibility.young: min_years y max_years enteros con 1 <= min < max")
 
 
+# Fuentes de mercado (ADR 0024): métricas para las fichas; nunca entran a los detectores.
+MARKET_ONLY_SOURCES = ("cbp", "bds", "econcensus")
+
+
 def _validate_detect(d: dict[str, Any]) -> None:
     sources = d.get("sources")
     if (
@@ -162,6 +166,9 @@ def _validate_detect(d: dict[str, Any]) -> None:
         or len(set(sources)) != len(sources)
     ):
         raise ConfigError("detect.sources debe ser una lista no vacía de fuentes distintas")
+    market = sorted(set(sources) & set(MARKET_ONLY_SOURCES))
+    if market:
+        raise ConfigError(f"detect.sources no admite fuentes de mercado (ADR 0024): {market}")
     dets = d.get("detectors")
     if not isinstance(dets, list) or not dets or not set(dets) <= set(DETECTORS):
         raise ConfigError(f"detect.detectors debe ser una lista no vacía de {DETECTORS}")
@@ -218,7 +225,7 @@ def _validate_groups(groups: Any, name: str) -> None:
 
 
 # Fuentes con adaptador sobre src/ingest/common.py (Fase 4).
-COMMON_SOURCES = ("bls", "bea", "census")
+COMMON_SOURCES = ("bls", "bea", "census", *MARKET_ONLY_SOURCES)
 
 
 def _validate_sources(src: dict[str, Any]) -> None:

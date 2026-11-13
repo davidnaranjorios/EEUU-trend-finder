@@ -23,7 +23,7 @@ from src.ingest.common import (
 from src.ingest.store import read_table
 from src.schemas import ELIGIBILITY, ELIGIBILITY_GROUPS, SERIES, SERIES_META, validate
 
-SOURCES = ["synthetic", "bls", "bea", "census"]
+SOURCES = ["synthetic", "bls", "bea", "census", "cbp", "bds", "econcensus"]
 NOW = datetime(2026, 11, 3, 12, tzinfo=UTC)
 
 
@@ -80,7 +80,9 @@ def test_schema_lineage_and_idempotence(source, tmp_path):
     decisions = latest_decisions(paths, adapter.source)
     assert sum(lineage_series_count(d) for d in decisions) == n_catalog
     assert {d["group_name"] for d in decisions} <= set(ELIGIBILITY_GROUPS)
-    targets = {d["series_id"] for d in decisions if d["group_name"] == "nacional"}
+    # Objetivo = lo que descarga el ingestor: los grupos de `download.groups` y las series nuevas
+    # (las fuentes de mercado con pocos años, como el Censo Económico, caen en «nuevas»).
+    targets = set(ing.targets())
     assert targets and {r["series_id"] for r in series} <= targets
     assert {r["series_id"] for r in series} == targets  # todas las objetivo tienen valores
 
