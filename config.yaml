@@ -205,6 +205,62 @@ sources:
     crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
 
+  # Fuentes de mercado por NAICS (Census; ADR 0024): métricas para las fichas, NO entran a los
+  # detectores (no están en detect.sources; src/config.py lo exige). Datos anuales con rezago:
+  # ignore_staleness los exime de la regla «inactiva» del embudo.
+  cbp:
+    requests_per_minute: 60
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    unit_max_min: 40
+    hard_grace_min: 10
+    crawl_budget_share: 0.5
+    lineage_aggregate_min_series: 100000
+    ignore_staleness: true
+    measures: [ESTAB, EMP, PAYANN]
+  bds:
+    requests_per_minute: 60
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    unit_max_min: 40
+    hard_grace_min: 10
+    crawl_budget_share: 0.5
+    lineage_aggregate_min_series: 100000
+    ignore_staleness: true
+    measures: [FIRM, ESTAB, ESTABS_ENTRY_RATE, ESTABS_EXIT_RATE]
+  econcensus:
+    requests_per_minute: 60
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    unit_max_min: 40
+    hard_grace_min: 10
+    crawl_budget_share: 0.5
+    lineage_aggregate_min_series: 100000
+    ignore_staleness: true
+    min_vintage: 2017             # el esquema de 2012 y anteriores es otro
+    measures: [FIRM, ESTAB, RCPTOT, EMP]
+    concentration: {code_var: CONCENFI, value: VAL_PCT, label_regex: "^(\\d+) largest firms?$"}
+    size: {code_var: EMPSZFF, value: FIRM}
+
+# Tabla derivada de mercado por NAICS (src/market, ADR 0024).
+market:
+  small_firm_max_employees: 20    # «empresas pequeñas»: clases de tamaño con tope menor que esto
+  # Nombre de la métrica derivada por fuente y variable oficial de Census. Una métrica = una fuente;
+  # donde dos fuentes miden lo mismo con otra definición, la segunda lleva su origen en el nombre.
+  metrics:
+    cbp: {ESTAB: establishments, EMP: employment, PAYANN: payroll}
+    bds: {FIRM: firms_bds, ESTAB: establishments_bds, ESTABS_ENTRY_RATE: entry_rate, ESTABS_EXIT_RATE: exit_rate}
+    econcensus: {FIRM: firms, ESTAB: establishments_ec, EMP: employment_ec, RCPTOT: revenue}
+
 # Texto (Fase 3, ADR 0005). Solo se guardan text_hash y frecuencias, nunca el texto completo.
 text:
   ngram_max: 3                    # n-gramas de 1 a 3 tokens

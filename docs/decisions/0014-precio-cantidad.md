@@ -56,3 +56,8 @@ población 11 %, cantidades 7 %.
   trabajo como salario o compensación **por hora**.
 - Los sufijos de tipo de dato de BLS CES (`…03`, `…08`) no se usan: no pude verificarlos y las
   unidades de la tabla de BLS ya los distinguen.
+
+## Cambios posteriores
+- 2026-11-13: regla `valor_nomina` (`title_regex: (?i)\bpayrolls?\b`, `kind: valor`) antes de los conteos.
+  Las series CES de nómina («Aggregate weekly payrolls…», «Indexes of aggregate weekly payrolls…»)
+  caían en `cantidad_conteos` por la unidad «thousands», pero son dólares (nota B de la ficha 001).

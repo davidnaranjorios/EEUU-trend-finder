@@ -31,7 +31,10 @@ GRACE_S="${SOURCES_GRACE_S:-$(( ${SOURCES_GRACE_MIN:-15} * 60 ))}"
 SYNC_S="${SOURCES_SYNC_TIMEOUT_S:-$(( ${SOURCES_SYNC_TIMEOUT_MIN:-30} * 60 ))}"
 TOTAL_S="${SOURCES_TOTAL_S:-$(( ${SOURCES_TOTAL_MIN:-240} * 60 ))}"
 MIN_USEFUL_S="${SOURCES_MIN_USEFUL_S:-300}"
-if [[ $# -eq 0 ]]; then set -- bls bea census; fi
+# cbp, bds y econcensus son métricas de mercado por NAICS (ADR 0024): consultas pequeñas y anuales,
+# así que tienen un presupuesto propio corto (SOURCES_BUDGET_MARKET_MIN, 20 por defecto).
+MARKET_BUDGET_S="${SOURCES_BUDGET_MARKET_S:-$(( ${SOURCES_BUDGET_MARKET_MIN:-20} * 60 ))}"
+if [[ $# -eq 0 ]]; then set -- bls bea census cbp bds econcensus; fi
 START=$SECONDS
 failed=()
 skipped=()
@@ -39,6 +42,7 @@ for src in "$@"; do
   # Tiempo del script que queda, descontando el margen y la sincronización de esta fuente.
   left=$(( TOTAL_S - (SECONDS - START) - GRACE_S - SYNC_S ))
   budget=$BUDGET_S
+  case "$src" in cbp|bds|econcensus) budget=$MARKET_BUDGET_S ;; esac
   if (( left < budget )); then budget=$left; fi
   if (( budget < MIN_USEFUL_S )); then
     echo "sources_update: $src sin tiempo útil (quedan ${left}s del total); queda pendiente" >&2
@@ -73,6 +77,23 @@ for src in "$@"; do
     echo "sources_update: la sincronización de $src falló (rc=$sync_rc)" >&2
     failed+=("$src(sync)")
   fi
+done
+# Tabla derivada de mercado por NAICS: solo si corrió alguna fuente de mercado.
+for src in "$@"; do
+  case "$src" in
+    cbp|bds|econcensus)
+      rc=0
+      timeout -k 60 "$MARKET_BUDGET_S" uv run --quiet python -m src.market build >/dev/null || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        echo "sources_update: src.market build falló (rc=$rc)" >&2
+        failed+=("market")
+      else
+        sync_rc=0
+        timeout -k 60 "$SYNC_S" infra/sync_r2.sh processed/market || sync_rc=$?
+        [[ $sync_rc -eq 0 ]] || failed+=("market(sync)")
+      fi
+      break ;;
+  esac
 done
 if [[ ${#skipped[@]} -gt 0 ]]; then
   echo "sources_update: sin tiempo, pendientes para la próxima corrida: ${skipped[*]}" >&2
