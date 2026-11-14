@@ -150,6 +150,27 @@ def extract_sections(text: str) -> dict[str, str]:
     return out
 
 
+ITEM_RE = re.compile(_H + r"(\d{1,2}[A-C]?)\b", re.I | re.M)
+
+
+def inventory_items(text: str) -> dict[str, int]:
+    """Todos los Items del 10-K que aparecen como encabezado y su largo en caracteres (ADR 0026).
+
+    Para cada Item se toma el tramo más largo entre uno de sus encabezados y el siguiente
+    encabezado de cualquier Item (el índice del documento, con tramos de una línea, no gana a la
+    sección real). Solo describe: no cambia qué secciones se analizan."""
+    heads = [(m.start(), m.group(1).upper()) for m in ITEM_RE.finditer(text)]
+    out: dict[str, int] = {}
+    for i, (pos, item) in enumerate(heads[:-1]):
+        nxt = next((p for p, j in heads[i + 1 :] if j != item), None)
+        if nxt is not None:
+            out[item] = max(out.get(item, 0), nxt - pos)
+    if heads:  # el último encabezado llega hasta el final del documento
+        pos, item = heads[-1]
+        out[item] = max(out.get(item, 0), len(text) - pos)
+    return out
+
+
 def analyze_filing(
     filing: Filing, payload: bytes, kind: str, tmp_dir: str, min_chars: int, n_max: int
 ) -> DocResult:
@@ -158,13 +179,20 @@ def analyze_filing(
     text = payload.decode("utf-8", errors="replace")
     if kind == "submission":
         text = main_document(text, filing.form) or ""
-    if looks_like_html(text):
+    is_html = looks_like_html(text)
+    doc.structure = {
+        "doc_type": filing.form,
+        "format": {"html": is_html, "via": kind},
+    }
+    if is_html:
         try:
             text = html_to_text(text.encode("utf-8"))
         except (ValueError, TypeError) as exc:  # lxml: documento vacío o ilegible
             doc.sections.append(SectionResult("*", "excluido", f"html_ilegible={exc}"[:200]))
             return doc
     found = extract_sections(text)
+    doc.structure["items"] = inventory_items(text)
+    doc.structure["n_chars"] = len(text)
     for name in SECTIONS:
         if name not in found:
             doc.sections.append(SectionResult(name, "sin_seccion"))
@@ -197,6 +225,8 @@ class EdgarSource:
         self.sic: dict[int, str] = {}  # CIK -> SIC de 2 dígitos (de submissions)
         self.sic4: dict[int, str] = {}  # CIK -> SIC de 4 dígitos
         self.names: dict[int, str] = {}  # CIK -> nombre del emisor (de submissions)
+        self.meta: dict[int, dict[str, str]] = {}  # CIK -> metadatos del emisor (ADR 0026)
+        self.facts_per_period = 0  # 10-K por trimestre cuyos hechos XBRL se sondean (cobertura)
 
     @classmethod
     def from_config(
@@ -216,7 +246,11 @@ class EdgarSource:
         )
         www = ApiClient(e["base_url"], **common)
         data = ApiClient(e["data_url"], **common)
-        return cls(e, www, data, raw_dir)
+        src = cls(e, www, data, raw_dir)
+        src.facts_per_period = (
+            (cfg.get("text") or {}).get("structure", {}).get("facts_per_period", 0)
+        )
+        return src
 
     def close(self) -> None:
         self.www.close()
@@ -291,7 +325,40 @@ class EdgarSource:
             cik = int(d.entity) if d.entity and d.entity.isdigit() else None
             d.group = self.sic.get(cik) if cik is not None else None
             d.sic = self.sic4.get(cik) if cik is not None else None
+            if d.structure is not None and cik is not None:
+                d.structure.update(self.meta.get(cik, {}))
+        self._probe_facts(analyzed, ctx, period)
         return docs + analyzed + failed
+
+    def _probe_facts(self, docs: list[DocResult], ctx: CollectContext, period: str) -> None:
+        """Cobertura de los datos financieros estructurados (companyfacts), solo conteo (ADR 0026).
+
+        Para `text.structure.facts_per_period` 10-K del trimestre cuenta los conceptos XBRL con
+        algún hecho reportado en esa presentación (`accn`). No guarda ningún valor. Un 404 (sin
+        XBRL para el emisor) es un 0: «no tiene datos estructurados»."""
+        k = int(self.facts_per_period)
+        cands = sorted((d for d in docs if d.structure is not None), key=lambda d: d.doc_id)
+        if k <= 0 or not cands:
+            return
+        for d in random.Random(f"{ctx.seed}:facts:{period}").sample(cands, min(k, len(cands))):
+            try:
+                facts = self.data.get_json(
+                    f"/api/xbrl/companyfacts/CIK{int(d.entity):010d}.json", {}
+                )
+            except ApiError as exc:
+                if exc.status != 404:
+                    raise
+                d.structure["facts_n_concepts"] = 0
+                continue
+            n = 0
+            for taxonomy in (facts.get("facts") or {}).values():
+                for concept in taxonomy.values():
+                    n += any(
+                        f.get("accn") == d.doc_id
+                        for units in (concept.get("units") or {}).values()
+                        for f in units
+                    )
+            d.structure["facts_n_concepts"] = n
 
     # Documento principal
     def primary_documents(self, filings: list[Filing]) -> dict[str, str]:
@@ -335,6 +402,16 @@ class EdgarSource:
         if sic.isdigit() and len(sic) >= 2:
             self.sic[cik] = sic.zfill(4)[:2]
             self.sic4[cik] = sic.zfill(4)[:4]
+        if "filings" in sub and "recent" in sub["filings"]:  # no el archivo extra: sin metadatos
+            biz = (sub.get("addresses") or {}).get("business") or {}
+            raw = {
+                "sic": sic.zfill(4)[:4] if sic.isdigit() else None,
+                "state_incorporation": sub.get("stateOfIncorporation"),
+                "state_business": biz.get("stateOrCountry"),
+                "fiscal_year_end": sub.get("fiscalYearEnd"),
+                "filer_category": sub.get("category"),
+            }
+            self.meta[cik] = {k: str(v).strip() for k, v in raw.items() if v and str(v).strip()}
 
     def _submissions_zip(self) -> Path:
         path = self.raw_dir / SOURCE / "submissions.zip"

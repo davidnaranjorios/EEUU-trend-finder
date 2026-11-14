@@ -239,6 +239,38 @@ TEXT_INGEST = TableSpec(
     key=("run_id", "source", "doc_id", "section"),
 )
 
+# Estructura de cada documento de texto (ADR 0026, Etapa 1 de docs/plan-estructura-texto.md): solo
+# DESCRIBE, no alimenta detectores. Una fila por documento y periodo (se reemplaza con el periodo).
+# EDGAR: metadatos del emisor (submissions) y secciones (Items) con su largo; Federal Register:
+# tipo, agencia y subagencia, partes del CFR, temas oficiales de indexación y huella de formato.
+# Todo lo que la fuente no trae queda en NULL (nunca un valor inventado).
+TEXT_STRUCTURE = TableSpec(
+    name="text_structure",
+    schema=_schema(
+        ("source", pa.string(), False),
+        ("doc_id", pa.string(), False),
+        ("period", pa.string(), False),
+        ("date", pa.date32(), False),
+        ("entity", pa.string(), True),
+        ("doc_type", pa.string(), True),  # EDGAR: formulario; FR: tipo (rule, prorule, ...)
+        ("agency", pa.string(), True),
+        ("subagency", pa.string(), True),
+        ("sic", pa.string(), True),  # SIC de 4 dígitos del emisor (submissions)
+        ("state_incorporation", pa.string(), True),
+        ("state_business", pa.string(), True),
+        ("fiscal_year_end", pa.string(), True),  # MMDD
+        ("filer_category", pa.string(), True),  # categoría de emisor (grande, acelerado, ...)
+        ("items_json", pa.string(), True),  # EDGAR: {"1A": n_caracteres, ...} de todos los Items
+        ("cfr_json", pa.string(), True),  # FR: ["40 CFR 52", ...]
+        ("significant", pa.bool_(), True),  # FR: regla significativa, si la fuente lo trae
+        ("topics_json", pa.string(), True),  # FR: temas oficiales («List of Subjects»)
+        ("format_json", pa.string(), True),  # huella de formato del documento (cambios por año)
+        ("n_chars", pa.int64(), True),
+        ("facts_n_concepts", pa.int64(), True),  # EDGAR: conceptos XBRL anuales (companyfacts)
+    ),
+    key=("source", "doc_id"),
+)
+
 CLUSTERS = TableSpec(
     name="clusters",
     schema=_schema(
@@ -460,6 +492,7 @@ ALL_SPECS = {
         SERIES_META,
         TEXT_DOCS,
         TERM_FREQ,
+        TEXT_STRUCTURE,
         SIGNALS,
         ELIGIBILITY,
         VINTAGE_LINEAGE,

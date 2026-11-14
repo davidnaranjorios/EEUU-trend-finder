@@ -44,21 +44,24 @@ from src.ingest.text_terms import (
     write_temp_text,
 )
 from src.log import get_logger, run
-from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST
+from src.schemas import TERM_FREQ, TEXT_DOCS, TEXT_INGEST, TEXT_STRUCTURE
 
 EXIT_PENDING = 10
 EXIT_INCOMPLETE = 11
+EXIT_BUDGET = 12  # se agotó el presupuesto de tiempo de la corrida (ADR 0026): quedan periodos
 # Versión del esquema de las particiones que escribe la ingesta (ADR 0008):
 #   2: term_freq.n_entities;  3: entidad del Federal Register normalizada;
-#   4: term_freq.n_industries (SIC de EDGAR);  5: term_freq.sic_top_json (SIC de 4 dígitos).
+#   4: term_freq.n_industries (SIC de EDGAR);  5: term_freq.sic_top_json (SIC de 4 dígitos);
+#   6: tabla `text_structure` (ADR 0026).
 # Un periodo cerrado con versión menor que `<fuente>.reprocess_below_schema` se vuelve a
 # procesar; las particiones viejas que no se reprocesan llevan n_entities = NULL.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DOC_LEVEL = "*"  # `section` de las decisiones sobre el documento entero
 TABLE_DIRS = {
     TEXT_DOCS.name: "text_docs",
     TERM_FREQ.name: "term_freq",
     TEXT_INGEST.name: "lineage/text_ingest",
+    TEXT_STRUCTURE.name: "text_structure",
 }
 
 
@@ -84,6 +87,7 @@ class DocResult:
     sections: list[SectionResult] = field(default_factory=list)
     group: str | None = None  # industria (SIC de 2 dígitos) cuando la fuente la tiene
     sic: str | None = None  # SIC de 4 dígitos (para la concordancia oficial SIC → NAICS)
+    structure: dict[str, Any] | None = None  # estructura del documento (ADR 0026): solo describe
 
 
 def analyze_section(
@@ -179,11 +183,14 @@ def finalize_period(
     tmp_by_section: dict[str, list[str]] = {}
     text_rows: list[dict[str, Any]] = []
     lineage: list[dict[str, Any]] = []
+    structure_rows: list[dict[str, Any]] = []
 
     for doc in docs:
         if doc.doc_id in seen_doc:  # mismo documento listado dos veces
             continue
         seen_doc.add(doc.doc_id)
+        if doc.structure is not None:
+            structure_rows.append(structure_row(source, period, doc))
         for sec in doc.sections:
             status, detail = sec.status, sec.detail
             if status == "ok":
@@ -246,7 +253,12 @@ def finalize_period(
             )
 
     written = {}
-    for spec, rows in ((TEXT_DOCS, text_rows), (TEXT_INGEST, lineage), (TERM_FREQ, freq_rows)):
+    for spec, rows in (
+        (TEXT_DOCS, text_rows),
+        (TEXT_INGEST, lineage),
+        (TERM_FREQ, freq_rows),
+        (TEXT_STRUCTURE, structure_rows),
+    ):
         table = pa.Table.from_pylist(rows, schema=spec.schema)
         written[spec.name] = store.replace_partition(
             table, spec, processed_dir / TABLE_DIRS[spec.name], source=source, partition=period
@@ -260,6 +272,35 @@ def finalize_period(
         "rows": written,
         "status": by_status,
         "total_docs": dict(counter.total_docs),
+    }
+
+
+def structure_row(source: str, period: str, doc: DocResult) -> dict[str, Any]:
+    """Fila de `text_structure` de un documento (campos ausentes: NULL)."""
+    st = doc.structure or {}
+    items = st.get("items")
+    cfr, topics = st.get("cfr"), st.get("topics")
+    return {
+        "source": source,
+        "doc_id": doc.doc_id,
+        "period": period,
+        "date": doc.date,
+        "entity": doc.entity,
+        "doc_type": st.get("doc_type"),
+        "agency": doc.entity if source == "federal_register" else None,
+        "subagency": st.get("agency_sub"),
+        "sic": st.get("sic"),
+        "state_incorporation": st.get("state_incorporation"),
+        "state_business": st.get("state_business"),
+        "fiscal_year_end": st.get("fiscal_year_end"),
+        "filer_category": st.get("filer_category"),
+        "items_json": json.dumps(items, sort_keys=True) if items is not None else None,
+        "cfr_json": json.dumps(cfr) if cfr is not None else None,
+        "significant": st.get("significant"),
+        "topics_json": json.dumps(topics) if topics is not None else None,
+        "format_json": json.dumps(st["format"], sort_keys=True) if st.get("format") else None,
+        "n_chars": st.get("n_chars"),
+        "facts_n_concepts": st.get("facts_n_concepts"),
     }
 
 
@@ -327,8 +368,15 @@ def run_source(
     sample: int | None = None,
     workers: int | None = None,
     logger: Any = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
-    """Procesa los periodos pendientes (o `only_periods`), uno por tramo, y marca el estado."""
+    """Procesa los periodos pendientes (o `only_periods`), uno por tramo, y marca el estado.
+
+    `deadline` (época en segundos): presupuesto de la corrida (ADR 0026). Antes de cada periodo se
+    comprueba que quepa: si el tiempo que queda es menor que `text.period_margin` veces el periodo
+    más lento de esta corrida (o la estimación de `text.period_seconds_estimate` si aún no hay
+    ninguno), se corta con `budget_exhausted`; la próxima corrida sigue con los pendientes."""
     today = today or date.today()
     text_cfg = cfg["text"]
     state = TextState(processed_dir, src.name)
@@ -347,8 +395,19 @@ def run_source(
         else None
     )
     done: list[dict[str, Any]] = []
+    budget_exhausted = False
     try:
         for period in todo:
+            if deadline is not None:
+                slowest = max((p["seconds"] for p in done), default=None)
+                need = (
+                    slowest
+                    if slowest is not None
+                    else text_cfg["period_seconds_estimate"][src.name]
+                ) * text_cfg["period_margin"]
+                if clock() + need > deadline:
+                    budget_exhausted = True
+                    break
             t0 = time.perf_counter()
             tmp_dir = Path(tempfile.mkdtemp(prefix=f"text-{src.name}-{period}-"))
             try:
@@ -410,7 +469,8 @@ def run_source(
     return {
         "source": src.name,
         "periods_done_now": done,
-        "pending": 0 if only_periods else len(candidates) - len(todo),
+        "pending": 0 if only_periods else len(candidates) - len(done),
+        "budget_exhausted": budget_exhausted,
         "incomplete": any(p.get("incomplete", False) for p in done),
     }
 
@@ -503,12 +563,33 @@ def build_source(name: str, cfg: dict[str, Any], raw_dir: Path) -> TextSource:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.ingest.text")
-    parser.add_argument("command", choices=["edgar", "federal_register", "summary", "migrate"])
+    parser.add_argument(
+        "command",
+        choices=["edgar", "federal_register", "summary", "migrate", "structure-report"],
+    )
     parser.add_argument("--max-periods", type=int, default=None)
     parser.add_argument("--periods", default=None, help="lista separada por comas")
     parser.add_argument("--sample", type=int, default=None, help="documentos al azar por periodo")
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument(
+        "--deadline-epoch",
+        type=float,
+        default=None,
+        help="época (s) hasta la que se pueden iniciar periodos; no empieza uno que no quepa",
+    )
+    parser.add_argument(
+        "--progress-file",
+        type=Path,
+        default=None,
+        help="se crea si esta invocación procesó al menos un periodo (freno del encadenado)",
+    )
     parser.add_argument("--processed-dir", type=Path, default=None)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=REPO_ROOT / "docs" / "estructura-texto.md",
+        help="structure-report: archivo de salida",
+    )
     args = parser.parse_args(argv)
 
     from dotenv import load_dotenv
@@ -520,6 +601,11 @@ def main(argv: list[str] | None = None) -> int:
     processed = args.processed_dir or _resolve(cfg["paths"]["processed_dir"])
     if args.command == "summary":
         print(json.dumps(summary(processed), indent=2, default=str))
+        return 0
+    if args.command == "structure-report":
+        from src.ingest.text_structure import write_report
+
+        print(write_report(processed, args.out, cfg))
         return 0
     if args.command == "migrate":
         print(json.dumps(migrate(processed)))
@@ -539,14 +625,20 @@ def main(argv: list[str] | None = None) -> int:
                     sample=args.sample,
                     workers=args.workers,
                     logger=logger,
+                    deadline=args.deadline_epoch,
                 )
             record.n_series[src.name] = sum(p["docs"] for p in stats["periods_done_now"])
             record.details = {"command": args.command, "stats": stats}
         print(json.dumps(stats, default=str, indent=2))
+        if args.progress_file is not None and stats["periods_done_now"]:
+            args.progress_file.parent.mkdir(parents=True, exist_ok=True)
+            args.progress_file.touch()
     finally:
         src.close()
     if stats["incomplete"]:
         return EXIT_INCOMPLETE
+    if stats["budget_exhausted"]:
+        return EXIT_BUDGET
     return EXIT_PENDING if stats["pending"] else 0
 
 

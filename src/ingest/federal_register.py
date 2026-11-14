@@ -51,6 +51,58 @@ def _text_of(el: etree._Element) -> str:
     return "".join(el.itertext())
 
 
+CFR_RE = re.compile(r"(\d{1,2})\s*CFR\s*(?:Parts?|Chapters?|Subchapters?|§§?)?\s*([^\n;]*)", re.I)
+CFR_NUM_RE = re.compile(r"\d+(?:\.\d+)?[A-Za-z]?")
+
+
+def _flat(el: etree._Element | None) -> str | None:
+    """Texto de un elemento con los espacios colapsados (None si no hay)."""
+    if el is None:
+        return None
+    text = " ".join(" ".join(el.itertext()).split())
+    return text or None
+
+
+def cfr_refs(texts: list[str]) -> list[str]:
+    """Referencias «<título> CFR <parte>» de los elementos CFR del encabezado (sin duplicados)."""
+    out: list[str] = []
+    for t in texts:
+        for m in CFR_RE.finditer(t):
+            parts = CFR_NUM_RE.findall(m.group(2)) or [""]
+            for part in parts:
+                ref = f"{int(m.group(1))} CFR {part}".strip()
+                if ref not in out:
+                    out.append(ref)
+    return out
+
+
+def structure_of(el: etree._Element, issue_date: date) -> dict[str, Any]:
+    """Estructura del documento (ADR 0026): tipo, agencia y subagencia, partes del CFR, temas
+    oficiales («List of Subjects») y huella de formato (etiquetas hijas del encabezado).
+
+    Todo sale de la etiqueta del XML, nunca de palabras del contenido. La marca de «significativa»
+    no existe en el XML de govinfo: queda None."""
+    pre = el.find("PREAMB")
+    cfr_texts = [t for t in (_flat(c) for c in el.iter("CFR")) if t]
+    topics: list[str] = []
+    for lst in el.iter("LSTSUB"):
+        for p in lst.iter("P"):
+            t = _flat(p)
+            if t:
+                topics += [x.strip(" .") for x in re.split(r"[,;]", t) if x.strip(" .")]
+    sub = _flat(el.find(".//SUBAGY"))
+    tags = sorted({c.tag for c in pre if isinstance(c.tag, str)}) if pre is not None else []
+    return {
+        "doc_type": el.tag.lower(),
+        "agency_sub": sub.upper() if sub else None,
+        "cfr": cfr_refs(cfr_texts),
+        "significant": None,
+        "topics": topics,
+        "format": {"preamb": tags, "lstsub": el.find(".//LSTSUB") is not None},
+        "n_chars": None,
+    }
+
+
 def analyze_issue(
     xml: bytes, issue_date: date, tmp_dir: str, min_chars: int, n_max: int
 ) -> list[DocResult]:
@@ -72,6 +124,7 @@ def analyze_issue(
             " ".join(" ".join(agency.itertext()).split()).upper() if agency is not None else None
         )
         doc = DocResult(doc_id, issue_date, entity or None)
+        doc.structure = structure_of(el, issue_date)
         tmp = Path(tmp_dir) / section / f"{doc_id}.txt.gz"
         doc.sections.append(
             analyze_section(section, _text_of(el), min_chars=min_chars, n_max=n_max, tmp_path=tmp)

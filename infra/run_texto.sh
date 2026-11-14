@@ -14,6 +14,17 @@ FR_PER_TRAMO="${FR_PER_TRAMO:-12}"
 read -r -a SOURCES <<<"${TEXT_SOURCES:-federal_register edgar}"
 STATE="data/processed/ingest_state"
 EXIT_PENDING=10
+EXIT_BUDGET=12 # presupuesto de tiempo agotado (ADR 0026): se sincroniza y se sale limpio
+# Presupuesto por corrida: GitHub corta el job a las 6 h, así que no se empieza un periodo que no
+# quepa antes de `text.run_budget_minutes` (5 h 30). Lo cortado sigue en la próxima corrida.
+BUDGET_MIN="${RUN_BUDGET_MINUTES:-$(uv run --quiet python -c \
+  'from src.config import load_config; print(load_config()["text"]["run_budget_minutes"])')}"
+DEADLINE="$(($(date +%s) + BUDGET_MIN * 60))"
+PENDING_FILE="data/processed/ingest_state/.pending"
+# Freno del encadenado (ADR 0026): existe solo si esta corrida procesó al menos un periodo.
+PROGRESS_FILE="data/processed/ingest_state/.progress"
+EXIT_NO_PROGRESS=13
+rm -f "$PENDING_FILE" "$PROGRESS_FILE"
 mkdir -p "$STATE/text"
 exec 9>"$STATE/.lock"
 flock -n 9 || { echo "otra ejecución tiene el lock" >&2; exit 1; }
@@ -33,11 +44,17 @@ tramos() {
   [[ "$1" == edgar ]] && n="$EDGAR_PER_TRAMO"
   while true; do
     set +e
-    py -m src.ingest.text "$1" --max-periods "$n"
+    py -m src.ingest.text "$1" --max-periods "$n" --deadline-epoch "$DEADLINE" \
+      --progress-file "$PROGRESS_FILE"
     rc=$?
     set -e
     sync_r2
     [[ $rc -eq 0 ]] && return 0
+    if [[ $rc -eq $EXIT_BUDGET ]]; then
+      echo "run_texto: presupuesto agotado en $1; quedan periodos para la próxima corrida" >&2
+      echo "$1" >>"$PENDING_FILE"
+      return 0
+    fi
     [[ $rc -eq $EXIT_PENDING ]] || return "$rc"
   done
 }
@@ -45,6 +62,20 @@ tramos() {
 # Particiones de term_freq anteriores al esquema actual: columnas nuevas en NULL, sin descargar.
 py -m src.ingest.text migrate
 for src in "${SOURCES[@]}"; do
+  if [[ -s "$PENDING_FILE" ]]; then # ya no hay tiempo: la fuente siguiente espera a la próxima
+    echo "$src" >>"$PENDING_FILE"
+    continue
+  fi
   tramos "$src"
 done
-echo "run_texto: ok"
+if [[ -s "$PENDING_FILE" && ! -e "$PROGRESS_FILE" ]]; then
+  # Quedan periodos pero no se avanzó ninguno: encadenar repetiría la misma corrida sin fin.
+  echo "run_texto: sin avance con periodos pendientes; no se encadena (revisar presupuesto)" >&2
+  rm -f "$PENDING_FILE"
+  exit "$EXIT_NO_PROGRESS"
+fi
+if [[ -s "$PENDING_FILE" ]]; then
+  echo "run_texto: parcial (pendiente: $(sort -u "$PENDING_FILE" | tr '\n' ' '))"
+else
+  echo "run_texto: ok"
+fi

@@ -430,7 +430,8 @@ def _text_workflow():
 def test_text_workflow_shares_lock_and_secrets():
     wf = _text_workflow()
     assert wf["concurrency"] == _workflow()["concurrency"]  # nunca dos sync a R2 a la vez
-    assert wf["permissions"] == {"contents": "read"}
+    # actions: write solo para encadenar la corrida siguiente del reprocesamiento (ADR 0026)
+    assert wf["permissions"] == {"contents": "read", "actions": "write"}
     job = wf["jobs"]["texto"]
     assert job["timeout-minutes"] < 360
     for name in ("SEC_USER_AGENT", "CLOUDFLARE_ACCOUNT_ID", "AWS_ACCESS_KEY_ID"):
