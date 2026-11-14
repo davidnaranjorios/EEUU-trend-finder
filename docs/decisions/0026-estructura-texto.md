@@ -37,3 +37,8 @@ Fecha: 2026-11-13. Aprobado por David el 2026-11-13 (`docs/plan-estructura-texto
 - El inventario de Items usa encabezados «Item N» al inicio de línea: es una descripción, no un
   analizador completo (los 10-K muy antiguos o con formato libre pueden no listar todo).
 - Estimación del reprocesamiento completo: ver el PR (corridas y cómo lanzarlas).
+
+**Freno del encadenado (2026-11-14, pedido por David):** `run_texto.sh` crea
+`ingest_state/.progress` cuando alguna invocación procesa al menos un periodo (`--progress-file`).
+Si al terminar quedan periodos pendientes y no hubo avance, sale con código 13: el paso de
+encadenar solo corre con `success()`, así que no se lanza otra corrida idéntica sin fin.

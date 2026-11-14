@@ -220,3 +220,39 @@ def test_structure_report_has_coverage_sections_and_format_changes(cfg, tmp_path
     ):
         assert part in md
     assert "Item 1A" in md and "`agency` | 100 |" in md
+
+
+@pytest.mark.parametrize(
+    ("done", "expected"), [([{"period": "2025-01", "docs": 3}], True), ([], False)]
+)
+def test_progress_file_only_when_a_period_was_processed(monkeypatch, tmp_path, done, expected):
+    """Freno del encadenado (ADR 0026): `--progress-file` se crea solo si se avanzó un periodo."""
+    import src.ingest.text as text_mod
+
+    class Src:
+        name = "federal_register"
+
+        def close(self):
+            pass
+
+    stats = {"periods_done_now": done, "incomplete": False, "budget_exhausted": True, "pending": 2}
+    monkeypatch.setattr(text_mod, "build_source", lambda *a, **k: Src())
+    monkeypatch.setattr(text_mod, "run_source", lambda *a, **k: stats)
+    cfg = load_config()
+    cfg["logging"]["runs_file"] = str(tmp_path / "runs.jsonl")
+    monkeypatch.setattr(text_mod, "load_config", lambda *a, **k: cfg)
+    flag = tmp_path / "state" / ".progress"
+    rc = text_mod.main(
+        ["federal_register", "--processed-dir", str(tmp_path), "--progress-file", str(flag)]
+    )
+    assert rc == EXIT_BUDGET
+    assert flag.exists() is expected
+
+
+def test_run_texto_stops_chaining_without_progress():
+    """Con periodos pendientes y ningún avance, run_texto.sh falla (no encadena sin fin)."""
+    text = (Path(__file__).parents[1] / "infra" / "run_texto.sh").read_text()
+    assert '--progress-file "$PROGRESS_FILE"' in text
+    brake = text.index('! -e "$PROGRESS_FILE"')
+    assert 'exit "$EXIT_NO_PROGRESS"' in text[brake : brake + 400]
+    assert brake < text.index('echo "run_texto: parcial')

@@ -21,7 +21,10 @@ BUDGET_MIN="${RUN_BUDGET_MINUTES:-$(uv run --quiet python -c \
   'from src.config import load_config; print(load_config()["text"]["run_budget_minutes"])')}"
 DEADLINE="$(($(date +%s) + BUDGET_MIN * 60))"
 PENDING_FILE="data/processed/ingest_state/.pending"
-rm -f "$PENDING_FILE"
+# Freno del encadenado (ADR 0026): existe solo si esta corrida procesó al menos un periodo.
+PROGRESS_FILE="data/processed/ingest_state/.progress"
+EXIT_NO_PROGRESS=13
+rm -f "$PENDING_FILE" "$PROGRESS_FILE"
 mkdir -p "$STATE/text"
 exec 9>"$STATE/.lock"
 flock -n 9 || { echo "otra ejecución tiene el lock" >&2; exit 1; }
@@ -41,7 +44,8 @@ tramos() {
   [[ "$1" == edgar ]] && n="$EDGAR_PER_TRAMO"
   while true; do
     set +e
-    py -m src.ingest.text "$1" --max-periods "$n" --deadline-epoch "$DEADLINE"
+    py -m src.ingest.text "$1" --max-periods "$n" --deadline-epoch "$DEADLINE" \
+      --progress-file "$PROGRESS_FILE"
     rc=$?
     set -e
     sync_r2
@@ -64,6 +68,12 @@ for src in "${SOURCES[@]}"; do
   fi
   tramos "$src"
 done
+if [[ -s "$PENDING_FILE" && ! -e "$PROGRESS_FILE" ]]; then
+  # Quedan periodos pero no se avanzó ninguno: encadenar repetiría la misma corrida sin fin.
+  echo "run_texto: sin avance con periodos pendientes; no se encadena (revisar presupuesto)" >&2
+  rm -f "$PENDING_FILE"
+  exit "$EXIT_NO_PROGRESS"
+fi
 if [[ -s "$PENDING_FILE" ]]; then
   echo "run_texto: parcial (pendiente: $(sort -u "$PENDING_FILE" | tr '\n' ' '))"
 else

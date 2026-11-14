@@ -577,6 +577,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="época (s) hasta la que se pueden iniciar periodos; no empieza uno que no quepa",
     )
+    parser.add_argument(
+        "--progress-file",
+        type=Path,
+        default=None,
+        help="se crea si esta invocación procesó al menos un periodo (freno del encadenado)",
+    )
     parser.add_argument("--processed-dir", type=Path, default=None)
     parser.add_argument(
         "--out",
@@ -624,6 +630,9 @@ def main(argv: list[str] | None = None) -> int:
             record.n_series[src.name] = sum(p["docs"] for p in stats["periods_done_now"])
             record.details = {"command": args.command, "stats": stats}
         print(json.dumps(stats, default=str, indent=2))
+        if args.progress_file is not None and stats["periods_done_now"]:
+            args.progress_file.parent.mkdir(parents=True, exist_ok=True)
+            args.progress_file.touch()
     finally:
         src.close()
     if stats["incomplete"]:
