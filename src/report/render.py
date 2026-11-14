@@ -265,6 +265,14 @@ def _measure_mix(mix: dict[str, int]) -> str:
     return ", ".join(f"{n} {MEASURE_LABELS.get(k, k)}" for k, n in mix.items()) or "—"
 
 
+def _traj_row(s: dict[str, Any]) -> str:
+    t = s.get("trajectory")
+    est = " · inflación estimada (mes sin publicar)" if s.get("inflacion_estimada") else ""
+    if not t and not est:
+        return ""
+    return f"<dt>Trayectoria</dt><dd>{esc(TRAJECTORY_NAMES.get(t, t or '—'))}{est}</dd>"
+
+
 def _series_block(s: dict[str, Any]) -> str:
     dets = ", ".join(DETECTOR_NAMES.get(d, d) for d in s["detectors"])
     w = s["window"]
@@ -280,7 +288,8 @@ def _series_block(s: dict[str, Any]) -> str:
 <dl><dt>Fuente</dt><dd>{esc(src_name(s["source"]))} · {esc(s["id"])}</dd>
 <dt>Agencia</dt><dd>{esc(agencies)}</dd>
 {_origin_rows(s)}<dt><abbr title="{esc(CLASS_TIP)}">Clase</abbr></dt>
-<dd>{esc(measure_label(s.get("measure_kind"), s.get("measure_subtype")))}</dd><dt>Unidades</dt>
+<dd>{esc(measure_label(s.get("measure_kind"), s.get("measure_subtype")))}</dd>
+{_traj_row(s)}<dt>Unidades</dt>
 <dd>{esc(s["units"])} ({esc(s["frequency"])}, {esc(s["seasonal_adjustment"])})</dd>
 <dt>Detector</dt><dd>{esc(dets)}</dd>
 <dt>{tip("q (BH)", "q")}</dt><dd>{fq(s["q_value"])}</dd>
@@ -568,6 +577,38 @@ def _inflation_badge(c: dict[str, Any]) -> str:
     )
 
 
+TRAJECTORY_NAMES = {
+    "acelera": "acelera",
+    "gira_al_alza": "gira al alza",
+    "frena_caida": "frena la caída (sigue cayendo, más despacio)",
+    "rebote_bajo_pico": "rebote, aún bajo su pico previo",
+}
+
+
+def _marks(p: dict[str, Any]) -> str:
+    """Trayectoria y marcas que NO filtran (ADR 0025): solo avisan, para validar a mano."""
+    out = []
+    if p.get("trajectory"):
+        name = TRAJECTORY_NAMES.get(p["trajectory"], p["trajectory"])
+        out.append(
+            f'<span class="state trajectory" data-traj="{esc(p["trajectory"])}">'
+            f"Trayectoria: {esc(name)}</span>"
+        )
+    if p.get("sin_evidencia_demanda"):
+        out.append(
+            '<span class="state no-demand" title="Ninguna serie de cantidad ni de valor con '
+            'efecto real positivo. Marca descriptiva: no cambia el ranking.">'
+            "Sin evidencia de demanda</span>"
+        )
+    if p.get("origen_posiblemente_compartido"):
+        out.append(
+            '<span class="state shared-origin" title="Series de fuentes distintas con un '
+            "eslabón de origen común o posibles copias. Marca descriptiva: no cambia el "
+            'ranking.">Origen posiblemente compartido</span>'
+        )
+    return (" " + " ".join(out)) if out else ""
+
+
 def _candidate(c: dict[str, Any]) -> str:
     hidden = (
         f'<p class="muted">{c["hidden_series"]} serie(s) del cluster con copyright de terceros '
@@ -586,7 +627,7 @@ def _candidate(c: dict[str, Any]) -> str:
         else ""
     )
     naics = _naics_line(c.get("naics") or [])
-    rate = _rate_badge(c) + _inflation_badge(c)
+    rate = _rate_badge(c) + _inflation_badge(c) + _marks(c)
     return f"""<section class="card cand" id="{esc(c["candidate_id"])}" data-rank="{c["rank"]}"
  data-state="{esc(state)}">
 <header><span class="rank">#{c["rank"]}</span>{badge}
@@ -628,6 +669,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
     return f"""<section class="card phen" id="{esc(p["phenomenon_id"])}">
 <header><span class="rank">#{p["rank"]}</span>
 <strong>{p["n_sources"]} fuentes independientes</strong> <span>score {fnum(p["score"], 3)}</span>
+{_marks(p)}
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
 {esc(p["direction"])}{win}</span></header>
 <div>{_sources_chips(p["sources"])}</div>
@@ -645,7 +687,7 @@ def _watch_card(p: dict[str, Any]) -> str:
     re_ = p.get("real_effect")
     real = f" (real, deflactado: {fnum(abs(re_), 2)})" if re_ is not None else ""
     return f"""<section class="card watch" id="{esc(p["phenomenon_id"])}">
-<header><span class="state watch-flag">🟡 En observación</span>
+<header><span class="state watch-flag">🟡 En observación</span>{_marks(p)}
 <span>efecto {fnum(p["effect"], 2)}{real} · q {fnum(p["q"], 4)}</span>
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
 {esc(p["direction"])}{win}</span></header>

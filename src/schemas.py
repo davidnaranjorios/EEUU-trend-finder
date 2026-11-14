@@ -294,6 +294,9 @@ RANK_CANDIDATES = TableSpec(
         ("inflation_share", pa.float64(), True),
         ("inflation_q", pa.float64(), True),
         ("inflation_n_tests", pa.int64(), True),
+        # Marcas que NO filtran (ADR 0025): NULL = no aplica o partición anterior.
+        ("sin_evidencia_demanda", pa.bool_(), True),
+        ("origen_posiblemente_compartido", pa.bool_(), True),
     ),
     key=("run_id", "candidate_id"),
 )
@@ -323,6 +326,10 @@ RANK_EVIDENCE = TableSpec(
         ("measure_subtype", pa.string(), True),
         # Efecto estandarizado del crecimiento deflactado de una serie `valor` (ADR 0018).
         ("real_effect", pa.float64(), True),
+        # Trayectoria (acelera, gira_al_alza, frena_caida, rebote_bajo_pico; ADR 0025) y si el
+        # efecto real usó un mes de inflación interpolado.
+        ("trajectory", pa.string(), True),
+        ("inflacion_estimada", pa.bool_(), True),
     ),
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
@@ -382,6 +389,10 @@ RANK_PHENOMENA = TableSpec(
         ("watch_n_demand_series", pa.int64(), True),
         # Mayor |efecto real| (deflactado) de sus series `valor` que cuentan como demanda.
         ("watch_real_effect", pa.float64(), True),
+        # Trayectoria más frecuente de sus series y marcas que no filtran (ADR 0025).
+        ("trajectory", pa.string(), True),
+        ("sin_evidencia_demanda", pa.bool_(), True),
+        ("origen_posiblemente_compartido", pa.bool_(), True),
     ),
     key=("run_id", "phenomenon_id"),
 )

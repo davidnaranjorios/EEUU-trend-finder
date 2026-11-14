@@ -125,6 +125,9 @@ def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list
                 "q": r.get("watch_q"),
                 "n_demand_series": r.get("watch_n_demand_series"),
                 "real_effect": r.get("watch_real_effect"),
+                "trajectory": r.get("trajectory"),
+                "sin_evidencia_demanda": r.get("sin_evidencia_demanda"),
+                "origen_posiblemente_compartido": r.get("origen_posiblemente_compartido"),
                 "naics": [
                     {"naics": c, "name": names.get(c), "weight": w}
                     for c, w in json.loads(r["naics_json"])
@@ -167,6 +170,9 @@ def phenomena_data(
                 "by_grouping": r["by_grouping"],
                 "measure_mix": json.loads(r.get("measure_mix_json") or "{}"),
                 "no_demand_evidence": r.get("no_demand_evidence"),
+                "trajectory": r.get("trajectory"),
+                "sin_evidencia_demanda": r.get("sin_evidencia_demanda"),
+                "origen_posiblemente_compartido": r.get("origen_posiblemente_compartido"),
                 "window": (r["window_start"], r["window_end"]),
                 "naics": [
                     {"naics": c, "name": names.get(c), "weight": w}
@@ -272,6 +278,8 @@ def candidates_data(
                     "detectors": e["detectors"].split(","),
                     "measure_kind": e.get("measure_kind"),
                     "measure_subtype": e.get("measure_subtype"),
+                    "trajectory": e.get("trajectory"),
+                    "inflacion_estimada": e.get("inflacion_estimada"),
                     "q_value": e["q_value"],
                     "effect_size": e["effect_size"],
                     "window": [e["window_start"], e["window_end"]],
@@ -364,6 +372,8 @@ def candidates_data(
                 "rate_q": c.get("rate_q"),
                 "inflation_effect": c.get("inflation_effect"),
                 "inflation_share": c.get("inflation_share"),
+                "sin_evidencia_demanda": c.get("sin_evidencia_demanda"),
+                "origen_posiblemente_compartido": c.get("origen_posiblemente_compartido"),
                 "phenomenon": build_phenomenon(
                     series,
                     {k: values[k] for k in values if k in {(x["source"], x["id"]) for x in series}},

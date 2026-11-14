@@ -37,6 +37,26 @@ from src.rank import rate_effect as rx
 PER_YEAR = rx.PER_YEAR
 
 
+def fill_gaps(levels: Mapping[int, float], max_gap: int = 1) -> tuple[dict[int, float], set[int]]:
+    """Interpola (log-lineal) los meses faltantes del índice entre dos meses con dato.
+
+    Un hueco aislado (p. ej. el CPI de octubre de 2025, no publicado por el cierre del gobierno)
+    haría perder todo el periodo de la grilla y dejaría sin efecto real a todas las series de
+    valor. Solo se rellenan huecos de hasta `max_gap` meses consecutivos; los más largos quedan
+    como están. Devuelve (índice completo, meses estimados) para la marca `inflacion_estimada`."""
+    out = {int(m): float(v) for m, v in levels.items()}
+    est: set[int] = set()
+    months = sorted(out)
+    for a, b in zip(months, months[1:], strict=False):
+        gap = b - a - 1
+        if 1 <= gap <= max_gap and out[a] > 0 and out[b] > 0:
+            la, lb = np.log(out[a]), np.log(out[b])
+            for k in range(1, gap + 1):
+                out[a + k] = float(np.exp(la + (lb - la) * k / (gap + 1)))
+                est.add(a + k)
+    return out, est
+
+
 def inflation_by_grid(levels: Mapping[int, float], grid: str) -> dict[int, float]:
     """Inflación por periodo completo de la grilla: suma de las variaciones log mensuales.
 

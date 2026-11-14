@@ -392,10 +392,19 @@ rank:
   # tasas, pero el regresor es la inflación del deflactor aprobado (context.reference_series.
   # deflator); sin claves nuevas. Solo etiqueta: nunca filtra ni cambia el score.
   inflation_effect:
+    max_gap_months: 1             # meses consecutivos faltantes del deflactor que se interpolan
     max_lag: 2
     min_drop: 0.5
     seed: 20261110
     min_rows_by_grid: {M: 36, Q: 20, A: 12}
+  # Etiqueta de trayectoria (src/rank/trajectory.py, ADR 0025): CAGR de la tendencia previa contra
+  # el de la ventana reciente; el ancla es el inicio de la última recesión (USREC) dentro de
+  # max_back_years. «frena_caida» no cuenta como dirección «sube». Solo etiqueta.
+  trajectory:
+    prior_years: 5
+    recent_years: 3
+    peak_years: 2
+    max_back_years: 10
   # Lista "en observación" (src/rank/watchlist.py, ADR 0016; la clave es single_origin porque el
   # guard no admite «watch» en claves): fenómenos de UN solo origen con señal
   # (q <= fdr.q), evidencia de demanda (cantidad o valor), sin efecto de tasas ni de inflación y con

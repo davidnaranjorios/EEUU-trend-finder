@@ -26,7 +26,9 @@ from typing import Any
 
 import numpy as np
 
+from src.rank import marks as marks_mod
 from src.rank import measure as measure_mod
+from src.rank import trajectory as trajectory_mod
 from src.rank.cluster import cluster_id
 from src.rank.triangulate import Candidate, Evidence, assess
 
@@ -49,6 +51,9 @@ class Phenomenon:
     candidate: Candidate = field(repr=False, default=None)  # type: ignore[assignment]
     measure_mix: dict[str, int] = field(default_factory=dict)  # clases de medida de sus series
     no_demand_evidence: bool | None = None  # todo su respaldo son precios (ADR 0014)
+    trajectory: str | None = None  # etiqueta de trayectoria más frecuente (ADR 0025)
+    sin_evidencia_demanda: bool | None = None  # marca que no filtra (ADR 0025)
+    origen_compartido: bool | None = None  # marca que no filtra (ADR 0025)
 
 
 def code_prefixes(code: str, digits: int) -> list[str]:
@@ -81,7 +86,12 @@ def cluster_naics(
 
 def direction_of(evidence: list[Evidence], min_share: float) -> str:
     """Signo mediano del efecto de las series; "mixto" si no hay acuerdo ≥ `min_share`."""
-    eff = [e.effect_size for e in evidence if e.kind == "series" and e.effect_size != 0]
+    # «frena_caida» (sigue cayendo, más despacio) no cuenta como «sube» (ADR 0025).
+    eff = [
+        e.effect_size
+        for e in evidence
+        if e.kind == "series" and e.effect_size != 0 and e.trajectory != "frena_caida"
+    ]
     if not eff:
         return "mixto"
     pos = sum(x > 0 for x in eff) / len(eff)
@@ -182,6 +192,9 @@ def group_phenomena(
                 cand,
                 measure_mod.mix(kinds),
                 measure_mod.no_demand_evidence(kinds),
+                trajectory_mod.of_phenomenon(e.trajectory for e in ev if e.kind == "series"),
+                marks_mod.sin_evidencia_demanda(ev),
+                marks_mod.origen_posiblemente_compartido(ev),
             )
         )
     return sorted(out, key=lambda p: p.phenomenon_id)
