@@ -320,15 +320,23 @@ class TextState:
         return bool(self.periods.get(period, {}).get("closed"))
 
     def needs_run(
-        self, period: str, refresh_hours: float, now: datetime, min_schema: int = 1
+        self,
+        period: str,
+        refresh_hours: float,
+        now: datetime,
+        min_schema: int = 1,
+        structure_missing: bool = False,
     ) -> bool:
         """Cerrado y procesado con un esquema >= `min_schema`: nunca más. Abierto: si su última
         pasada tiene más de `refresh_hours` (así un bucle de tramos termina aunque el periodo
-        siga abierto)."""
+        siga abierto). `structure_missing`: el periodo tiene documentos pero no partición en
+        `text_structure` (p. ej. se perdió en R2): se reprocesa aunque su esquema sea el actual."""
         info = self.periods.get(period)
         if info is None:
             return True
         if info.get("schema", 1) < min_schema:
+            return True
+        if structure_missing and info.get("docs", 0) > 0:
             return True
         if info.get("incomplete"):
             return True
@@ -383,8 +391,15 @@ def run_source(
     now = datetime.now(UTC)
     refresh = text_cfg["open_refresh_hours"]
     min_schema = cfg[src.name].get("reprocess_below_schema", 1)
+    structure_dir = processed_dir / TABLE_DIRS[TEXT_STRUCTURE.name] / src.name
+
+    def _no_structure(period: str) -> bool:
+        return not any((structure_dir / period).glob("*.parquet"))
+
     candidates = only_periods or [
-        p for p in src.periods(today) if state.needs_run(p, refresh, now, min_schema)
+        p
+        for p in src.periods(today)
+        if state.needs_run(p, refresh, now, min_schema, structure_missing=_no_structure(p))
     ]
     todo = candidates[:max_periods] if max_periods is not None else candidates
     n_workers = text_cfg["workers"] if workers is None else workers

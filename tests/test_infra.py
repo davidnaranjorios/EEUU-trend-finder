@@ -252,8 +252,9 @@ def test_workflow_schedule_and_no_overlap():
     wf = _workflow()
     assert wf["on"]["schedule"] and "workflow_dispatch" in wf["on"]
     assert wf["concurrency"]["cancel-in-progress"] is False  # nunca cortar una corrida en curso
-    assert wf["permissions"] == {"contents": "read"}
-    assert wf["jobs"]["ingesta"]["timeout-minutes"] < 360  # límite de 6 h por job
+    # actions: write solo para lanzar el eslabón siguiente de la cadena semanal (ADR 0027)
+    assert wf["permissions"] == {"contents": "read", "actions": "write"}
+    assert wf["jobs"]["ingesta"]["timeout-minutes"] <= 330  # presupuesto < 5 h 30
 
 
 def test_workflow_secrets_and_order():
@@ -414,6 +415,7 @@ def test_install_rclone_no_sigpipe():
 TEXT_PATHS = (
     "processed/text_docs",
     "processed/term_freq",
+    "processed/text_structure",
     "processed/lineage/text_ingest",
     "processed/ingest_state/text",
 )

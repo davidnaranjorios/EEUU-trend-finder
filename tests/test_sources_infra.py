@@ -12,9 +12,9 @@ from src.config import REPO_ROOT
 INFRA = REPO_ROOT / "infra"
 
 
-def test_run_actions_runs_sources_after_fred():
+def test_run_actions_is_fred_only():
     text = (INFRA / "run_actions.sh").read_text()
-    assert text.rstrip().endswith("infra/sources_update.sh")
+    assert "sources_update.sh" not in text  # las fuentes tienen sus propios workflows (ADR 0027)
 
 
 def test_sources_script_syncs_only_its_paths_and_tolerates_pending():
@@ -26,12 +26,12 @@ def test_sources_script_syncs_only_its_paths_and_tolerates_pending():
 
 
 def test_workflow_passes_source_secrets_without_failing_fred():
-    wf = yaml.safe_load((REPO_ROOT / ".github/workflows/ingesta.yml").read_text())
-    env = wf["jobs"]["ingesta"]["env"]
+    wf = yaml.safe_load((REPO_ROOT / ".github/workflows/ingesta-fuentes.yml").read_text())
+    env = wf["jobs"]["fuentes"]["env"]
     for name in ("SEC_USER_AGENT", "BEA_API_KEY", "CENSUS_API_KEY"):
         assert env[name] == "${{ secrets." + name + " }}"
-    check = next(s for s in wf["jobs"]["ingesta"]["steps"] if s.get("name") == "Verificar secrets")
-    assert "::warning::falta el secret $v" in check["run"]
+    fred = yaml.safe_load((REPO_ROOT / ".github/workflows/ingesta.yml").read_text())
+    assert "BEA_API_KEY" not in fred["jobs"]["ingesta"]["env"]
 
 
 def test_one_failing_source_does_not_stop_the_others(tmp_path):

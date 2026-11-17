@@ -1,0 +1,79 @@
+# Ingesta de las fuentes de mercado (cbp, bds, econcensus; ADR 0024 y 0027) y `src.market build`.
+#
+# Tercer eslabón de la cadena semanal. Consultas pequeñas y anuales por NAICS: caben de sobra en
+# una hora. Deja `processed/market` en R2. Mismo grupo de concurrencia que FRED.
+name: Ingesta mercado
+
+on:
+  workflow_dispatch:
+    inputs:
+      encadenar:
+        description: "Al terminar bien, lanzar el resto de la cadena semanal"
+        type: boolean
+        default: false
+
+# Nunca dos corridas a la vez: la segunda espera a que termine la primera.
+concurrency:
+  group: ingesta
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write # para lanzar el eslabón siguiente de la cadena semanal
+
+jobs:
+  mercado:
+    runs-on: ubuntu-latest
+    # Presupuesto < 5 h 30 (límite de GitHub: 6 h). Lo cortado se reanuda en la próxima corrida.
+    timeout-minutes: 120
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked
+      - name: Instalar rclone
+        run: sudo infra/install_rclone.sh
+      - name: Verificar secrets
+        run: |
+          for v in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
+          done
+      - name: Traer estado desde R2
+        run: >-
+          infra/pull_r2.sh processed/series/cbp processed/series/bds processed/series/econcensus processed/series_meta/cbp processed/series_meta/bds processed/series_meta/econcensus processed/lineage/eligibility/cbp processed/lineage/eligibility/bds processed/lineage/eligibility/econcensus processed/_internal/source_catalog/cbp processed/_internal/source_catalog/bds processed/_internal/source_catalog/econcensus processed/_internal/source_unit_state/cbp processed/_internal/source_unit_state/bds processed/_internal/source_unit_state/econcensus processed/ingest_state logs
+      - name: Ingesta
+        run: infra/sources_update.sh cbp bds econcensus
+      - name: Encadenar ingesta-texto.yml
+        # Freno: solo si todos los pasos anteriores salieron bien (success()).
+        if: ${{ success() && inputs.encadenar }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ingesta-texto.yml --ref "${GITHUB_REF_NAME}" -f encadenar=true
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Ingesta de fuentes de mercado"
+            echo '```'
+            tail -n 3 data/logs/runs.jsonl 2>/dev/null || echo "sin registros"
+            echo '```'
+            echo "### Conteos (copia local, ya sincronizada con R2)"
+            echo '```json'
+            timeout 600 uv run python -m src.catalog summary 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Logs de la corrida
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: logs-mercado-${{ github.run_id }}
+          path: data/logs/
+          retention-days: 30
+          if-no-files-found: ignore

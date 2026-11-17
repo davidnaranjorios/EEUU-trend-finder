@@ -32,6 +32,7 @@ flock -n 9 || { echo "otra ejecución tiene el lock" >&2; exit 1; }
 TEXT_PATHS=(
   processed/text_docs
   processed/term_freq
+  processed/text_structure
   processed/lineage/text_ingest
   processed/ingest_state/text
   logs
