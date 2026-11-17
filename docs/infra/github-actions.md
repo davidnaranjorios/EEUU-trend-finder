@@ -84,9 +84,24 @@ con = connect_r2(load_config()['storage'])
 print(con.sql('SELECT group_name, count(*) FROM eligibility GROUP BY 1'))"
 ```
 
+## Orden semanal (ADR 0027)
+
+Domingo 06:13 UTC arranca FRED; cada eslabón lanza el siguiente solo si terminó bien:
+
+1. `Ingesta` (FRED: update, eligibility, observations, vintages, export), < 5 h 30.
+2. `Ingesta fuentes` (BLS, BEA, Census; `SOURCES_TOTAL_MIN=300`).
+3. `Ingesta mercado` (`cbp`, `bds`, `econcensus` + `src.market build`).
+4. `Ingesta texto` (Federal Register, EDGAR; se re-lanza sola mientras queden periodos).
+5. `Detectores` (numéricos y de texto, BH/BY).
+6. `Reporte` (ranking y sitio).
+
+Todos los de ingesta comparten el grupo `ingesta`. Si un eslabón falla, la cadena se detiene y los
+siguientes se lanzan a mano (**Actions → workflow → Run workflow**, con `encadenar` si se quiere seguir
+la cadena). Una corrida manual no encadena por defecto.
+
 ## Fuentes de la Fase 4: presupuesto y cortes (ADR 0019)
 
-`infra/sources_update.sh` corre BLS, BEA y Census después de FRED. Cada fuente tiene un presupuesto de
+`infra/sources_update.sh` corre BLS, BEA y Census (workflow `Ingesta fuentes`, aparte de FRED). Cada fuente tiene un presupuesto de
 60 min (`SOURCES_BUDGET_MIN`) que se respeta también dentro de cada unidad, un watchdog en el proceso y un
 `timeout` por fuente (presupuesto + `SOURCES_GRACE_MIN`, 15). Una fuente colgada se mata, se sincroniza a R2
 lo que dejó hecho y se sigue con la siguiente; la sincronización también tiene `timeout`

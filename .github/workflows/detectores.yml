@@ -16,6 +16,10 @@ on:
         description: "Tope de series (vacío = todas; solo para pruebas)"
         required: false
         default: ""
+      encadenar:
+        description: "Al terminar bien, lanzar el reporte"
+        type: boolean
+        default: false
 
 concurrency:
   group: ingesta # nunca a la vez que la ingesta: ambas escriben en R2
@@ -23,6 +27,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # para lanzar el reporte al final de la cadena semanal
 
 jobs:
   detectores:
@@ -81,6 +86,12 @@ jobs:
         run: |
           infra/sync_r2.sh processed/lineage/detector_tests processed/lineage/detector_runs \
             signals logs
+      - name: Encadenar reporte
+        # Freno: solo si los detectores y la sincronización salieron bien.
+        if: ${{ success() && inputs.encadenar }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run reporte.yml --ref "${GITHUB_REF_NAME}" -f publish=true
       - name: Resumen
         if: always()
         run: |

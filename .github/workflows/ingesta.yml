@@ -4,12 +4,21 @@
 # actualización semanal, y deja todo de vuelta en R2. Secrets del repositorio:
 # FRED_API_KEY, CLOUDFLARE_ACCOUNT_ID, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY.
 # Variable opcional: R2_BUCKET (si el bucket no se llama como storage.bucket en config.yaml).
+#
+# Primer eslabón de la semana (docs/infra/github-actions.md): FRED -> fuentes de agencias ->
+# fuentes de mercado -> texto -> detectores -> reporte. Cada eslabón lanza el siguiente solo si
+# terminó bien; cada uno tiene su propio presupuesto (< 5 h 30) y su propia sincronización a R2.
 name: Ingesta
 
 on:
   schedule:
     - cron: "13 6 * * 0" # domingos 06:13 UTC
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      encadenar:
+        description: "Al terminar bien, lanzar el resto de la cadena semanal"
+        type: boolean
+        default: false
 
 # Nunca dos corridas a la vez: la segunda espera a que termine la primera.
 concurrency:
@@ -18,22 +27,19 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # para lanzar el eslabón siguiente de la cadena semanal
 
 jobs:
   ingesta:
     runs-on: ubuntu-latest
-    # Límite de GitHub: 6 h por job. Lo cortado se reanuda en la próxima corrida.
-    timeout-minutes: 355
+    # Presupuesto < 5 h 30 (límite de GitHub: 6 h). Lo cortado se reanuda en la próxima corrida.
+    timeout-minutes: 330
     env:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
-      # Fase 4 (ADR 0007). download.bls.gov exige un User-Agent con contacto: SEC_USER_AGENT.
-      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-      BEA_API_KEY: ${{ secrets.BEA_API_KEY }}
-      CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -47,14 +53,16 @@ jobs:
           for v in FRED_API_KEY CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
             [ -n "${!v}" ] || { echo "::error::falta el secret $v"; exit 1; }
           done
-          # Sin estos, solo falla su fuente (sources_update.sh sigue con las demás).
-          for v in SEC_USER_AGENT BEA_API_KEY CENSUS_API_KEY; do
-            [ -n "${!v}" ] || echo "::warning::falta el secret $v"
-          done
       - name: Traer estado desde R2
         run: infra/pull_r2.sh
       - name: Ingesta
         run: infra/run_actions.sh
+      - name: Encadenar ingesta-fuentes.yml
+        # Freno: solo si todos los pasos anteriores salieron bien (success()).
+        if: ${{ success() && (github.event_name == 'schedule' || inputs.encadenar) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ingesta-fuentes.yml --ref "${GITHUB_REF_NAME}" -f encadenar=true
       - name: Resumen
         if: always()
         run: |

@@ -42,3 +42,7 @@ Fecha: 2026-11-13. Aprobado por David el 2026-11-13 (`docs/plan-estructura-texto
 `ingest_state/.progress` cuando alguna invocación procesa al menos un periodo (`--progress-file`).
 Si al terminar quedan periodos pendientes y no hubo avance, sale con código 13: el paso de
 encadenar solo corre con `success()`, así que no se lanza otra corrida idéntica sin fin.
+
+**Actualización (2026-11-17, ADR 0027):** `processed/text_structure` se agregó a `TEXT_PATHS` y al
+pull de `ingesta-texto.yml` (antes no se subía a R2). Los periodos con documentos y sin partición en
+`text_structure` se reprocesan aunque ya tengan el esquema 6.
