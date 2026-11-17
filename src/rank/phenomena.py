@@ -84,6 +84,17 @@ def cluster_naics(
     )
 
 
+def rise_only_by_value(evidence: list[Evidence]) -> bool:
+    """Las series de cantidad (no poblacional) frenan su caída o bajan: no hay subida de cantidad
+    que respalde una «sube» decidida por series de valor (ADR 0028)."""
+    qty = [
+        e
+        for e in evidence
+        if e.kind == "series" and e.measure_kind == "cantidad" and e.measure_subtype != "poblacion"
+    ]
+    return bool(qty) and all(e.trajectory == "frena_caida" or e.effect_size < 0 for e in qty)
+
+
 def direction_of(evidence: list[Evidence], min_share: float) -> str:
     """Signo mediano del efecto de las series; "mixto" si no hay acuerdo ≥ `min_share`."""
     # «frena_caida» (sigue cayendo, más despacio) no cuenta como «sube» (ADR 0025).
@@ -96,7 +107,7 @@ def direction_of(evidence: list[Evidence], min_share: float) -> str:
         return "mixto"
     pos = sum(x > 0 for x in eff) / len(eff)
     if pos >= min_share and np.median(eff) > 0:
-        return "sube"
+        return "mixto" if rise_only_by_value(evidence) else "sube"
     if (1 - pos) >= min_share and np.median(eff) < 0:
         return "baja"
     return "mixto"
@@ -181,12 +192,15 @@ def group_phenomena(
             for code, w in info[c.candidate_id]["naics"]:
                 acc[code] += w / len(grp)
         dirs = {info[c.candidate_id]["direction"] for c in grp}
+        direction = dirs.pop() if len(dirs) == 1 else "mixto"
+        if direction == "sube" and rise_only_by_value(ev):
+            direction = "mixto"
         out.append(
             Phenomenon(
                 pid,
                 cids,
                 sorted(acc.items(), key=lambda cw: (-cw[1], cw[0]))[:5],
-                dirs.pop() if len(dirs) == 1 else "mixto",
+                direction,
                 ws,
                 we,
                 cand,

@@ -180,3 +180,33 @@ def test_report_has_a_separate_watch_section_with_the_warning(tmp_path):
     html = (Path(site["site_dir"]) / "index.html").read_text("utf-8")
     assert "🟡 En observación" in html
     assert "Sin fenómenos en observación esta semana" in html or "Un solo origen" in html
+
+
+def test_lista_se_separa_por_industria_asignada():
+    """ADR 0028: «Con industria» y «Sin industria» salen de `naics` vacío; nada se borra."""
+    from src.report.render import _watch_sections
+
+    base = {
+        "phenomenon_id": "p1",
+        "direction": "sube",
+        "sources": [],
+        "n_clusters": 1,
+        "n_members": 1,
+        "measure_mix": {},
+        "window": (None, None),
+        "effect": 2.0,
+        "q": 0.01,
+        "n_demand_series": 1,
+        "real_effect": None,
+        "trajectory": "no_confirmada",
+        "clusters": ["c1"],
+    }
+    con = {**base, "phenomenon_id": "pcon", "naics": [{"naics": "623", "name": "x", "weight": 1.0}]}
+    sin = {**base, "phenomenon_id": "psin", "naics": []}
+    html = _watch_sections([sin, con])
+    assert (
+        "Con industria asignada (1)" in html
+        and "Sin industria (sistema financiero u otros) (1)" in html
+    )
+    assert html.index("pcon") < html.index("Sin industria") < html.index("psin")
+    assert "no filtra" in html  # marca no_confirmada visible con su explicación

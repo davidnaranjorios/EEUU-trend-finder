@@ -583,6 +583,17 @@ TRAJECTORY_NAMES = {
     "frena_caida": "frena la caída (sigue cayendo, más despacio)",
     "rebote_bajo_pico": "rebote, aún bajo su pico previo",
 }
+TRAJECTORY_NAMES |= {
+    "acelera_caida": "acelera la caída",
+    "gira_a_la_baja": "gira a la baja",
+    "frena_subida": "frena la subida (sigue subiendo, más despacio)",
+    "caida_sobre_valle": "caída, aún sobre su valle previo",
+    "no_confirmada": "no confirmada",
+}
+NOT_CONFIRMED_NOTE = (
+    "El detector ve un cambio, pero la verificación descriptiva de trayectoria no lo confirma "
+    "en ninguna de sus series. Marca visible: no filtra."
+)
 
 
 def _marks(p: dict[str, Any]) -> str:
@@ -594,6 +605,8 @@ def _marks(p: dict[str, Any]) -> str:
             f'<span class="state trajectory" data-traj="{esc(p["trajectory"])}">'
             f"Trayectoria: {esc(name)}</span>"
         )
+        if p["trajectory"] == "no_confirmada":
+            out.append(f'<span class="muted not-confirmed">{esc(NOT_CONFIRMED_NOTE)}</span>')
     if p.get("sin_evidencia_demanda"):
         out.append(
             '<span class="state no-demand" title="Ninguna serie de cantidad ni de valor con '
@@ -677,6 +690,23 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
 <p class="muted">Clusters: {clusters}</p>
 </section>"""
+
+
+def _watch_sections(items: list[dict[str, Any]]) -> str:
+    """Lista en observación en dos secciones; el criterio es `naics_json` vacío, no una lista de
+    temas (ADR 0028). No se borra nada: solo se separa."""
+    if not items:
+        return '<p class="muted">Sin fenómenos en observación esta semana.</p>'
+    with_naics = [p for p in items if p["naics"]]
+    without = [p for p in items if not p["naics"]]
+    return concat(
+        f'<h3 id="watch-con-industria">Con industria asignada ({len(with_naics)})</h3>',
+        concat(*(_watch_card(p) for p in with_naics))
+        or '<p class="muted">Ninguno esta semana.</p>',
+        f'<h3 id="watch-sin-industria">Sin industria (sistema financiero u otros) '
+        f"({len(without)})</h3>",
+        concat(*(_watch_card(p) for p in without)) or '<p class="muted">Ninguno esta semana.</p>',
+    )
 
 
 def _watch_card(p: dict[str, Any]) -> str:
@@ -768,8 +798,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         "origen</strong> que pasan FDR y tienen evidencia de demanda (cantidad o valor). No están "
         "triangulados, no entran al score y no son candidatos del ranking; sirven para vigilarlos "
         "hasta que aparezca un segundo origen.</p>",
-        concat(*(_watch_card(p) for p in data.get("watchlist") or []))
-        or '<p class="muted">Sin fenómenos en observación esta semana.</p>',
+        _watch_sections(data.get("watchlist") or []),
         f"<h2>Candidatos solo de texto ({len(text)})</h2>",
         '<p class="muted">Términos emergentes parecidos en EDGAR y en el Federal Register.</p>',
         concat(*(_candidate(c) for c in text)) if text else none,
