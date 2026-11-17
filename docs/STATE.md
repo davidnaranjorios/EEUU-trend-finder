@@ -1,6 +1,6 @@
 # Estado operativo — EEUU Trend Finder
 
-Actualizado el 2026-11-13. Reglas y metodología: `CLAUDE.md`; decisiones: `docs/decisions/`.
+Actualizado el 2026-11-17. Reglas y metodología: `CLAUDE.md`; decisiones: `docs/decisions/`.
 Pendientes y problemas conocidos: [`docs/pendientes.md`](pendientes.md).
 **Objetivo del producto** (aprobado por David el 2026-11-06): fichas de oportunidad de negocio de
 9 dimensiones por industria NAICS; plan en [`docs/rediseno-oportunidades.md`](rediseno-oportunidades.md).
@@ -14,8 +14,10 @@ Pendientes y problemas conocidos: [`docs/pendientes.md`](pendientes.md).
 - PRs #42–#58 mergeados.
 
 ## En curso
-- Primera ficha de oportunidad (residencias de cuidado de adultos mayores): en preparación en
-  otra sesión. Es la prioridad antes de seguir afinando la estadística.
+- **Segunda etapa** (aprobada el 2026-11-17): las 9 dimensiones como respaldo de cuatro preguntas
+  por fenómeno; plan y sesiones en [`docs/plan-segunda-etapa.md`](plan-segunda-etapa.md).
+- Sesión 0 de ese plan: arreglos de ingesta semanal, `text_structure` en R2 y lista en observación.
+- Primera ficha hecha a mano: [`docs/fichas/2026-11-residencias-cuidado.md`](fichas/2026-11-residencias-cuidado.md).
 
 ## Pausado
 Ver `docs/pendientes.md` (p. ej. `regime` con 0 señales, BLS que no completa la ingesta,
