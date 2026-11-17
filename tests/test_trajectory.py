@@ -77,7 +77,7 @@ def test_recession_starts_from_indicator():
 
 def test_phenomenon_label_is_the_most_frequent():
     assert tj.of_phenomenon(["acelera", None, "frena_caida", "acelera"]) == "acelera"
-    assert tj.of_phenomenon([None]) is None
+    assert tj.of_phenomenon([None]) == "no_confirmada"
 
 
 def test_isolated_missing_inflation_month_is_interpolated():
@@ -127,3 +127,67 @@ def test_origen_posiblemente_compartido_mark():
     c = _ev("precio", agencies=frozenset({"Fed"}), chain=("otro",))
     assert marks.origen_posiblemente_compartido([a, c]) is False
     assert marks.origen_posiblemente_compartido([a, _ev("precio", possible_duplicates=True)])
+
+
+# --- ADR 0028: etiquetas de caída, no_confirmada y dirección con series de valor ---------------
+
+
+def test_gira_a_la_baja():
+    g = gs([(START, 0.04), (N - START, -0.05)])
+    assert classify(g, starts_for(g))[0] == "gira_a_la_baja"
+
+
+def test_acelera_caida():
+    g = gs([(START, -0.02), (N - START, -0.08)])
+    assert classify(g, starts_for(g))[0] == "acelera_caida"
+
+
+def test_frena_subida():
+    g = gs([(START, 0.08), (N - START, 0.02)])
+    assert classify(g, starts_for(g))[0] == "frena_subida"
+
+
+def test_caida_sobre_valle():
+    # subió mucho antes de la recesión y desde entonces cae: sigue muy por encima de su valle previo
+    g = gs([(START, 0.10), (N - START, -0.03)])
+    assert classify(g, starts_for(g))[0] == "caida_sobre_valle"
+
+
+def test_etiquetas_de_subida_no_cambian():
+    g = gs([(START, 0.02), (N - START, 0.08)])
+    assert classify(g, starts_for(g))[0] == "acelera"  # las nuevas solo rellenan None
+
+
+def test_fenomeno_sin_etiquetas_es_no_confirmada():
+    assert tj.of_phenomenon([None, None]) == tj.NOT_CONFIRMED
+
+
+def _ev28(kind, effect, traj=None, subtype=None):
+    e = Evidence(
+        "series", "fred", f"{kind}{effect}{traj}", frozenset({"a"}), 0.01, effect, ("s",), True
+    )
+    e.measure_kind, e.measure_subtype, e.trajectory = kind, subtype, traj
+    return e
+
+
+def test_mixto_no_es_sube_por_series_de_valor():
+    """Caso de `p99e0041f95f7` (sintético): 3 cantidad y 2 valor `frena_caida`; 2 valor al alza."""
+    ev = (
+        [_ev28("cantidad", 2.0, "frena_caida") for _ in range(3)]
+        + [_ev28("valor", 2.0, "frena_caida") for _ in range(2)]
+        + [_ev28("valor", 3.0, "gira_al_alza") for _ in range(2)]
+    )
+    for i, e in enumerate(ev):
+        e.object_id = f"s{i}"
+    assert direction_of(ev, 0.6) == "mixto"
+    # si una serie de cantidad sube de verdad, vuelve a ser «sube»
+    ev[0].trajectory = "acelera"
+    assert direction_of(ev, 0.6) == "sube"
+    # cantidades que bajan tampoco sostienen una «sube» de valor
+    qty_down = [_ev28("cantidad", -2.0) for _ in range(2)] + [
+        _ev28("valor", 3.0, "gira_al_alza")
+    ] * 3
+    assert direction_of(qty_down, 0.6) == "mixto"
+    # la población no cuenta como cantidad
+    pop = [_ev28("cantidad", -2.0, subtype="poblacion")] + [_ev28("valor", 3.0, "acelera")] * 3
+    assert direction_of(pop, 0.6) == "sube"

@@ -21,6 +21,16 @@ Etiquetas (la serie no cae en ninguna: None):
 - `frena_caida`: tendencia previa ≤ 0, ventana reciente ≤ 0 pero mayor: sigue cayendo, más despacio.
   NO cuenta como dirección «sube» (`phenomena.direction_of`).
 - `acelera`: tendencia previa > 0, no está bajo el pico y la ventana reciente es mayor.
+
+Etiquetas simétricas para caídas (ADR 0028). Solo se asignan si no aplica ninguna de las de arriba:
+- `caida_sobre_valle`: el último nivel sigue sobre el valle previo, la cola cae y la serie no venía
+  subiendo sin parar (la tendencia previa o la ventana reciente es negativa).
+- `gira_a_la_baja`: tendencia previa ≥ 0 y ventana reciente < 0.
+- `acelera_caida`: tendencia previa ≤ 0, la ventana reciente es menor y no está sobre el valle.
+- `frena_subida`: tendencia previa > 0 y ventana reciente en [0, previa): sube más despacio.
+
+`no_confirmada` es del fenómeno: ninguna de sus series cae en una etiqueta. Es una marca visible;
+no filtra.
 """
 
 from __future__ import annotations
@@ -32,7 +42,11 @@ from dataclasses import dataclass
 import numpy as np
 
 PER_YEAR = {"M": 12, "Q": 4, "A": 1}
-LABELS = ("acelera", "gira_al_alza", "frena_caida", "rebote_bajo_pico")
+UP_LABELS = ("acelera", "gira_al_alza", "frena_caida", "rebote_bajo_pico")
+DOWN_LABELS = ("acelera_caida", "gira_a_la_baja", "frena_subida", "caida_sobre_valle")
+LABELS = UP_LABELS + DOWN_LABELS
+# Marca del FENÓMENO (no de una serie): el detector ve cambio, la verificación descriptiva no.
+NOT_CONFIRMED = "no_confirmada"
 
 
 @dataclass(frozen=True)
@@ -103,6 +117,8 @@ def classify(
     anchors = [anchor] + [c - first for c in cands]
     peaks = [level[max(a - peak_n, 0) : a + 1].max() for a in anchors if 0 < a < end]
     below_peak = bool(peaks) and bool(level[end] < max(peaks))
+    troughs = [level[max(a - peak_n, 0) : a + 1].min() for a in anchors if 0 < a < end]
+    above_trough = bool(troughs) and bool(level[end] > min(troughs))
     detail = {"cagr_previo": g_prev, "cagr_reciente": g_rec, "cagr_cola": g_tail}
     if g_prev is None or g_rec is None:
         return None, detail
@@ -116,12 +132,22 @@ def classify(
             label = "frena_caida"
     elif not below_peak and g_rec > g_prev:
         label = "acelera"
+    if label is None:  # caídas: solo rellenan lo que las etiquetas de subida no cubren
+        if above_trough and g_tail is not None and g_tail < 0 and (g_prev < 0 or g_rec < 0):
+            label = "caida_sobre_valle"
+        elif g_prev >= 0 and g_rec < 0:
+            label = "gira_a_la_baja"
+        elif g_prev <= 0 and g_rec < g_prev and not above_trough:
+            label = "acelera_caida"
+        elif g_prev > 0 and 0 <= g_rec < g_prev:
+            label = "frena_subida"
     return label, detail
 
 
-def of_phenomenon(labels: Iterable[str | None]) -> str | None:
-    """Etiqueta más frecuente entre las series del fenómeno (empate: orden de `LABELS`)."""
+def of_phenomenon(labels: Iterable[str | None]) -> str:
+    """Etiqueta más frecuente entre las series (empate: orden de `LABELS`); sin ninguna,
+    `no_confirmada`."""
     c = Counter(x for x in labels if x)
     if not c:
-        return None
+        return NOT_CONFIRMED
     return max(c, key=lambda k: (c[k], -LABELS.index(k)))
