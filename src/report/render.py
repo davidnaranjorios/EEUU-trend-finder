@@ -9,6 +9,7 @@ from collections import defaultdict
 from typing import Any
 
 from src.report.recent import INSUFFICIENT, STATES
+from src.schemas import Dimension
 
 DETECTOR_NAMES = {
     "slope": "cambio de pendiente",
@@ -655,6 +656,36 @@ def _candidate(c: dict[str, Any]) -> str:
 </section>"""
 
 
+_MARK = {"directo": "✅", "indirecto": "🟡", "sin_dato": "⚪"}
+
+
+def _dimensions(p: dict[str, Any]) -> str:
+    """«Antecedentes (9 dimensiones)»: cifras con unidad, periodo, fuente y nivel (ADR 0029).
+    Sin conclusiones redactadas; las filas de series con copyright ya vienen filtradas."""
+    rows = p.get("dimensions") or []
+    if not rows:
+        return ""
+    body = []
+    for r in rows:
+        val = (fnum(r["value"], 3) if r.get("value") is not None else "") + (
+            f" {r['value_text']}" if r.get("value_text") else ""
+        )
+        body.append(
+            f"<tr><td>{esc(Dimension[r['dimension']].value)}</td>"
+            f"<td>{esc(r['metric'])}</td><td>{esc(val.strip() or 'sin dato')}</td>"
+            f"<td>{esc(r.get('unit') or '')}</td><td>{esc(r.get('period') or '')}</td>"
+            f"<td>{esc(r.get('source_ref') or '')}</td>"
+            f'<td title="{esc(r["level"])}">{_MARK[r["level"]]} '
+            f"{esc(r.get('naics_used') or '')}</td></tr>"
+        )
+    return (
+        '<details class="dims" open><summary><strong>Antecedentes (9 dimensiones)'
+        "</strong></summary><table><thead><tr><th>Dimensión</th><th>Cifra</th><th>Valor</th>"
+        "<th>Unidad</th><th>Periodo</th><th>Fuente</th><th>Nivel · NAICS</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table></details>"
+    )
+
+
 def _phenomenon_card(p: dict[str, Any]) -> str:
     naics = "; ".join(f"{n['naics']} {n['name'] or ''} ({n['weight']:.0%})" for n in p["naics"])
     clusters = " ".join(
@@ -689,7 +720,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
 <p class="muted">Clusters: {clusters}</p>
-</section>"""
+{_dimensions(p)}</section>"""
 
 
 def _watch_sections(items: list[dict[str, Any]]) -> str:
@@ -729,7 +760,7 @@ efecto de tasas ni de inflación.</p>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
 <p class="muted">Clusters: {clusters}</p>
-</section>"""
+{_dimensions(p)}</section>"""
 
 
 def _tile(k: str, v: Any) -> str:

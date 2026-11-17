@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 import duckdb
 import pyarrow as pa
@@ -464,6 +465,44 @@ NAICS_LINKS = TableSpec(
     key=("run_id", "source", "object_id", "naics", "metodo"),
 )
 
+
+# Capa 2 (ADR 0029): cifras por dimensión de cada fenómeno, con nivel y fuente. `public` = false si
+# la serie de origen tiene copyright (el reporte no muestra su id).
+class Dimension(Enum):
+    """Las 9 dimensiones del plan de segunda etapa: nombre estable (se guarda) y etiqueta."""
+
+    fenomeno = "Fenómeno"
+    evidencia = "Evidencia"
+    demanda = "Demanda"
+    brecha = "Brecha"
+    competencia = "Competencia"
+    dinero = "Dinero"
+    entrada = "Entrada"
+    riesgo = "Riesgo"
+    confianza = "Confianza"
+
+
+DIMENSION_NAMES = tuple(Dimension.__members__)
+DIMENSION_LEVELS = ("directo", "indirecto", "sin_dato")
+PHENOMENON_DIMENSIONS = TableSpec(
+    name="phenomenon_dimensions",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("phenomenon_id", pa.string(), False),
+        ("dimension", pa.string(), False),
+        ("metric", pa.string(), False),
+        ("value", pa.float64(), True),
+        ("value_text", pa.string(), True),
+        ("unit", pa.string(), True),
+        ("period", pa.string(), True),
+        ("source_ref", pa.string(), True),
+        ("level", pa.string(), False),
+        ("naics_used", pa.string(), True),
+        ("public", pa.bool_(), False),
+    ),
+    key=("run_id", "phenomenon_id", "dimension", "metric"),
+)
+
 RANK_RUNS = TableSpec(
     name="rank_runs",
     schema=_schema(
@@ -508,6 +547,7 @@ ALL_SPECS = {
         RANK_CONTEXT,
         NAICS_LINKS,
         RANK_PHENOMENA,
+        PHENOMENON_DIMENSIONS,
     )
 }
 
@@ -560,6 +600,18 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"naics_links: {bad[0]} filas con método o peso fuera de dominio")
+    if spec is PHENOMENON_DIMENSIONS:
+        dims = ", ".join(f"'{x}'" for x in DIMENSION_NAMES)
+        lvls = ", ".join(f"'{x}'" for x in DIMENSION_LEVELS)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE dimension NOT IN ({dims}) OR level NOT IN ({lvls}) "
+            "OR (level = 'sin_dato' AND (value IS NOT NULL OR value_text IS NOT NULL)) "
+            "OR (level <> 'sin_dato' AND value IS NULL AND value_text IS NULL)"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(
+                f"phenomenon_dimensions: {bad[0]} filas con dimensión o nivel inválido"
+            )
     if spec is RANK_PHENOMENA:
         allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
         dirs = ", ".join(f"'{x}'" for x in PHENOMENON_DIRECTIONS)
