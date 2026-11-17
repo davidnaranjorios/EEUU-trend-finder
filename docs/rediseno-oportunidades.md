@@ -1,5 +1,7 @@
 # Rediseño: de "series que cambian" a fichas de oportunidad de negocio
 
+> **2026-11-17:** las Etapas 3–5 se reorganizan en [`plan-segunda-etapa.md`](plan-segunda-etapa.md) (las 9 dimensiones como respaldo de 4 preguntas).
+
 > Plan aprobado por David el 2026-11-06 (copiado del plan de la sesión de trabajo el 2026-11-13). Las secciones de estado de S1/S1b son históricas; el estado actual está en `docs/STATE.md`.
 
 
