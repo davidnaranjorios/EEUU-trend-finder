@@ -27,3 +27,11 @@ las rutas de texto que se suben a R2 y se perdió tras el reprocesamiento comple
 5. Un periodo con documentos y sin partición en `text_structure` se reprocesa aunque su esquema sea el
    actual (`TextState.needs_run(structure_missing=...)`), con la reanudación y el freno de ADR 0026.
    El reprocesamiento lo lanza David tras el merge.
+
+**2026-11-18 (decisión de David):** la recarga de periodos por `text_structure` faltante queda
+**desactivada** (`text.reprocess_missing_structure: false`). Tras dos descargas completas de EDGAR
+(2026-11-14 y 2026-11-17, esta cortada por el límite de 6 h y con la SEC ~3,5 veces más lenta), la
+estructura histórica queda como está: Federal Register completo (2000–2026), EDGAR 2006Q1–2008Q3
+completo y la muestra de `docs/estructura-texto.md`; los periodos nuevos la guardan en la corrida
+semanal. El freno de tiempo usa ahora la duración registrada de cada periodo (o la del más lento de
+la fuente), que persiste entre tramos y corridas, en lugar de solo la estimación fija.

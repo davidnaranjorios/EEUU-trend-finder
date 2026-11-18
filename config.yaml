@@ -273,7 +273,10 @@ text:
   # no quepa. `period_margin` multiplica el periodo más lento de la corrida (o la estimación inicial).
   run_budget_minutes: 330         # 5 h 30
   period_margin: 1.25
-  period_seconds_estimate: {edgar: 1500, federal_register: 180}
+  period_seconds_estimate: {edgar: 1500, federal_register: 180}  # piso; manda la duración registrada
+  # Volver a bajar periodos ya procesados solo porque les falta `text_structure` (ADR 0027):
+  # desactivado (David, 2026-11-18). Activarlo cuesta decenas de horas de descarga.
+  reprocess_missing_structure: false
   # Inventario de estructura (ADR 0026): umbrales de lectura del informe, sin ningún tema.
   structure:
     birth_min_share: 0.05         # una sección «nace» el primer año con >= 5 % de los documentos
