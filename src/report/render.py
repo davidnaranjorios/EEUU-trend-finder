@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import Any
 
 from src.report.recent import INSUFFICIENT, STATES
-from src.schemas import Dimension
+from src.schemas import ChangeType, Dimension
 
 DETECTOR_NAMES = {
     "slope": "cambio de pendiente",
@@ -686,6 +686,38 @@ def _dimensions(p: dict[str, Any]) -> str:
     )
 
 
+_STATUS = {"si": "✅ sí", "no": "no", "sin_dato": "⚪ sin dato"}
+
+
+def _change_line(p: dict[str, Any]) -> str:
+    """Una línea con la frase de «qué cambió» (portada)."""
+    ch = p.get("change")
+    return f'<p class="plain change-line">{esc(ch["phrase"])}</p>' if ch else ""
+
+
+def _change(p: dict[str, Any]) -> str:
+    """«¿Qué cambió realmente?» (ADR 0030): frase y tabla corta con cifra, umbral y fuente.
+    Clasificación descriptiva con reglas fijas; los ids de series con copyright no llegan aquí."""
+    ch = p.get("change")
+    if not ch:
+        return ""
+    body = "".join(
+        f"<tr><td>{esc(ChangeType[r['change_type']].value)}</td>"
+        f"<td>{esc(_STATUS[r['status']])}</td>"
+        f"<td>{esc(fnum(r['value'], 2) if r.get('value') is not None else '')} "
+        f"{esc(r.get('unit') or '')}</td><td>{esc(r.get('threshold') or '')}</td>"
+        f"<td>{esc(r.get('period') or '')}</td><td>{esc(r.get('source_ref') or '')}</td>"
+        f"<td>{esc(r.get('note') or '')}</td></tr>"
+        for r in ch["rows"]
+    )
+    return (
+        '<details class="change" open><summary><strong>¿Qué cambió realmente?</strong></summary>'
+        f'<p class="plain">{esc(ch["phrase"])}</p><table><thead><tr><th>Tipo</th><th>¿Cambió?</th>'
+        "<th>Cifra</th><th>Umbral</th><th>Periodo</th><th>Fuente</th><th>Detalle</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></details>"
+    )
+
+
 def _phenomenon_card(p: dict[str, Any]) -> str:
     naics = "; ".join(f"{n['naics']} {n['name'] or ''} ({n['weight']:.0%})" for n in p["naics"])
     clusters = " ".join(
@@ -720,7 +752,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_dimensions(p)}</section>"""
+{_change_line(p)}{_change(p)}{_dimensions(p)}</section>"""
 
 
 def _watch_sections(items: list[dict[str, Any]]) -> str:
@@ -760,7 +792,7 @@ efecto de tasas ni de inflación.</p>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_dimensions(p)}</section>"""
+{_change_line(p)}{_change(p)}{_dimensions(p)}</section>"""
 
 
 def _tile(k: str, v: Any) -> str:

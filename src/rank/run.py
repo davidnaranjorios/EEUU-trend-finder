@@ -79,6 +79,7 @@ from src.schemas import (
     CLUSTERS,
     DETECTOR_RUNS,
     NAICS_LINKS,
+    PHENOMENON_CHANGE,
     PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
@@ -106,6 +107,7 @@ RANK_TABLES = {
     "naics_links": NAICS_LINKS,
     "rank_phenomena": RANK_PHENOMENA,
     "phenomenon_dimensions": PHENOMENON_DIMENSIONS,
+    "phenomenon_change": PHENOMENON_CHANGE,
 }
 
 
@@ -1341,6 +1343,9 @@ def rank_run(
     from src.rank.dimensions import run_dimensions
 
     summary["dimensions"] = run_dimensions(cfg, run_id)
+    from src.rank.change import run_change
+
+    summary["change"] = run_change(cfg, run_id)
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
@@ -1626,9 +1631,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--text-runs", type=_parse_text_runs, default=None, help="edgar=ID,...")
     d = sub.add_parser("dimensions", help="las 9 dimensiones por fenómeno (capa 2, ADR 0029)")
     d.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
+    c = sub.add_parser("change", help="qué cambió por fenómeno (capa 3, ADR 0030)")
+    c.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
     args = parser.parse_args(argv)
     cfg = load_config()
     log = get_logger("rank", cfg["logging"]["level"])
+    if args.cmd == "change":
+        from src.rank.change import run_change
+
+        print(json.dumps(run_change(cfg, args.run_id), indent=2, ensure_ascii=False))
+        return 0
     if args.cmd == "dimensions":
         from src.rank.dimensions import run_dimensions
 

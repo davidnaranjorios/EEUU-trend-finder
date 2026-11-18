@@ -394,6 +394,17 @@ rank:
     risk_section_regex: "(?i)item[\\s_]*1a"   # sección de riesgos de los reportes anuales
     risk_max_items: 5
     horizon_years: 7
+  # Capa 3, pregunta 1 (src/rank/change.py, ADR 0030): clasifica qué cambió con reglas fijas.
+  # Solo umbrales numéricos; nada se descarta. Fijados a priori, sin calibrar contra ningún caso.
+  change:
+    price_min_pp_year: 1.0            # precio de la industria menos deflactor, puntos porcentuales por año
+    productivity_min_pct_year: 1.0    # ingreso real por trabajador o establecimiento, % por año
+    employment_stable_pct_year: 1.0   # empleo estable si su CAGR no supera esto (o si cae)
+    subindustry_shift_pp: 5.0         # cambio del peso de una subindustria, puntos porcentuales
+    concentration_shift_pp: 2.0       # cambio de CR4 o CR8 entre censos, puntos porcentuales
+    small_share_shift_pp: 2.0         # cambio del % de empresas pequeñas, puntos porcentuales
+    entry_exit_gap_pp: 2.0            # tasa de entrada o salida frente a la economía total
+    composition_years: 7              # años hacia atrás para los pesos de subindustrias (CBP)
   # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se
   # regresa sobre Δ de la tasa de corto plazo (context.reference_series.short_rate), rezagos
   # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary

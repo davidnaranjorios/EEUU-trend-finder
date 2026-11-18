@@ -64,8 +64,10 @@ def build_site(
     )
     watchlist = rdata.watchlist_data(cfg, rank_run)
     dims = rdata.dimensions_data(cfg, rank_run)
+    changes = rdata.change_data(cfg, rank_run)
     for item in (*phenomena, *watchlist):
         item["dimensions"] = dims.get(item["phenomenon_id"], [])
+        item["change"] = changes.get(item["phenomenon_id"])
     published_series = {
         (s["source"], s["id"]): c["candidate_id"]
         for v in candidates.values()
