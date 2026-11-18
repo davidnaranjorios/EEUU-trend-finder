@@ -79,6 +79,7 @@ from src.schemas import (
     CLUSTERS,
     DETECTOR_RUNS,
     NAICS_LINKS,
+    PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
@@ -104,6 +105,7 @@ RANK_TABLES = {
     "rank_context": RANK_CONTEXT,
     "naics_links": NAICS_LINKS,
     "rank_phenomena": RANK_PHENOMENA,
+    "phenomenon_dimensions": PHENOMENON_DIMENSIONS,
 }
 
 
@@ -1336,6 +1338,9 @@ def rank_run(
     _write("rank_context", context_rows, cfg)
     _write("naics_links", naics_mod.rows(run_id, naics_links, tables), cfg)
     _write("rank_runs", [run_row], cfg)
+    from src.rank.dimensions import run_dimensions
+
+    summary["dimensions"] = run_dimensions(cfg, run_id)
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
@@ -1619,9 +1624,16 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="clusters, cruces, triangulación y score")
     r.add_argument("--numeric-run", default=None)
     r.add_argument("--text-runs", type=_parse_text_runs, default=None, help="edgar=ID,...")
+    d = sub.add_parser("dimensions", help="las 9 dimensiones por fenómeno (capa 2, ADR 0029)")
+    d.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
     args = parser.parse_args(argv)
     cfg = load_config()
     log = get_logger("rank", cfg["logging"]["level"])
+    if args.cmd == "dimensions":
+        from src.rank.dimensions import run_dimensions
+
+        print(json.dumps(run_dimensions(cfg, args.run_id), indent=2, ensure_ascii=False))
+        return 0
     with run(["rank"], _resolve(cfg["report"]["runs_file"])) as record:
         with record.stage("rank"):
             summary = rank_run(

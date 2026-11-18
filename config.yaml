@@ -385,6 +385,15 @@ rank:
     concordance_2017_table: config/naics/naics_2017_to_2022.csv
     cluster_majority: 0.5         # herencia por cluster: solo códigos con más de este peso entre los miembros con código
     not_applicable_sources: [federal_register]  # sin industria: fuera del denominador de cobertura
+  # Capa 2, las 9 dimensiones (src/rank/dimensions.py, ADR 0029): solo cifras con fuente y nivel.
+  # La industria del fenómeno es el NAICS más específico con peso >= naics_min_weight_share del
+  # mayor; sin dato se sube de nivel (6 -> 4 -> 3 dígitos) y la cifra queda como indirecta.
+  dimensions:
+    naics_min_weight_share: 0.5
+    concentration_ratios: [4, 8, 20, 50]
+    risk_section_regex: "(?i)item[\\s_]*1a"   # sección de riesgos de los reportes anuales
+    risk_max_items: 5
+    horizon_years: 7
   # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se
   # regresa sobre Δ de la tasa de corto plazo (context.reference_series.short_rate), rezagos
   # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary

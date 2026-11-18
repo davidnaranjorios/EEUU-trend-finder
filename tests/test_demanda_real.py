@@ -173,6 +173,18 @@ def test_rank_run_records_real_effect_and_coverage_without_changing_the_ranking(
     con = connect(fx.cfg["paths"]["processed_dir"])
     assert "real_effect" in {r[0] for r in con.execute("DESCRIBE rank_evidence").fetchall()}
     assert "watch_real_effect" in {r[0] for r in con.execute("DESCRIBE rank_phenomena").fetchall()}
+    # Capa 2 (ADR 0029): `rank run` también escribe las 9 dimensiones de cada fenómeno.
+    assert summary["dimensions"]["run_id"] == "rank_real"
+    from src.ingest.store import read_table
+    from src.rank.run import PARTITION, rank_root
+    from src.schemas import PHENOMENON_DIMENSIONS
+
+    dims = read_table(
+        PHENOMENON_DIMENSIONS, rank_root(fx.cfg, "phenomenon_dimensions"), source=PARTITION
+    ).to_pylist()
+    assert summary["dimensions"]["rows"] == len(dims)
+    if dims:
+        assert {r["dimension"] for r in dims} >= {"fenomeno", "evidencia", "confianza"}
     # La regla de origen no cambia: el ranking sigue exigiendo >= 2 fuentes.
     assert (
         con.execute(

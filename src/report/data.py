@@ -29,7 +29,9 @@ from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
 from src.schemas import (
     DETECTOR_RUNS,
+    DIMENSION_NAMES,
     NAICS_LINKS,
+    PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
     RANK_EVIDENCE,
@@ -93,6 +95,28 @@ def candidate_naics(
         }
         for a in best
     ]
+
+
+def dimensions_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dict[str, list[dict]]:
+    """Tabla de las 9 dimensiones por fenómeno (ADR 0029). Las filas de series con copyright
+    (`public = false`) no salen: ni su id ni su valor llegan al sitio."""
+    if not rank_run:
+        return {}
+    try:
+        rows = _rank_rows(cfg, PHENOMENON_DIMENSIONS, "phenomenon_dimensions", rank_run["run_id"])
+    except (FileNotFoundError, OSError):  # corridas anteriores a la capa 2
+        return {}
+    out: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        if r["public"]:
+            out[r["phenomenon_id"]].append({k: v for k, v in r.items() if k not in DIM_HIDDEN})
+    order = {d: i for i, d in enumerate(DIMENSION_NAMES)}
+    for v in out.values():
+        v.sort(key=lambda r: (order[r["dimension"]], r["metric"]))
+    return dict(out)
+
+
+DIM_HIDDEN = frozenset({"run_id", "phenomenon_id", "public"})
 
 
 def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list[dict[str, Any]]:
