@@ -23,7 +23,7 @@ Fecha: 2026-11-18 (aprobado por David; Sesión 2 de `docs/plan-segunda-etapa.md`
      por año (estable o cae).
    - **composición** (`si` si se cumple al menos uno de los evaluables): mayor cambio de peso de
      las subindustrias (hijos NAICS directos, empleo de CBP; establecimientos si no hay empleo)
-     ≥ `subindustry_shift_pp` en `composition_years`; cambio de CR4 o CR8 entre censos
+     ≥ `child_naics_shift_pp` en `composition_years`; cambio de CR4 o CR8 entre censos
      ≥ `concentration_shift_pp`; cambio del % de empresas pequeñas ≥ `small_share_shift_pp`; tasa de
      entrada o salida vs la economía total (`00`) del mismo año ≥ `entry_exit_gap_pp`. `value` =
      criterios cumplidos; `note` lista cada cifra.

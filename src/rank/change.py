@@ -56,7 +56,7 @@ def params_from(cfg: Mapping[str, Any]) -> ChangeParams:
         float(c["price_min_pp_year"]),
         float(c["productivity_min_pct_year"]),
         float(c["employment_stable_pct_year"]),
-        float(c["subindustry_shift_pp"]),
+        float(c["child_naics_shift_pp"]),
         float(c["concentration_shift_pp"]),
         float(c["small_share_shift_pp"]),
         float(c["entry_exit_gap_pp"]),
