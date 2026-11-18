@@ -256,3 +256,43 @@ def test_run_texto_stops_chaining_without_progress():
     brake = text.index('! -e "$PROGRESS_FILE"')
     assert 'exit "$EXIT_NO_PROGRESS"' in text[brake : brake + 400]
     assert brake < text.index('echo "run_texto: parcial')
+
+
+def test_missing_structure_does_not_redownload_by_default(cfg, tmp_path):
+    """Sin `reprocess_missing_structure`, perder `text_structure` no vuelve a bajar periodos
+    cerrados (decisión de David, 2026-11-18); con la opción activada, sí."""
+    import shutil
+
+    processed = tmp_path / "processed"
+    fake = fr_fake()
+    first = run_source(
+        fr_source(cfg, fake, tmp_path), cfg, processed_dir=processed, run_id="a", today=TODAY
+    )
+    assert first["periods_done_now"]
+    shutil.rmtree(processed / TABLE_DIRS[TEXT_STRUCTURE.name])
+    n_before = len(fake.requests)
+    again = run_source(
+        fr_source(cfg, fake, tmp_path), cfg, processed_dir=processed, run_id="b", today=TODAY
+    )
+    closed = [p for p in first["periods_done_now"] if p["closed"]]
+    assert all(p["period"] not in [q["period"] for q in again["periods_done_now"]] for p in closed)
+    assert len(fake.requests) - n_before <= len(again["periods_done_now"]) * 50
+    cfg["text"]["reprocess_missing_structure"] = True
+    rebuilt = run_source(
+        fr_source(cfg, fake, tmp_path), cfg, processed_dir=processed, run_id="c", today=TODAY
+    )
+    assert {p["period"] for p in closed} <= {p["period"] for p in rebuilt["periods_done_now"]}
+
+
+def test_budget_uses_recorded_period_duration(tmp_path):
+    """El freno usa la duración registrada del periodo (o la del más lento de la fuente)."""
+    from src.ingest.text import TextState
+
+    state = TextState(tmp_path, "edgar")
+    assert state.seconds_estimate("2006Q1") is None
+    state.mark("2006Q1", closed=True, run_id="r", stats={"docs": 1, "rows": {}, "seconds": 7000.0})
+    state.mark("2006Q2", closed=True, run_id="r", stats={"docs": 1, "rows": {}, "seconds": 900.0})
+    assert state.seconds_estimate("2006Q2") == 900.0
+    assert state.seconds_estimate("2009Q1") == 7000.0  # desconocido: el más lento de la fuente
+    reread = TextState(tmp_path, "edgar")
+    assert reread.seconds_estimate("2006Q1") == 7000.0  # persiste entre tramos y corridas

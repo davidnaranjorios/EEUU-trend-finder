@@ -345,6 +345,15 @@ class TextState:
         last = datetime.fromisoformat(info["processed_at"])
         return (now - last).total_seconds() > refresh_hours * 3600
 
+    def seconds_estimate(self, period: str) -> float | None:
+        """Duración conocida del periodo (su última pasada) o, si no la hay, la del periodo más
+        lento registrado de la fuente: así el freno no depende de una estimación fija (ADR 0026)."""
+        own = (self.periods.get(period) or {}).get("seconds")
+        if own:
+            return float(own)
+        known = [float(i["seconds"]) for i in self.periods.values() if i.get("seconds")]
+        return max(known) if known else None
+
     def mark(self, period: str, *, closed: bool, run_id: str, stats: dict[str, Any]) -> None:
         self.periods[period] = {
             "closed": closed,
@@ -354,6 +363,7 @@ class TextState:
             "processed_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "docs": stats["docs"],
             "rows": stats["rows"],
+            "seconds": stats.get("seconds"),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
@@ -392,9 +402,13 @@ def run_source(
     refresh = text_cfg["open_refresh_hours"]
     min_schema = cfg[src.name].get("reprocess_below_schema", 1)
     structure_dir = processed_dir / TABLE_DIRS[TEXT_STRUCTURE.name] / src.name
+    # Volver a bajar periodos solo porque falta su `text_structure` está desactivado por defecto
+    # (decisión de David, 2026-11-18): cuesta decenas de horas; la estructura histórica incompleta
+    # queda documentada y los periodos nuevos la guardan en la corrida semanal.
+    rebuild_structure = bool(text_cfg.get("reprocess_missing_structure", False))
 
     def _no_structure(period: str) -> bool:
-        return not any((structure_dir / period).glob("*.parquet"))
+        return rebuild_structure and not any((structure_dir / period).glob("*.parquet"))
 
     candidates = only_periods or [
         p
@@ -414,12 +428,16 @@ def run_source(
     try:
         for period in todo:
             if deadline is not None:
-                slowest = max((p["seconds"] for p in done), default=None)
+                # El mayor entre: el periodo más lento de esta invocación, la duración registrada
+                # de este periodo (o del más lento de la fuente) y la estimación de config.
                 need = (
-                    slowest
-                    if slowest is not None
-                    else text_cfg["period_seconds_estimate"][src.name]
-                ) * text_cfg["period_margin"]
+                    max(
+                        max((p["seconds"] for p in done), default=0.0),
+                        state.seconds_estimate(period) or 0.0,
+                        float(text_cfg["period_seconds_estimate"][src.name]),
+                    )
+                    * text_cfg["period_margin"]
+                )
                 if clock() + need > deadline:
                     budget_exhausted = True
                     break
@@ -471,9 +489,9 @@ def run_source(
                 )
             # Una muestra nunca cierra un periodo: el universo completo queda pendiente.
             closed = sample is None and src.is_closed(period, today) and not stats.get("incomplete")
+            stats["seconds"] = round(time.perf_counter() - t0, 1)
             if sample is None:
                 state.mark(period, closed=closed, run_id=run_id, stats=stats)
-            stats["seconds"] = round(time.perf_counter() - t0, 1)
             stats["closed"] = closed
             done.append(stats)
             if logger is not None:
