@@ -39,7 +39,7 @@ PPI_ID = re.compile(r"^PCU(\d{2}-\d{2}(?=-)|\d{2,6})")
 @dataclass(frozen=True)
 class DimParams:
     naics_min_weight_share: float = 0.5
-    risk_section_regex: str = r"(?i)item\s*1a"
+    risk_section_regex: str = r"(?i)item[\s_]*1a"
     risk_max_items: int = 5
     horizon_years: int = 7
     size_cr: tuple[int, ...] = (4, 8, 20, 50)

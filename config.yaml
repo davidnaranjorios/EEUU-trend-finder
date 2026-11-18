@@ -391,7 +391,7 @@ rank:
   dimensions:
     naics_min_weight_share: 0.5
     concentration_ratios: [4, 8, 20, 50]
-    risk_section_regex: "(?i)item\\s*1a"   # sección de riesgos de los reportes anuales
+    risk_section_regex: "(?i)item[\\s_]*1a"   # sección de riesgos de los reportes anuales
     risk_max_items: 5
     horizon_years: 7
   # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se

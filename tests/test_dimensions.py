@@ -183,6 +183,20 @@ def test_risk_terms_item_1a_with_naics_concordance():
     assert (got[0].level, got[0].naics_used) == ("indirecto", "623")
 
 
+def test_risk_terms_use_the_real_edgar_section_id():
+    """Los términos de EDGAR llegan como `item_1a|término` (ids reales de `signals`)."""
+    t = [
+        {"object_id": "item_1a|staffing shortage", "source": "edgar", "q_value": 0.01,
+         "naics": [("6231", 1.0)]},
+        {"object_id": "item_7|staffing shortage", "source": "edgar", "q_value": 0.001,
+         "naics": [("6231", 1.0)]},
+    ]  # fmt: skip
+    rows = build(phen(), [ev("A")], market({}), terms=t)
+    got = [r for r in rows if r.dimension == "riesgo"]
+    assert [r.metric for r in got] == ["termino:staffing shortage"]
+    assert got[0].source_ref == "edgar:item_1a|staffing shortage"
+
+
 def test_copyrighted_series_are_hidden_but_counted():
     rows = build(phen(), [ev("SECRET1", public=False)], market({}))
     assert all("SECRET1" not in (r.metric + (r.source_ref or "")) for r in rows)
