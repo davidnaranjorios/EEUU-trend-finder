@@ -6,14 +6,14 @@ Fecha: 2026-11-18 (aprobado por David; Sesión 2 de `docs/plan-segunda-etapa.md`
 1. **Tabla** `processed/rank/phenomenon_change`, clave `(run_id, phenomenon_id, change_type)`:
    `status` (`si`/`no`/`sin_dato`), `value`, `unit`, `threshold` (texto con el umbral usado), `period`,
    `source_ref`, `note` (las cifras que deciden) y `phrase` (la frase del fenómeno, repetida en cada
-   fila). `src/rank/change.py`; `uv run python -m src.rank change [--run-id ID]`; `rank run` lo corre
+   fila) y `level` (✅ directo / 🟡 indirecto / ⚪ sin dato). `src/rank/change.py`; `uv run python -m src.rank change [--run-id ID]`; `rank run` lo corre
    después de las dimensiones. El validador rechaza tipo/estado inválido, `sin_dato` con valor y
    `si`/`no` sin valor. `change_type` es un `Enum` (`schemas.ChangeType`), no una lista de temas.
 2. **Cinco tipos más una fila auxiliar** (`recuperacion`, sexta fila):
-   - **cantidad**: series de cantidad no poblacional, o de valor con efecto real positivo
-     (`real_effect > 0`), con trayectoria `acelera` o `gira_al_alza` (ADR 0025). `frena_caida` y
+   - **cantidad** (regla vigente desde el ajuste del 2026-11-19; ver abajo): solo series de
+     **producción**, con trayectoria `acelera` o `gira_al_alza` (ADR 0025). `frena_caida` y
      `rebote_bajo_pico` NO cuentan: van a `recuperacion`. `sin_dato` si el fenómeno no tiene ninguna
-     serie de ese tipo.
+     serie de producción evaluable.
    - **precio**: PPI de la industria (mismo hallazgo por código NAICS del id que ADR 0029) menos el
      deflactor aprobado, ambos como CAGR desde el inicio de la ventana del fenómeno hasta el último
      dato; `si` si la diferencia supera `price_min_pp_year`.
@@ -54,3 +54,32 @@ mano. Requiere ampliar la ingesta de Federal Register para guardar las referenci
 - **Cantidad** acepta series de valor con efecto real positivo (nómina, ingresos reales). Si un
   fenómeno tiene solo una serie de cantidad física en recuperación y varias de valor que aceleran,
   sale `si` por las de valor; ver el PR (caso de residencias de cuidado).
+
+## Ajuste del 2026-11-19: producción frente a insumos (aprobado por David; PR #71)
+La primera versión contaba como «cantidad» cualquier serie de valor con efecto real positivo. Así
+entraron nómina y gastos, que son costos o insumos y no demanda, y el empleo, que es un insumo y no la
+cantidad producida. La verificación con residencias de cuidado salió «cantidad: sí» por esas series.
+Era un error de la regla, no del código. Cambios:
+1. **Rol por serie** (`src/rank/role.py`, `config/measure_role.yaml`): `produccion` (ingresos,
+   ventas, envíos, valor real encadenado), `insumo` (nómina, gastos, empleo, horas, salarios) o
+   `sin_clasificar`, por título y unidades oficiales, mismo esquema de `match` que
+   `measure_kind.yaml`. Son descriptores del tipo de medida, no temas; `test_no_hardcoded_topics`
+   pasa sin excepción y sin partir literales (las expresiones viven en el YAML de `config/`).
+2. **Cantidad = solo producción.** Cantidad física: su trayectoria tal cual (✅). Valor: se divide
+   por el índice de precios del productor (`dimensions.find_price_series`/`price_source`; promedio
+   de los meses del periodo) y se etiqueta con `trajectory.classify` (mismas ventanas: tendencia
+   previa vs reciente, ancla en la última recesión). Nivel ✅ si el índice es del NAICS propio de la
+   serie; 🟡 si es de otro nivel NAICS (nota «índice de precios de 6231 para una serie de 623») o si
+   no hay índice y se usa el deflactor aprobado (nota con su id). El NAICS propio sale de
+   `naics_links` (peso mayor) o del id.
+3. **Insumos → productividad.** El ingreso del censo se deflacta con el índice de precios del
+   productor de la industria (🟡 si es de otro nivel o si cae al deflactor aprobado); los insumos
+   del fenómeno con su trayectoria (empleo, nómina, gastos) se listan en la nota de productividad y
+   nunca en cantidad.
+4. **Recuperación** solo cuenta series de producción; un insumo en rebote va a la nota de
+   productividad.
+5. `phenomenon_change` gana la columna `level`.
+
+Efecto en la corrida de referencia (33 fenómenos): la mayoría de los fenómenos no tiene ninguna serie
+de producción evaluable (su respaldo son precios, empleo u otros insumos), así que cantidad queda
+`sin_dato` en 31; es el comportamiento pedido (los insumos no son cantidad), no una pérdida de datos.

@@ -62,6 +62,16 @@ y «qué falta» hacen que cada afirmación se pueda verificar y que se vea dón
 cálculo de Competencia y Entrada salió en minutos de APIs públicas de Census con la clave que ya
 existe: la Etapa 2 es factible sin fuentes de pago.
 
+## Nota (2026-11-19): el empleo es un insumo, no la cantidad producida
+
+El empleo (`CES6562310001`) es un **insumo**: sigue bajo su pico previo (rebote). La **cantidad
+producida** (ingresos de 623, `REV623AMSA`, deflactados por el índice de precios del productor de 6231,
+`PCU623110623110`) pasó de crecer ~+0,5 %/año (2014→2019, cálculo a mano con FRED) a ~+3,2 %/año
+(2019→2025). Con las ventanas de la trayectoria del sistema (5 años previos a la recesión de 2020 vs
+el tramo posterior) sale +0,2 → +3,3 %/año real, etiqueta `acelera`. La lectura pasa a ser **«más
+servicio con el mismo personal»**. Nivel 🟡: ingresos de 623 con precio de 6231 (ADR 0030, ajuste del
+2026-11-19). El resto de la ficha no se reescribe.
+
 ## Reproducir
 
 Consultas usadas (API key de Census y FRED en el entorno):

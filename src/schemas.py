@@ -530,6 +530,7 @@ PHENOMENON_CHANGE = TableSpec(
         ("period", pa.string(), True),
         ("source_ref", pa.string(), True),
         ("note", pa.string(), True),
+        ("level", pa.string(), False),
         ("phrase", pa.string(), False),
     ),
     key=("run_id", "phenomenon_id", "change_type"),
@@ -650,8 +651,9 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         sts = ", ".join(f"'{x}'" for x in CHANGE_STATUSES)
         bad = con.execute(
             f"SELECT count(*) FROM t WHERE change_type NOT IN ({kinds}) OR status NOT IN ({sts}) "
-            "OR (status = 'sin_dato' AND value IS NOT NULL) "
-            "OR (status <> 'sin_dato' AND value IS NULL)"
+            "OR (status = 'sin_dato' AND (value IS NOT NULL OR level <> 'sin_dato')) "
+            "OR (status <> 'sin_dato' AND (value IS NULL OR level = 'sin_dato')) "
+            f"OR level NOT IN ({', '.join(repr(x) for x in DIMENSION_LEVELS)})"
         ).fetchone()
         if bad[0]:
             raise SchemaError(f"phenomenon_change: {bad[0]} filas con tipo o estado inválido")

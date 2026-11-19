@@ -24,11 +24,15 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
+import numpy as np
+
 from src.rank import dimensions as dm
+from src.rank import role as role_mod
+from src.rank import trajectory as traj_mod
 from src.schemas import ChangeType
 
 COUNTS = ("acelera", "gira_al_alza")  # etiquetas de trayectoria que cuentan como «creció más»
@@ -74,6 +78,7 @@ class Out:
     period: str | None = None
     source_ref: str | None = None
     note: str | None = None
+    level: str | None = None  # directo ✅ / indirecto 🟡; None: se deduce del estado
 
 
 def label(change_type: str) -> str:
@@ -93,43 +98,138 @@ def _refs(items: Sequence[Mapping[str, Any]]) -> tuple[str | None, int]:
 # --- cantidad y recuperación ----------
 
 
-def quantity_pool(evidence: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Series de cantidad (no poblacional) o de valor con efecto real positivo."""
-    out = []
-    for e in evidence:
-        if e["item_kind"] != "series":
-            continue
-        kind = e.get("measure_kind")
-        if kind == "cantidad" and e.get("measure_subtype") != "poblacion":
-            out.append(e)
-        elif kind == "valor" and (e.get("real_effect") or 0) > 0:
-            out.append(e)
-    return out
+@dataclass(frozen=True)
+class Ctx:
+    """Insumos de datos para cantidad y productividad (todo sale de los datos del fenómeno)."""
+
+    target: str | None
+    roles: Mapping[tuple[str, str], str]
+    series_naics: Mapping[tuple[str, str], str | None]
+    prices: Mapping[str, tuple[str, str]]
+    series: dm.SeriesFn
+    deflator: tuple[list[date], list[float]] | None
+    deflator_id: str | None
+    starts: Mapping[str, list[int]]
+    tp: traj_mod.TrajectoryParams
 
 
-def classify_quantity(evidence: Sequence[Mapping[str, Any]]) -> tuple[Out, Out]:
-    """(cantidad, recuperacion)."""
-    pool = quantity_pool(evidence)
+def _grid(dates: Sequence[date]) -> str:
+    pairs = zip(dates, dates[1:], strict=False)
+    gaps = sorted((b.year - a.year) * 12 + b.month - a.month for a, b in pairs)
+    med = gaps[len(gaps) // 2] if gaps else 12
+    return "M" if med <= 1 else "Q" if med <= 3 else "A"
+
+
+def real_level(
+    got: tuple[list[date], list[float]], index: tuple[list[date], list[float]], grid: str
+) -> tuple[np.ndarray, int] | None:
+    """Serie de valor dividida por el índice de precios (promedio de los meses del periodo).
+    Devuelve (niveles reales, índice de grilla del primero); solo el tramo final sin huecos."""
+    per = 12 // traj_mod.PER_YEAR[grid]
+    idx: dict[int, float] = {d.year * 12 + d.month - 1: v for d, v in zip(*index, strict=True)}
+    cells: dict[int, float] = {}
+    for d, v in zip(*got, strict=True):
+        m0 = (d.year * 12 + d.month - 1) // per * per
+        px = [idx.get(m0 + k) for k in range(per)]
+        if v > 0 and all(x is not None and x > 0 for x in px):
+            cells[m0 // per] = v / (sum(px) / per)  # type: ignore[arg-type]
+    if not cells:
+        return None
+    last = max(cells)
+    first = last
+    while first - 1 in cells:
+        first -= 1
+    return np.array([cells[i] for i in range(first, last + 1)]), first
+
+
+def _trajectory_of(e: Mapping[str, Any], c: Ctx) -> tuple[str | None, str, str] | None:
+    """(etiqueta, nivel, nota) de una serie de producción; None si no se puede evaluar."""
+    key = (e["source"], e["object_id"])
+    if e.get("measure_kind") == "cantidad":
+        return e.get("trajectory"), "directo", ""
+    got = c.series(*key)
+    if not got or not got[0]:
+        return None
+    own = c.series_naics.get(key) or c.target
+    hit = dm.price_source(own, c.prices) if own else None
+    if hit is not None and c.series(*hit[1]):
+        code, ids = hit
+        index = c.series(*ids)
+        level = "directo" if code == own else "indirecto"
+        note = "" if level == "directo" else f"índice de precios de {code} para una serie de {own}"
+    elif c.deflator and c.deflator[0]:
+        index, level = c.deflator, "indirecto"
+        note = f"sin índice de precios del productor: deflactor {c.deflator_id}"
+    else:
+        return None
+    grid = _grid(got[0])
+    real = real_level(got, index, grid)
+    if real is None:
+        return None
+    levels, first = real
+    label_, _ = traj_mod.classify(levels, first, grid, c.starts.get(grid, []), c.tp)
+    return label_, level, note
+
+
+def classify_quantity(evidence: Sequence[Mapping[str, Any]], c: Ctx) -> tuple[Out, Out]:
+    """(cantidad, recuperacion): solo series de PRODUCCIÓN (ingresos, ventas, envíos). Las de
+    valor se deflactan con el índice de precios del productor de su propia industria (✅), con el de
+    otro nivel NAICS (🟡) o con el deflactor aprobado (🟡). Los insumos no cuentan."""
     qty = Out("cantidad", threshold="trayectoria acelera o gira_al_alza", unit="series")
     rec = Out("recuperacion", threshold="trayectoria frena_caida o rebote_bajo_pico", unit="series")
+    pool, skipped, notes = [], 0, []
+    for e in evidence:
+        if e["item_kind"] != "series" or e.get("measure_subtype") == "poblacion":
+            continue
+        if e.get("measure_kind") not in ("cantidad", "valor"):
+            continue
+        if c.roles.get((e["source"], e["object_id"])) != "produccion":
+            continue
+        got = _trajectory_of(e, c)
+        if got is None:
+            skipped += 1
+            continue
+        pool.append({**e, "trajectory": got[0], "_level": got[1]})
+        if got[2]:
+            notes.append(got[2])
     if not pool:
-        qty.note = "sin series de cantidad ni de valor real positivo"
+        qty.note = "sin series de producción evaluables (los insumos no cuentan como cantidad)"
         rec.note = qty.note
         return qty, rec
-    up = [e for e in pool if e.get("trajectory") in COUNTS]
-    back = [e for e in pool if e.get("trajectory") in RECOVERY]
+    up = [e for e in pool if e["trajectory"] in COUNTS]
+    back = [e for e in pool if e["trajectory"] in RECOVERY]
     for out, items in ((qty, up), (rec, back)):
         out.status = SI if items else NO
         out.value = float(len(items))
         out.source_ref, hidden = _refs(items)
         out.period = _period(items)
+        shown = items or pool
+        out.level = "directo" if any(e["_level"] == "directo" for e in shown) else "indirecto"
         extra = f" (+{hidden} con derechos, no listada(s))" if hidden else ""
+        labels = ", ".join(sorted({str(e["trajectory"]) for e in pool}))
         out.note = (
-            f"{len(items)} de {len(pool)} series evaluadas; "
-            + ", ".join(sorted({f"{e['trajectory']}" for e in items}) or ["ninguna"])
+            f"{len(items)} de {len(pool)} series de producción; trayectorias: {labels}"
+            + (f"; {'; '.join(sorted(set(notes)))}" if notes else "")
+            + (f"; {skipped} sin deflactor" if skipped else "")
             + extra
         )
     return qty, rec
+
+
+def insumos_note(evidence: Sequence[Mapping[str, Any]], c: Ctx) -> str:
+    """Insumos del fenómeno (empleo, nómina, gastos…) con su trayectoria, para productividad."""
+    items = [
+        e
+        for e in evidence
+        if e["item_kind"] == "series"
+        and c.roles.get((e["source"], e["object_id"])) == "insumo"
+        and e.get("measure_kind") in ("cantidad", "valor")
+    ]
+    pub = sorted(f"{_tag(e)} {e.get('trajectory') or 'sin etiqueta'}" for e in items if e["public"])
+    hidden = sum(not e["public"] for e in items)
+    if not items:
+        return ""
+    return "insumos: " + ", ".join(pub) + (f" (+{hidden} con derechos)" if hidden else "")
 
 
 def _period(items: Sequence[Mapping[str, Any]]) -> str | None:
@@ -186,6 +286,7 @@ def classify_price(
         "serie con derechos" if (src, sid) in hidden_ids else f"{src}:{sid} vs fred:{deflator_id}"
     )
     lvl = "" if code == target else f" (NAICS {code}, indirecto)"
+    out.level = "directo" if code == target else "indirecto"
     out.note = f"precio {g_p:+.2f}%/año · deflactor {g_d:+.2f}%/año{lvl}"
     return out
 
@@ -214,6 +315,8 @@ def classify_productivity(
     market: dm.Market,
     deflator: tuple[list[date], list[float]] | None,
     p: ChangeParams,
+    defl_level: str = "indirecto",
+    defl_note: str = "",
 ) -> Out:
     out = Out(
         "productividad",
@@ -258,7 +361,10 @@ def classify_productivity(
         out.source_ref = f"market/naics_metrics:revenue,{src}"
         pe = f" · por establecimiento {per_e:+.2f}%/año" if per_e is not None else ""
         lvl = "" if code == target else f" (NAICS {code}, indirecto)"
-        out.note = f"por trabajador {per_w:+.2f}%/año{pe} · empleo {g_emp:+.2f}%/año{lvl}"
+        out.level = "directo" if code == target and defl_level == "directo" else "indirecto"
+        out.note = f"por trabajador {per_w:+.2f}%/año{pe} · empleo {g_emp:+.2f}%/año{lvl}" + (
+            f" · deflactor: {defl_note}" if defl_note else ""
+        )
         return out
     out.note = "sin ingresos y empleo en dos censos económicos"
     return out
@@ -395,27 +501,44 @@ def build_change(
     evidence: Sequence[Mapping[str, Any]],
     market: dm.Market,
     *,
-    series: dm.SeriesFn,
-    deflator: tuple[list[date], list[float]] | None,
-    deflator_id: str | None,
-    prices: Mapping[str, tuple[str, str]],
+    ctx: Ctx,
     p: ChangeParams,
     dp: dm.DimParams,
     hidden_ids: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[Out]:
     target = dm.pick_naics(json.loads(phen["naics_json"]), dp.naics_min_weight_share)
-    qty, rec = classify_quantity(evidence)
-    rows = [
+    ctx = replace(ctx, target=target)
+    qty, rec = classify_quantity(evidence, ctx)
+    # Productividad: producción real = ingresos del censo / índice de precios del productor de la
+    # industria (✅); con otro nivel NAICS o con el deflactor aprobado queda 🟡 y lo dice.
+    hit = dm.price_source(target, ctx.prices) if target else None
+    idx = ctx.series(*hit[1]) if hit else None
+    if idx and idx[0]:
+        defl, lvl = idx, "directo" if hit[0] == target else "indirecto"  # type: ignore[index]
+        dnote = f"PCU {hit[0]}"  # type: ignore[index]
+    else:
+        defl, lvl, dnote = ctx.deflator, "indirecto", f"{ctx.deflator_id} (sin índice de precios)"
+    prod = classify_productivity(target, market, defl, p, lvl, dnote)
+    ins = insumos_note(evidence, ctx)
+    if ins:
+        prod.note = f"{prod.note} · {ins}" if prod.note else ins
+    return [
         qty,
         classify_price(
-            target, phen.get("window_start"), prices, series, deflator, deflator_id, p, hidden_ids
+            target,
+            phen.get("window_start"),
+            ctx.prices,
+            ctx.series,
+            ctx.deflator,
+            ctx.deflator_id,
+            p,
+            hidden_ids,
         ),
-        classify_productivity(target, market, deflator, p),
+        prod,
         classify_composition(target, market, p),
         classify_regulation(),
         rec,
     ]
-    return rows
 
 
 def to_table_rows(run_id: str, phenomenon_id: str, rows: Sequence[Out]) -> list[dict[str, Any]]:
@@ -432,6 +555,7 @@ def to_table_rows(run_id: str, phenomenon_id: str, rows: Sequence[Out]) -> list[
             "period": r.period,
             "source_ref": r.source_ref,
             "note": r.note,
+            "level": r.level or ("sin_dato" if r.status == SD else "directo"),
             "phrase": text,
         }
         for r in rows
@@ -450,7 +574,7 @@ def run_change(
     from src.ingest.store import read_table, upsert
     from src.rank import run as rank_run_mod
     from src.rank.run import rank_root
-    from src.schemas import PHENOMENON_CHANGE, RANK_EVIDENCE, RANK_PHENOMENA
+    from src.schemas import NAICS_LINKS, PHENOMENON_CHANGE, RANK_EVIDENCE, RANK_PHENOMENA
 
     part = rank_run_mod.PARTITION
     if run_id is None:
@@ -465,6 +589,9 @@ def run_change(
     phens = [r for r in phens if r["status"] == "candidato" or r.get("watch")]
     ev = read_table(
         RANK_EVIDENCE, rank_root(dict(cfg), "rank_evidence"), source=part, **where
+    ).to_pylist()
+    links = read_table(
+        NAICS_LINKS, rank_root(dict(cfg), "naics_links"), source=part, **where
     ).to_pylist()
     own = con is None
     root = _resolve(cfg["paths"]["processed_dir"])
@@ -503,16 +630,49 @@ def run_change(
         ref = cfg["context"]["reference_series"]
         deflator = series("fred", ref["deflator"]) if ref.get("deflator") else None
         p, dp = params_from(cfg), dm.params_from(cfg)
+        tp = traj_mod.params_from(dict(cfg))
+        months = rank_run_mod.recession_months(con, dict(cfg))
+        starts = {g: traj_mod.recession_starts(months, g) for g in ("M", "Q", "A")}
+        # rol de cada serie de evidencia (título y unidades oficiales) y su NAICS propio
+        rules = role_mod.load_rules()
+        keys = sorted({(e["source"], e["object_id"]) for e in ev if e["item_kind"] == "series"})
+        meta = {
+            (a, b): t or ""
+            for a, b, t in con.execute(
+                "SELECT source, series_id, title FROM series_meta"
+            ).fetchall()
+        }
+        units = {
+            (a, b): u or ""
+            for a, b, u in con.execute(
+                "SELECT source, series_id, any_value(units) FROM series GROUP BY 1, 2"
+            ).fetchall()
+        }
+        roles = {
+            k: role_mod.role_of(
+                rules, source=k[0], series_id=k[1], units=units.get(k, ""), title=meta.get(k, "")
+            )
+            for k in keys
+        }
+        top: dict[tuple[str, str], tuple[float, str]] = {}
+        for r in links:
+            k = (r["source"], r["object_id"])
+            if k not in top or r["peso"] > top[k][0]:
+                top[k] = (r["peso"], r["naics"])
+        series_naics = {
+            k: (top[k][1] if k in top else (naics_mod.id_codes(k[0], k[1], tables) or [None])[0])
+            for k in keys
+        }
+        ctx = Ctx(
+            None, roles, series_naics, prices, series, deflator, ref.get("deflator"), starts, tp
+        )
         by_cand: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for e in ev:
             by_cand[e["candidate_id"]].append(e)
         out: list[dict[str, Any]] = []
         for ph in sorted(phens, key=lambda r: r["phenomenon_id"]):
             evid = [e for c in json.loads(ph["cluster_ids_json"]) for e in by_cand.get(c, [])]
-            rows = build_change(
-                ph, evid, market, series=series, deflator=deflator,
-                deflator_id=ref.get("deflator"), prices=prices, p=p, dp=dp, hidden_ids=hidden,
-            )  # fmt: skip
+            rows = build_change(ph, evid, market, ctx=ctx, p=p, dp=dp, hidden_ids=hidden)
             out += to_table_rows(run_id, ph["phenomenon_id"], rows)
     finally:
         if own:

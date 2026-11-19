@@ -1,0 +1,35 @@
+# Rol de cada serie frente a la industria (ADR 0030, ajuste del 2026-11-19; aprobado por David):
+# `produccion` (lo que la industria vende o produce) o `insumo` (lo que consume o paga para
+# producir: empleo, nómina, gastos, horas, salarios). Mismo esquema de `match` que
+# `measure_kind.yaml` (source / id_regex / units_regex / title_regex, AND) y gana la primera regla que
+# casa; sin regla, la serie queda `sin_clasificar` y no cuenta como cantidad. Solo descriptores
+# genéricos del tipo de medida: NUNCA industrias, productos ni palabras clave de temas.
+version: 1
+rules:
+  - id: insumo_nomina
+    role: insumo
+    match: {title_regex: "(?i)\\bpayrolls?\\b"}
+  - id: insumo_gastos
+    role: insumo
+    match: {title_regex: "(?i)\\b(expenses?|operating costs?)\\b"}
+  - id: insumo_empleo
+    role: insumo
+    match: {title_regex: "(?i)\\b(employees?|employment|jobs?|workers)\\b"}
+  - id: insumo_horas
+    role: insumo
+    match: {title_regex: "(?i)\\bhours\\b"}
+  - id: insumo_salarios
+    role: insumo
+    match: {title_regex: "(?i)\\b(wages?|salaries|compensation|earnings)\\b"}
+  - id: insumo_unidades_personas
+    role: insumo
+    match: {units_regex: "(?i)persons|employees"}
+  - id: produccion_ingresos
+    role: produccion
+    match: {title_regex: "(?i)\\b(revenues?|receipts|sales)\\b"}
+  - id: produccion_envios
+    role: produccion
+    match: {title_regex: "(?i)\\b(shipments?|deliveries|units produced|production|output)\\b"}
+  - id: produccion_valor_real
+    role: produccion
+    match: {units_regex: "(?i)chained dollars|quantity index"}

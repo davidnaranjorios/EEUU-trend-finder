@@ -11,10 +11,12 @@ import pytest
 from src.config import load_config
 from src.rank import change as ch
 from src.rank import dimensions as dm
+from src.rank import trajectory as traj_mod
 from src.schemas import PHENOMENON_CHANGE, SchemaError, validate
 
 P = ch.ChangeParams()
 DP = dm.DimParams()
+TP = traj_mod.TrajectoryParams()
 
 
 def market(rows):
@@ -46,47 +48,126 @@ def monthly(start_year, years, f):
 
 # --- cantidad y recuperación ----------
 
+KEY = ("bls", "A")
 
-def test_quantity_yes_when_series_accelerates_or_turns_up():
+
+def ctx(roles=None, *, series=None, prices=None, deflator=None, naics=None):
+    return ch.Ctx(
+        "6231", roles if roles is not None else {KEY: "produccion"}, naics or {},
+        prices or {}, series or (lambda s, i: None), deflator, "DEFL", {}, TP,
+    )  # fmt: skip
+
+
+def test_quantity_yes_when_production_series_accelerates_or_turns_up():
     for traj in ("acelera", "gira_al_alza"):
-        qty, rec = ch.classify_quantity([ev("A", traj=traj)])
-        assert (qty.status, qty.value, rec.status) == ("si", 1.0, "no")
+        qty, rec = ch.classify_quantity([ev("A", traj=traj)], ctx())
+        assert (qty.status, qty.value, rec.status, qty.level) == ("si", 1.0, "no", "directo")
 
 
 def test_quantity_no_and_recovery_for_frena_caida_and_rebote_bajo_pico():
     for traj in ("frena_caida", "rebote_bajo_pico"):
-        qty, rec = ch.classify_quantity([ev("A", traj=traj)])
+        qty, rec = ch.classify_quantity([ev("A", traj=traj)], ctx())
         assert (qty.status, qty.value) == ("no", 0.0)
         assert (rec.status, rec.value) == ("si", 1.0) and traj in rec.note
 
 
 def test_quantity_no_when_trajectory_is_none_or_falling():
-    qty, rec = ch.classify_quantity([ev("A", traj=None), ev("B", traj="gira_a_la_baja")])
+    roles = {("bls", "A"): "produccion", ("bls", "B"): "produccion"}
+    evid = [ev("A", traj=None), ev("B", traj="gira_a_la_baja")]
+    qty, rec = ch.classify_quantity(evid, ctx(roles))
     assert (qty.status, rec.status) == ("no", "no")
 
 
-def test_quantity_pool_excludes_population_prices_and_unreal_values():
-    pool = [
-        ev("POP", measure_subtype="poblacion"),
-        ev("PRICE", kind="precio"),
-        ev("NOREAL", kind="valor", real_effect=None),
-        ev("NEG", kind="valor", real_effect=-0.2),
-        ev("OK", kind="valor", real_effect=0.3),
-    ]
-    assert [e["object_id"] for e in ch.quantity_pool(pool)] == ["OK"]
-
-
-def test_quantity_sin_dato_without_quantity_or_real_value_series():
-    qty, rec = ch.classify_quantity(
-        [ev("P", kind="precio"), ev("POP", measure_subtype="poblacion")]
-    )
+def test_inputs_never_count_as_quantity():
+    """Empleo, nómina y gastos son insumos: aunque aceleren, no son cantidad producida."""
+    roles = {("bls", "A"): "insumo", ("bls", "B"): "sin_clasificar"}
+    qty, rec = ch.classify_quantity([ev("A"), ev("B"), ev("C", kind="valor")], ctx(roles))
     assert (qty.status, qty.value, rec.status) == ("sin_dato", None, "sin_dato")
 
 
+def test_population_and_prices_are_excluded():
+    roles = {("bls", "A"): "produccion", ("bls", "P"): "produccion"}
+    evid = [ev("A", measure_subtype="poblacion"), ev("P", kind="precio")]
+    assert ch.classify_quantity(evid, ctx(roles))[0].status == "sin_dato"
+
+
+def test_value_series_deflated_by_own_industry_price_index():
+    """Ingresos que crecen como los precios: no hay cantidad nueva; si crecen más, sí."""
+    start = date(2005, 1, 1)
+    months = [date(start.year + i // 12, i % 12 + 1, 1) for i in range(21 * 12)]
+    price = (months, [100 * 1.03 ** (i / 12) for i in range(len(months))])
+    quarters = [d for d in months if d.month in (1, 4, 7, 10)]
+
+    def run(rate):
+        level, vals = 50.0, []
+        for d in quarters:  # crecimiento continuo por tramos (sin saltos de nivel)
+            level *= (1 + rate(d)) ** 0.25
+            vals.append(level)
+        rev = (quarters, vals)
+        c = ctx(
+            {KEY: "produccion"}, series=lambda s, i: price if i == "PCU" else rev,
+            prices={"6231": ("bls", "PCU")}, naics={KEY: "6231"},
+        )  # fmt: skip
+        return ch.classify_quantity([ev("A", "valor")], c)[0]
+
+    flat = run(lambda d: 0.03)  # crece lo mismo que el precio: cantidad constante
+    assert flat.status == "no" and flat.level == "directo"
+    boom = run(lambda d: 0.03 if d.year < 2022 else 0.09)  # acelera en términos reales
+    assert boom.status == "si" and boom.level == "directo"
+
+
+def test_value_series_level_indirect_when_price_index_is_other_naics_or_deflator():
+    months = [date(2005 + i // 12, i % 12 + 1, 1) for i in range(21 * 12)]
+    price = (months, [100 * 1.02 ** (i / 12) for i in range(len(months))])
+    quarters = [d for d in months if d.month in (1, 4, 7, 10)]
+    rev = (quarters, [50 * 1.03 ** ((d.year - 2005) + d.month / 12) for d in quarters])
+    other = ctx(
+        {KEY: "produccion"}, series=lambda s, i: price if i == "PCU" else rev,
+        prices={"6231": ("bls", "PCU")}, naics={KEY: "623"},
+    )  # fmt: skip
+    got = ch.classify_quantity([ev("A", "valor")], other)[0]
+    assert (
+        got.level == "indirecto" and "índice de precios de 6231 para una serie de 623" in got.note
+    )
+    fallback = ctx({KEY: "produccion"}, series=lambda s, i: rev, deflator=price)
+    got = ch.classify_quantity([ev("A", "valor")], fallback)[0]
+    assert got.level == "indirecto" and "deflactor DEFL" in got.note
+
+
 def test_quantity_hides_copyrighted_ids_but_counts_them():
-    qty, _ = ch.classify_quantity([ev("SECRET", public=False), ev("OPEN")])
+    roles = {("bls", "SECRET"): "produccion", ("bls", "OPEN"): "produccion"}
+    qty, _ = ch.classify_quantity([ev("SECRET", public=False), ev("OPEN")], ctx(roles))
     assert "SECRET" not in (qty.source_ref or "") + (qty.note or "")
     assert qty.source_ref == "bls:OPEN" and "+1 con derechos" in qty.note
+
+
+def test_inputs_note_lists_inputs_with_trajectory_for_productivity():
+    roles = {("bls", "EMP"): "insumo", ("bls", "REV"): "produccion"}
+    note = ch.insumos_note([ev("EMP", traj="rebote_bajo_pico"), ev("REV")], ctx(roles))
+    assert note == "insumos: bls:EMP rebote_bajo_pico"
+
+
+def test_role_table_separates_inputs_from_production():
+    from src.rank import role
+
+    rules = role.load_rules()
+
+    def r(title, units=""):
+        return role.role_of(rules, source="fred", series_id="X", title=title, units=units)
+
+    assert r("Aggregate Weekly Payrolls of All Employees") == "insumo"
+    assert r("Total Operating Expenses") == "insumo"
+    assert r("All Employees, Thousands of Persons") == "insumo"
+    assert r("Average Weekly Hours") == "insumo"
+    assert r("Total Revenue") == "produccion"
+    assert r("Retail Sales") == "produccion"
+    assert r("Value Added", units="Billions of Chained Dollars") == "produccion"
+    assert r("Something unrelated", units="Index") == "sin_clasificar"
+    rule = {"id": "x", "role": "otro", "match": {"title_regex": "a"}}
+    for bad in ({"version": 1, "rules": [rule]}, {"version": 2, "rules": []},
+                {"version": 1, "rules": [{"id": "x"}]}):  # fmt: skip
+        with pytest.raises(ValueError):
+            role.validate_table(bad)
 
 
 # --- precio ----------
@@ -223,11 +304,9 @@ def test_regulation_is_always_sin_dato_with_note():
     assert out.note == "falta vincular regulación con industria"
 
 
-def build(evidence, mk):
-    return ch.build_change(
-        phen(), evidence, mk, series=lambda s, i: None, deflator=None, deflator_id=None,
-        prices={}, p=P, dp=DP,
-    )  # fmt: skip
+def build(evidence, mk, roles=None):
+    c = ctx(roles if roles is not None else {KEY: "produccion"})
+    return ch.build_change(phen(), evidence, mk, ctx=c, p=P, dp=DP)
 
 
 def test_phrase_template_and_buckets():

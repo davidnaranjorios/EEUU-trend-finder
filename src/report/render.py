@@ -703,7 +703,7 @@ def _change(p: dict[str, Any]) -> str:
         return ""
     body = "".join(
         f"<tr><td>{esc(ChangeType[r['change_type']].value)}</td>"
-        f"<td>{esc(_STATUS[r['status']])}</td>"
+        f"<td>{esc(_STATUS[r['status']])} {_MARK[r['level']]}</td>"
         f"<td>{esc(fnum(r['value'], 2) if r.get('value') is not None else '')} "
         f"{esc(r.get('unit') or '')}</td><td>{esc(r.get('threshold') or '')}</td>"
         f"<td>{esc(r.get('period') or '')}</td><td>{esc(r.get('source_ref') or '')}</td>"
