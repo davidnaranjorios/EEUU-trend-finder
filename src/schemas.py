@@ -503,6 +503,39 @@ PHENOMENON_DIMENSIONS = TableSpec(
     key=("run_id", "phenomenon_id", "dimension", "metric"),
 )
 
+
+# Capa 3, pregunta 1 (ADR 0030): qué cambió, por fenómeno y tipo de cambio. `recuperacion` es fila
+# auxiliar (series que se recuperan sin cumplir «cantidad»); `phrase` repite la frase del fenómeno.
+class ChangeType(Enum):
+    cantidad = "Cantidad"
+    precio = "Precio"
+    productividad = "Productividad"
+    composicion = "Composición del mercado"
+    regulacion = "Regulación"
+    recuperacion = "Recuperación"
+
+
+CHANGE_TYPE_NAMES = tuple(ChangeType.__members__)
+CHANGE_STATUSES = ("si", "no", "sin_dato")
+PHENOMENON_CHANGE = TableSpec(
+    name="phenomenon_change",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("phenomenon_id", pa.string(), False),
+        ("change_type", pa.string(), False),
+        ("status", pa.string(), False),
+        ("value", pa.float64(), True),
+        ("unit", pa.string(), True),
+        ("threshold", pa.string(), True),
+        ("period", pa.string(), True),
+        ("source_ref", pa.string(), True),
+        ("note", pa.string(), True),
+        ("level", pa.string(), False),
+        ("phrase", pa.string(), False),
+    ),
+    key=("run_id", "phenomenon_id", "change_type"),
+)
+
 RANK_RUNS = TableSpec(
     name="rank_runs",
     schema=_schema(
@@ -548,6 +581,7 @@ ALL_SPECS = {
         NAICS_LINKS,
         RANK_PHENOMENA,
         PHENOMENON_DIMENSIONS,
+        PHENOMENON_CHANGE,
     )
 }
 
@@ -612,6 +646,17 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
             raise SchemaError(
                 f"phenomenon_dimensions: {bad[0]} filas con dimensión o nivel inválido"
             )
+    if spec is PHENOMENON_CHANGE:
+        kinds = ", ".join(f"'{x}'" for x in CHANGE_TYPE_NAMES)
+        sts = ", ".join(f"'{x}'" for x in CHANGE_STATUSES)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE change_type NOT IN ({kinds}) OR status NOT IN ({sts}) "
+            "OR (status = 'sin_dato' AND (value IS NOT NULL OR level <> 'sin_dato')) "
+            "OR (status <> 'sin_dato' AND (value IS NULL OR level = 'sin_dato')) "
+            f"OR level NOT IN ({', '.join(repr(x) for x in DIMENSION_LEVELS)})"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(f"phenomenon_change: {bad[0]} filas con tipo o estado inválido")
     if spec is RANK_PHENOMENA:
         allowed = ", ".join(f"'{x}'" for x in RANK_STATUSES)
         dirs = ", ".join(f"'{x}'" for x in PHENOMENON_DIRECTIONS)

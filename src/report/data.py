@@ -28,9 +28,11 @@ from src.report.narrative import regime_sentence, slope_sentence, term_sentence
 from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
 from src.schemas import (
+    CHANGE_TYPE_NAMES,
     DETECTOR_RUNS,
     DIMENSION_NAMES,
     NAICS_LINKS,
+    PHENOMENON_CHANGE,
     PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
@@ -117,6 +119,26 @@ def dimensions_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dic
 
 
 DIM_HIDDEN = frozenset({"run_id", "phenomenon_id", "public"})
+
+
+def change_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """«¿Qué cambió realmente?» por fenómeno (ADR 0030): frase y filas. `source_ref` y `note` solo
+    traen ids de series públicas (las con copyright se cuentan, no se listan)."""
+    if not rank_run:
+        return {}
+    try:
+        rows = _rank_rows(cfg, PHENOMENON_CHANGE, "phenomenon_change", rank_run["run_id"])
+    except (FileNotFoundError, OSError):  # corridas anteriores a la pregunta 1
+        return {}
+    order = {t: i for i, t in enumerate(CHANGE_TYPE_NAMES)}
+    out: dict[str, dict[str, Any]] = {}
+    for r in sorted(rows, key=lambda r: (r["phenomenon_id"], order[r["change_type"]])):
+        item = out.setdefault(r["phenomenon_id"], {"phrase": r["phrase"], "rows": []})
+        item["rows"].append({k: v for k, v in r.items() if k not in CHANGE_HIDDEN})
+    return out
+
+
+CHANGE_HIDDEN = frozenset({"run_id", "phenomenon_id", "phrase"})
 
 
 def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list[dict[str, Any]]:
