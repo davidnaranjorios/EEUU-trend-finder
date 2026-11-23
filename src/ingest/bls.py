@@ -559,13 +559,14 @@ class BlsAdapter:
         del catálogo (el archivo más grande suele cubrirlo todo; otros son subconjuntos, p. ej.
         solo lo reciente). La capa común deduplica (series_id, date) entre archivos.
         """
-        meta = self._catalog_meta(series_ids)
-        pending = {
-            sid: {m["observation_start"], m["observation_end"]}
-            for sid, m in meta.items()
-            if m["observation_start"] and m["observation_end"]
-        }
-        incomplete = set(series_ids) - set(pending)
+        meta = self._catalog_meta(unit.unit_id, series_ids)
+        # Qué falta ver de cada serie: bit 1 = su primera observación, bit 2 = la última (un entero
+        # por serie en vez de un conjunto de fechas: OEWS tiene ~1,9 M de series).
+        pending: dict[str, int] = {}
+        for sid, (_, start, end) in meta.items():
+            if start and end:
+                pending[sid] = 1 if start == end else 3
+        incomplete = len(series_ids) - len(pending)
         stats: Counter[str] = Counter()
         for f in self._data_files(unit):
             if not pending and not incomplete:
@@ -582,12 +583,13 @@ class BlsAdapter:
                     m = meta.get(sid)
                     if m is None:
                         continue
+                    attrs, start, end = m
                     try:
                         year = int(row[1])
                     except ValueError:
                         stats["filas_malformadas"] += 1
                         continue
-                    d = obs_date(year, row[2], m["frequency"])
+                    d = obs_date(year, row[2], attrs[0])
                     if d is None:
                         stats["periodo_descartado"] += 1
                         continue
@@ -596,17 +598,19 @@ class BlsAdapter:
                         stats["valor_no_numerico"] += 1
                     need = pending.get(sid)
                     if need is not None:
-                        need.discard(d)
-                        if not need:
+                        need &= ~((1 if d == start else 0) | (2 if d == end else 0))
+                        if need:
+                            pending[sid] = need
+                        else:
                             del pending[sid]
                     stats["filas"] += 1
                     yield {
                         "series_id": sid,
                         "date": d,
                         "value": value,
-                        "frequency": m["frequency"],
-                        "units": m["units"],
-                        "seasonal_adjustment": m["seasonal_adjustment"],
+                        "frequency": attrs[0],
+                        "units": attrs[1],
+                        "seasonal_adjustment": attrs[2],
                     }
         stats["series_sin_extremos"] = len(pending)
         self.log.info(
@@ -614,17 +618,49 @@ class BlsAdapter:
             extra={"fields": {"source": SOURCE, "unit": unit.unit_id, **dict(stats)}},
         )
 
-    def _catalog_meta(self, series_ids: set[str]) -> dict[str, dict[str, Any]]:
-        cols = ["series_id", "frequency", "units", "seasonal_adjustment"]
+    def _catalog_meta(
+        self, unit_id: str, series_ids: set[str]
+    ) -> dict[str, tuple[tuple[str | None, str | None, str | None], date | None, date | None]]:
+        """(frecuencia, unidades, ajuste), primera y última observación de cada serie pedida.
+
+        Se filtra por unidad en DuckDB y por pertenencia en Python. Pasar los ids como lista a la
+        consulta (`list_contains(?, series_id)`) es cuadrático: con 1,9 M de series de OEWS tardaba
+        más de una hora antes de leer una sola fila (ADR 0031). Solo se leen las columnas usadas y
+        los atributos repetidos se comparten entre series."""
         t = read_table(
             SOURCE_CATALOG,
             self.paths.catalog,
             source=SOURCE,
-            where="list_contains(?, series_id)",
-            params=[sorted(series_ids)],
+            where="unit = ?",
+            params=[unit_id],
+            columns=[
+                "series_id",
+                "unit",
+                "frequency",
+                "units",
+                "seasonal_adjustment",
+                "observation_start",
+                "observation_end",
+            ],
         )
-        keep = [*cols, "observation_start", "observation_end"]
-        return {r["series_id"]: r for r in t.select(keep).to_pylist()}
+        shared: dict[tuple[str | None, str | None, str | None], tuple] = {}
+        out: dict[str, tuple] = {}
+        cols = [
+            t.column(n).to_pylist()
+            for n in (
+                "series_id",
+                "frequency",
+                "units",
+                "seasonal_adjustment",
+                "observation_start",
+                "observation_end",
+            )
+        ]
+        for sid, freq, units, sa, start, end in zip(*cols, strict=True):
+            if sid in series_ids:
+                attrs = shared.setdefault((freq, units, sa), (freq, units, sa))
+                out[sid] = (attrs, start, end)
+        return out
 
     # --- E/S -----------------------------------------------------------------------------------
 

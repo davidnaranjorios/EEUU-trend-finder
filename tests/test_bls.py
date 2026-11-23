@@ -227,3 +227,64 @@ def test_repair_header_glued_first_row_and_empty_columns():
     )
     ok = ["series_id", "end_period"]
     assert bls.repair_header(ok, ["X", "M01"]) == (ok, [["X", "M01"]])
+
+
+def test_catalog_meta_scales_linearly_and_only_returns_the_unit(setup):
+    """Regresión OEWS (ADR 0031): pasar 1,9 M de ids como lista a DuckDB era cuadrático."""
+    import time
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from src.ingest.common import SOURCE_CATALOG
+
+    adapter, _, paths = setup
+    n = 150_000
+    ids = [f"OEUM{i:012d}" for i in range(n)]
+    other = [f"XXUM{i:012d}" for i in range(1000)]
+    allids = ids + other
+    units = ["oe"] * n + ["xx"] * len(other)
+    m = len(allids)
+    table = pa.table(
+        {
+            "source": ["bls"] * m,
+            "series_id": allids,
+            "unit": units,
+            "title": ["t"] * m,
+            "frequency": ["A"] * m,
+            "frequency_raw": ["A"] * m,
+            "units": ["USD"] * m,
+            "seasonal_adjustment": [None] * m,
+            "observation_start": [date(2020, 12, 31)] * m,
+            "observation_end": [date(2024, 12, 31)] * m,
+            "last_updated": [None] * m,
+            "discontinued": [False] * m,
+            "copyrighted": [False] * m,
+            "geo_level": ["nacional"] * m,
+            "geo_detail": [None] * m,
+            "category_path": ["x"] * m,
+        }
+    ).cast(SOURCE_CATALOG.schema)
+    part = paths.catalog / "bls" / "00"
+    part.mkdir(parents=True)
+    pq.write_table(table, part / "part-0.parquet")
+    t0 = time.monotonic()
+    meta = adapter._catalog_meta("oe", set(ids[: n // 2]))
+    assert time.monotonic() - t0 < 20  # la versión con list_contains tardaba minutos
+    assert set(meta) == set(ids[: n // 2])  # solo la unidad pedida y solo las series pedidas
+    attrs, start, end = meta[ids[0]]
+    assert attrs == ("A", "USD", None) and start == date(2020, 12, 31) and end == date(2024, 12, 31)
+
+
+def test_unchanged_unit_is_not_reprocessed(setup):
+    """La unidad con la misma huella de archivos `.data.*` y las mismas series no se baja."""
+    adapter, ing, _ = setup
+    ing.crawl(full=True, run_id="r1")
+    first = ing.download()
+    assert first["units_fetched"] >= 1
+    n_get = len([r for r in adapter.fake.requests if "data" in r.url.path])
+    second = ing.download()
+    assert (
+        second.get("units_fetched", 0) == 0 and second["units_unchanged"] == first["units_fetched"]
+    )
+    assert len([r for r in adapter.fake.requests if "data" in r.url.path]) == n_get
