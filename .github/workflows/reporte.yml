@@ -64,7 +64,7 @@ jobs:
         run: |
           infra/pull_r2.sh processed/series processed/series_meta processed/lineage \
             processed/term_freq processed/_internal/fred_series_attrs \
-            processed/_internal/embeddings processed/rank signals logs reports
+            processed/_internal/embeddings processed/rank processed/market signals logs reports
       # Su registro va a logs/reporte/ (config report.runs_file): logs/ entero lo sincroniza solo
       # el grupo "ingesta"; desde aquí pisaría runs.jsonl de una corrida en paralelo.
       - name: Ranking

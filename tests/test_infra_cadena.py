@@ -95,3 +95,10 @@ def test_missing_structure_partition_forces_reprocess_of_current_schema():
     assert state.needs_run("2024-01", 20, now, min_schema=6, structure_missing=True)
     # un periodo sin documentos no tiene partición: no se reprocesa en cada corrida
     assert not state.needs_run("2024-02", 20, now, min_schema=6, structure_missing=True)
+
+
+def test_reporte_pulls_market_metrics_used_by_dimensions():
+    """`src.rank` lee `market/naics_metrics` (dimensiones y «qué cambió», ADR 0029/0030): el
+    workflow Reporte debe traerlo de R2 o esas cifras salen como «sin dato»."""
+    pull = next(s["run"] for s in _steps("reporte.yml") if "pull_r2.sh" in s.get("run", ""))
+    assert "processed/market" in re.sub(r"\s+", " ", pull)
