@@ -298,6 +298,12 @@ def _parse_mtime(value: str) -> datetime | None:
 # --- adaptador ---------------------------------------------------------------------------------
 
 
+# Columnas del catálogo que lee `_catalog_meta` (nombres de campo del esquema, no temas).
+META_COLUMNS = (
+    "series_id frequency units seasonal_adjustment observation_start observation_end"
+).split()
+
+
 class BlsAdapter:
     """`SourceAdapter` de BLS sobre los archivos masivos (ver docstring del módulo)."""
 
@@ -633,29 +639,11 @@ class BlsAdapter:
             source=SOURCE,
             where="unit = ?",
             params=[unit_id],
-            columns=[
-                "series_id",
-                "unit",
-                "frequency",
-                "units",
-                "seasonal_adjustment",
-                "observation_start",
-                "observation_end",
-            ],
+            columns=["unit", *META_COLUMNS],
         )
         shared: dict[tuple[str | None, str | None, str | None], tuple] = {}
         out: dict[str, tuple] = {}
-        cols = [
-            t.column(n).to_pylist()
-            for n in (
-                "series_id",
-                "frequency",
-                "units",
-                "seasonal_adjustment",
-                "observation_start",
-                "observation_end",
-            )
-        ]
+        cols = [t.column(n).to_pylist() for n in META_COLUMNS]
         for sid, freq, units, sa, start, end in zip(*cols, strict=True):
             if sid in series_ids:
                 attrs = shared.setdefault((freq, units, sa), (freq, units, sa))
