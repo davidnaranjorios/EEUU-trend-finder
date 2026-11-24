@@ -13,10 +13,10 @@ retome; nada de esto está en curso.
 
 ## Problemas conocidos, sin decisión
 
-- **BLS no completa la ingesta.** Con el presupuesto duro (ADR 0019, PR #54) ya no cuelga el job:
-  BEA y Census terminan y sincronizan, pero BLS cae por el watchdog
-  (Ingesta 42952713094: `sources_update: fallaron bls(watchdog)`). Falta ver en los logs por unidad
-  qué encuesta lo frena. Mientras tanto BLS conserva los datos anteriores.
+- **BLS no completa la ingesta — resuelto (2026-11-23, ADR 0031; falta confirmarlo en la próxima
+  corrida real).** Causa: `_catalog_meta` era cuadrático en la unidad `oe` (OEWS, 1,9 M de series) y
+  no leía ni una fila en > 1 h. Ahora tarda ~16 s (medido con el archivo real). Además, una fuente
+  cortada por presupuesto o watchdog es parcial y ya no detiene la cadena.
 - **Series jóvenes (`relative_growth`)**: con el padre por categoría (ADR 0020, PR #55) aún no se
   ha medido cuántas de las ~2.977 series jóvenes consiguen padre ni cuántas dan señal. Mirar
   `report["relative_growth"]` de la próxima corrida de Detectores.

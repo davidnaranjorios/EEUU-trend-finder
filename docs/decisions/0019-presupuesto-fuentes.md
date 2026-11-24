@@ -67,3 +67,5 @@ suficiente el resultado es idéntico al anterior.
   escritura siguiente (ya existía). La sincronización posterior ignora los `.tmp`.
 - El watchdog usa `os._exit`: no ejecuta limpieza; el registro de la corrida (`runs.jsonl`) puede quedar sin
   cerrar.
+
+- 2026-11-23 (ADR 0031): una fuente cortada por presupuesto o watchdog es parcial (se sincroniza, avisa y la cadena sigue); la causa del corte de BLS era `_catalog_meta` cuadrático en `oe`.
