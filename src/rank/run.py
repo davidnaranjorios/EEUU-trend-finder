@@ -80,6 +80,7 @@ from src.schemas import (
     DETECTOR_RUNS,
     NAICS_LINKS,
     PHENOMENON_CHANGE,
+    PHENOMENON_CONSEQUENCES,
     PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
@@ -108,6 +109,7 @@ RANK_TABLES = {
     "rank_phenomena": RANK_PHENOMENA,
     "phenomenon_dimensions": PHENOMENON_DIMENSIONS,
     "phenomenon_change": PHENOMENON_CHANGE,
+    "phenomenon_consequences": PHENOMENON_CONSEQUENCES,
 }
 
 
@@ -1346,6 +1348,9 @@ def rank_run(
     from src.rank.change import run_change
 
     summary["change"] = run_change(cfg, run_id)
+    from src.rank.consequences import run_consequences
+
+    summary["consequences"] = run_consequences(cfg, run_id)
     if log is not None:
         log.info("ranking", extra={"fields": summary})
     return summary
@@ -1633,9 +1638,16 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
     c = sub.add_parser("change", help="qué cambió por fenómeno (capa 3, ADR 0030)")
     c.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
+    q2 = sub.add_parser("consequences", help="qué consecuencias genera por fenómeno (ADR 0032)")
+    q2.add_argument("--run-id", default=None, help="corrida de ranking (por defecto, la última)")
     args = parser.parse_args(argv)
     cfg = load_config()
     log = get_logger("rank", cfg["logging"]["level"])
+    if args.cmd == "consequences":
+        from src.rank.consequences import run_consequences
+
+        print(json.dumps(run_consequences(cfg, args.run_id), indent=2, ensure_ascii=False))
+        return 0
     if args.cmd == "change":
         from src.rank.change import run_change
 

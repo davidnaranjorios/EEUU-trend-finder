@@ -53,7 +53,7 @@ import re
 import sys
 import time
 from collections import Counter, OrderedDict, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -310,6 +310,7 @@ def parse_data(
     unit_param: str,
     skip_national: bool = False,
     key_titles: dict[str, str] | None = None,
+    title_fields: Sequence[str] | None = None,
 ) -> Parsed:
     """Agrupa las filas de GetData por serie.
 
@@ -364,6 +365,10 @@ def parse_data(
                     (" ".join(str(v).split()) for k, v in row.items() if DESC_FIELD_RE.search(k)),
                     "",
                 )
+                if title_fields:  # p. ej. insumo-producto: descripción de fila y de columna
+                    desc = " → ".join(
+                        " ".join(str(row[f]).split()) for f in title_fields if row.get(f)
+                    )
                 title = desc or (key_titles or {}).get(key) or key
                 if geo_name:
                     title = f"{title}, {geo_name}"
@@ -444,6 +449,7 @@ class BeaAdapter:
         self._units: list[Unit] | None = None
         self.stats: Counter[str] = Counter()
         self.skipped: dict[str, str] = {}
+        self.title_fields: Sequence[str] | None = None
 
     # --- solicitudes ---------------------------------------------------------------------
 
@@ -644,6 +650,7 @@ class BeaAdapter:
             "table": table,
             "table_desc": tdesc,
             "unit_param": plan.unit_param,
+            "title_fields": self.title_fields,
         }
         if level == "nacional":
             if plan.geo_param:

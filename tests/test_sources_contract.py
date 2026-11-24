@@ -23,7 +23,7 @@ from src.ingest.common import (
 from src.ingest.store import read_table
 from src.schemas import ELIGIBILITY, ELIGIBILITY_GROUPS, SERIES, SERIES_META, validate
 
-SOURCES = ["synthetic", "bls", "bea", "census", "cbp", "bds", "econcensus"]
+SOURCES = ["synthetic", "bls", "bea", "census", "cbp", "bds", "econcensus", "bea_io"]
 NOW = datetime(2026, 11, 3, 12, tzinfo=UTC)
 
 

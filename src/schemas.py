@@ -536,6 +536,39 @@ PHENOMENON_CHANGE = TableSpec(
     key=("run_id", "phenomenon_id", "change_type"),
 )
 
+
+# Capa 3, pregunta 2 (ADR 0032): consecuencias por fenómeno, solo cifras con fuente y nivel.
+class Consequence(Enum):
+    compradores = "Compradores afectados"
+    proveedores = "Proveedores afectados"
+    escasez = "Escasez de capacidad"
+    perdida_participacion = "Pérdida de participación"
+    margenes = "Márgenes"
+    problemas = "Problemas declarados"
+
+
+CONSEQUENCE_NAMES = tuple(Consequence.__members__)
+PHENOMENON_CONSEQUENCES = TableSpec(
+    name="phenomenon_consequences",
+    schema=_schema(
+        ("run_id", pa.string(), False),
+        ("phenomenon_id", pa.string(), False),
+        ("consequence", pa.string(), False),
+        ("metric", pa.string(), False),
+        ("value", pa.float64(), True),
+        ("value_text", pa.string(), True),
+        ("unit", pa.string(), True),
+        ("period", pa.string(), True),
+        ("source_ref", pa.string(), True),
+        ("level", pa.string(), False),
+        ("naics_used", pa.string(), True),
+        ("public", pa.bool_(), False),
+        ("note", pa.string(), True),
+        ("position", pa.int32(), False),  # orden de lectura dentro de la consecuencia
+    ),
+    key=("run_id", "phenomenon_id", "consequence", "metric"),
+)
+
 RANK_RUNS = TableSpec(
     name="rank_runs",
     schema=_schema(
@@ -582,6 +615,7 @@ ALL_SPECS = {
         RANK_PHENOMENA,
         PHENOMENON_DIMENSIONS,
         PHENOMENON_CHANGE,
+        PHENOMENON_CONSEQUENCES,
     )
 }
 
@@ -645,6 +679,18 @@ def _check_domains(table: pa.Table, spec: TableSpec) -> None:
         if bad[0]:
             raise SchemaError(
                 f"phenomenon_dimensions: {bad[0]} filas con dimensión o nivel inválido"
+            )
+    if spec is PHENOMENON_CONSEQUENCES:
+        kinds = ", ".join(f"'{x}'" for x in CONSEQUENCE_NAMES)
+        lvls = ", ".join(f"'{x}'" for x in DIMENSION_LEVELS)
+        bad = con.execute(
+            f"SELECT count(*) FROM t WHERE consequence NOT IN ({kinds}) OR level NOT IN ({lvls}) "
+            "OR (level = 'sin_dato' AND (value IS NOT NULL OR value_text IS NOT NULL)) "
+            "OR (level <> 'sin_dato' AND value IS NULL AND value_text IS NULL)"
+        ).fetchone()
+        if bad[0]:
+            raise SchemaError(
+                f"phenomenon_consequences: {bad[0]} filas con consecuencia o nivel inválido"
             )
     if spec is PHENOMENON_CHANGE:
         kinds = ", ".join(f"'{x}'" for x in CHANGE_TYPE_NAMES)
