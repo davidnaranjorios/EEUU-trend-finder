@@ -532,6 +532,7 @@ PHENOMENON_CHANGE = TableSpec(
         ("note", pa.string(), True),
         ("level", pa.string(), False),
         ("phrase", pa.string(), False),
+        ("percentile", pa.float64(), True),
     ),
     key=("run_id", "phenomenon_id", "change_type"),
 )
