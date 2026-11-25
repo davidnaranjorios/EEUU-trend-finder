@@ -10,8 +10,9 @@ Por fenómeno (candidato o en observación) clasifica cinco tipos de cambio, cad
   en la ventana del fenómeno, por encima de un umbral (pp por año);
 - productividad: el ingreso real (deflactado) por trabajador o por establecimiento sube más que el
   umbral entre censos económicos mientras el empleo está estable o cae;
-- composición: al menos uno de peso de subindustrias, CR4/CR8, % de empresas pequeñas, o tasa de
-  entrada/salida frente a la economía total;
+- composición: al menos `k` de 4 criterios (peso de subindustrias, CR4/CR8, % de empresas
+  pequeñas, entrada/salida frente a la economía) en la cola de la distribución de ese mismo cambio
+  entre las industrias del mismo nivel NAICS y periodo (umbral derivado de los datos, ADR 0033);
 - regulación: no hay vínculo entre documentos del Registro Federal e industria; queda `sin_dato`.
 
 Solo describe: no filtra ni toca detectores, FDR, ranking ni dimensiones. Los umbrales viven en
@@ -47,11 +48,10 @@ class ChangeParams:
     price_min_pp_year: float = 1.0
     productivity_min_pct_year: float = 1.0
     employment_stable_pct_year: float = 1.0
-    subindustry_shift_pp: float = 5.0
-    concentration_shift_pp: float = 2.0
-    small_share_shift_pp: float = 2.0
-    entry_exit_gap_pp: float = 2.0
     composition_years: int = 7
+    tail_quantile: float = 0.8  # un criterio cuenta si su cambio absoluto está en esta cola
+    min_criteria: int = 2  # criterios en la cola para decir «composición: sí»
+    min_peers: int = 10  # industrias del mismo nivel mínimas para formar la distribución
 
 
 def params_from(cfg: Mapping[str, Any]) -> ChangeParams:
@@ -60,11 +60,10 @@ def params_from(cfg: Mapping[str, Any]) -> ChangeParams:
         float(c["price_min_pp_year"]),
         float(c["productivity_min_pct_year"]),
         float(c["employment_stable_pct_year"]),
-        float(c["child_naics_shift_pp"]),
-        float(c["concentration_shift_pp"]),
-        float(c["small_share_shift_pp"]),
-        float(c["entry_exit_gap_pp"]),
         int(c["composition_years"]),
+        float(c["composition_tail_quantile"]),
+        int(c["composition_min_criteria"]),
+        int(c["composition_min_peers"]),
     )
 
 
@@ -79,6 +78,7 @@ class Out:
     source_ref: str | None = None
     note: str | None = None
     level: str | None = None  # directo ✅ / indirecto 🟡; None: se deduce del estado
+    percentile: float | None = None  # composición: percentil del k-ésimo criterio más alto
 
 
 def label(change_type: str) -> str:
@@ -373,13 +373,48 @@ def classify_productivity(
 # --- composición ----------
 
 
-def _children(market: dm.Market, target: str, metric: str) -> dict[str, dict[int, float]]:
-    n = len(target) + 1
-    return {
-        c: {y: v[0] for y, v in s.items()}
-        for (c, m), s in market.data.items()
-        if m == metric and len(c) == n and c.startswith(target) and "-" not in c
-    }
+def _level(code: str) -> int:
+    """Nivel NAICS de un código: sus dígitos; los rangos («31-33») forman su propio nivel."""
+    return -1 if "-" in code else len(code)
+
+
+class _Index:
+    """Índices del `Market` para armar la distribución de cada cambio entre industrias del mismo
+    nivel. Se construyen una sola vez por `Market` (el sondeo directo recorre todo el mercado)."""
+
+    def __init__(self, market: dm.Market) -> None:
+        self.by_metric: dict[str, dict[str, dict[int, float]]] = defaultdict(dict)
+        self.kids: dict[tuple[str, str], dict[str, dict[int, float]]] = defaultdict(dict)
+        for (c, m), s in market.data.items():
+            vals = {y: v[0] for y, v in s.items()}
+            self.by_metric[m][c] = vals
+            if "-" not in c and len(c) > 1:
+                self.kids[(m, c[:-1])][c] = vals
+        self.cache: dict[tuple[Any, ...], list[float]] = {}
+
+
+def _index(market: dm.Market) -> _Index:
+    ix = market.__dict__.get("_change_index")
+    if ix is None:
+        ix = market.__dict__["_change_index"] = _Index(market)
+    return ix
+
+
+def _shift_of(
+    kids: Mapping[str, Mapping[int, float]], years_back: int
+) -> tuple[float, int, int, str] | None:
+    if len(kids) < 2:
+        return None
+    y1 = max(y for s in kids.values() for y in s)
+    for y0 in sorted({y for s in kids.values() for y in s if y1 - years_back <= y < y1}):
+        both = {c: s for c, s in kids.items() if s.get(y0, 0) > 0 and s.get(y1, 0) > 0}
+        if len(both) < 2:
+            continue
+        t0, t1 = sum(s[y0] for s in both.values()), sum(s[y1] for s in both.values())
+        shifts = {c: 100 * (s[y1] / t1 - s[y0] / t0) for c, s in both.items()}
+        c = max(shifts, key=lambda k: abs(shifts[k]))
+        return shifts[c], y0, y1, c
+    return None
 
 
 def subindustry_shift(
@@ -387,20 +422,10 @@ def subindustry_shift(
 ) -> tuple[float, int, int, str] | None:
     """(mayor cambio de peso en pp, año inicial, año final, subindustria) con el empleo de CBP de
     los hijos NAICS directos. Solo hijos presentes y > 0 en ambos años."""
+    ix = _index(market)
     for metric in ("employment", "establishments"):
-        kids = _children(market, target, metric)
-        if len(kids) < 2:
-            continue
-        y1 = max(y for s in kids.values() for y in s)
-        cand = sorted({y for s in kids.values() for y in s if y1 - years_back <= y < y1})
-        for y0 in cand:
-            both = {c: s for c, s in kids.items() if s.get(y0, 0) > 0 and s.get(y1, 0) > 0}
-            if len(both) < 2:
-                continue
-            t0, t1 = sum(s[y0] for s in both.values()), sum(s[y1] for s in both.values())
-            shifts = {c: 100 * (s[y1] / t1 - s[y0] / t0) for c, s in both.items()}
-            c = max(shifts, key=lambda k: abs(shifts[k]))
-            return shifts[c], y0, y1, c
+        if (r := _shift_of(ix.kids.get((metric, target), {}), years_back)) is not None:
+            return r
     return None
 
 
@@ -413,54 +438,137 @@ def _delta(market: dm.Market, target: str, metric: str) -> tuple[float, int, int
     return None
 
 
+def _peers_delta(market: dm.Market, metric: str, code: str, y0: int, y1: int) -> list[float]:
+    """|cambio| de `metric` entre y0 y y1 en todas las industrias del nivel de `code`."""
+    ix = _index(market)
+    key = ("delta", metric, _level(code), y0, y1)
+    if key not in ix.cache:
+        lv = _level(code)
+        ix.cache[key] = [
+            abs(s[y1] - s[y0])
+            for c, s in ix.by_metric.get(metric, {}).items()
+            if _level(c) == lv and y0 in s and y1 in s
+        ]
+    return ix.cache[key]
+
+
+def _peers_shift(market: dm.Market, code: str, y0: int, y1: int, years_back: int) -> list[float]:
+    ix = _index(market)
+    key = ("shift", _level(code), y0, y1, years_back)
+    if key not in ix.cache:
+        lv = _level(code)
+        vals: list[float] = []
+        for (metric, parent), kids in ix.kids.items():
+            if metric != "employment" and metric != "establishments":
+                continue
+            if _level(parent) != lv:
+                continue
+            if metric == "establishments" and ix.kids.get(("employment", parent)):
+                if _shift_of(ix.kids[("employment", parent)], years_back) is not None:
+                    continue  # el empleo ya definió el cambio de esta industria
+            r = _shift_of(kids, years_back)
+            if r is not None and (r[1], r[2]) == (y0, y1):
+                vals.append(abs(r[0]))
+        ix.cache[key] = vals
+    return ix.cache[key]
+
+
+def _peers_gap(market: dm.Market, metric: str, code: str, year: int) -> list[float]:
+    """|tasa − tasa de la economía total| del mismo año en las industrias del nivel de `code`."""
+    ix = _index(market)
+    key = ("gap", metric, _level(code), year)
+    if key not in ix.cache:
+        econ = ix.by_metric.get(metric, {}).get("00", {}).get(year)
+        lv = _level(code)
+        ix.cache[key] = (
+            []
+            if econ is None
+            else [
+                abs(s[year] - econ)
+                for c, s in ix.by_metric.get(metric, {}).items()
+                if c != "00" and _level(c) == lv and year in s
+            ]
+        )
+    return ix.cache[key]
+
+
+def _tail(peers: Sequence[float], x: float, p: ChangeParams) -> tuple[bool, float, float] | None:
+    """(¿en la cola?, percentil observado 0-100, umbral) frente a la distribución del mismo
+    cambio en las industrias del mismo nivel y periodo; None si hay pocas industrias."""
+    if len(peers) < p.min_peers:
+        return None
+    a = np.asarray(peers, dtype=float)
+    thr = float(np.quantile(a, p.tail_quantile))
+    return abs(x) >= thr, float(100 * np.mean(a <= abs(x))), thr
+
+
 def classify_composition(target: str | None, market: dm.Market, p: ChangeParams) -> Out:
     out = Out(
         "composicion",
-        unit="criterios cumplidos",
+        unit="criterios en la cola",
         threshold=(
-            f"subindustrias ≥ {p.subindustry_shift_pp:g} pp; "
-            f"CR4/CR8 ≥ {p.concentration_shift_pp:g} "
-            f"pp; pequeñas ≥ {p.small_share_shift_pp:g} pp; entrada/salida ≥ "
-            f"{p.entry_exit_gap_pp:g} pp"
+            f"≥ {p.min_criteria} de 4 criterios con cambio absoluto ≥ P{p.tail_quantile * 100:g} "
+            "de las industrias del mismo nivel NAICS y periodo"
         ),
     )
     if not target:
         out.note = "sin industria"
         return out
-    parts: list[str] = []
-    fired = 0
-    seen = 0
+    # criterio -> (en la cola, percentil, texto)
+    crit: dict[str, list[tuple[bool, float, str]]] = defaultdict(list)
     periods: list[str] = []
 
-    def add(name: str, val: float, thr: float, period: str, extra: str = "") -> None:
-        nonlocal fired, seen
-        seen += 1
-        hit = abs(val) >= thr
-        fired += hit
-        parts.append(f"{name} {val:+.1f} pp{extra} ({'sí' if hit else 'no'})")
+    def add(group: str, name: str, val: float, res: tuple[bool, float, float] | None, period: str,
+            extra: str = "") -> None:  # fmt: skip
+        if res is None:
+            return
+        hit, pct, thr = res
+        crit[group].append(
+            (hit, pct, f"{name} {val:+.1f} pp{extra} (P{pct:.0f}, corte {thr:.1f}: "
+             f"{'cola' if hit else 'fuera'})")
+        )  # fmt: skip
         periods.append(period)
 
     if (sh := subindustry_shift(market, target, p.composition_years)) is not None:
-        add("peso de subindustrias", sh[0], p.subindustry_shift_pp, f"{sh[1]} a {sh[2]}",
-            f" [{sh[3]}]")  # fmt: skip
+        peers = _peers_shift(market, target, sh[1], sh[2], p.composition_years)
+        add("subindustrias", "peso de subindustrias", sh[0], _tail(peers, sh[0], p),
+            f"{sh[1]} a {sh[2]}", f" [{sh[3]}]")  # fmt: skip
     for metric, name in (("cr4", "CR4"), ("cr8", "CR8")):
         if (d := _delta(market, target, metric)) is not None:
-            add(name, d[0], p.concentration_shift_pp, f"{d[1]} a {d[2]}")
+            peers = _peers_delta(market, metric, d[3], d[1], d[2])
+            add("concentración", name, d[0], _tail(peers, d[0], p), f"{d[1]} a {d[2]}")
     if (d := _delta(market, target, "small_firm_share")) is not None:
-        add("empresas pequeñas", d[0], p.small_share_shift_pp, f"{d[1]} a {d[2]}")
+        peers = _peers_delta(market, "small_firm_share", d[3], d[1], d[2])
+        add(
+            "empresas pequeñas",
+            "empresas pequeñas",
+            d[0],
+            _tail(peers, d[0], p),
+            f"{d[1]} a {d[2]}",
+        )
     for metric, name in (("entry_rate", "entrada"), ("exit_rate", "salida")):
         r = market.climb(target, metric)
         econ = market.latest("00", metric, r[1]) if r else None
         if r and econ:
-            add(f"{name} vs economía total", r[2] - econ[1], p.entry_exit_gap_pp, str(r[1]))
-    if not seen:
-        out.note = "sin datos de composición para la industria"
+            gap = r[2] - econ[1]
+            add("entrada/salida", f"{name} vs economía total", gap,
+                _tail(_peers_gap(market, metric, r[0], r[1]), gap, p), str(r[1]))  # fmt: skip
+    if not crit:
+        out.note = "sin datos de composición para la industria (o pocas industrias del mismo nivel)"
         return out
-    out.status = SI if fired else NO
-    out.value = float(fired)
+    fired = sorted(
+        (max(pc for _, pc, _ in v) for v in crit.values() if any(h for h, _, _ in v)),
+        reverse=True,
+    )
+    pcts = sorted((max(pc for _, pc, _ in v) for v in crit.values()), reverse=True)
+    out.status = SI if len(fired) >= p.min_criteria else NO
+    out.value = float(len(fired))
+    out.percentile = pcts[p.min_criteria - 1] if len(pcts) >= p.min_criteria else None
     out.period = "; ".join(sorted(set(periods)))
     out.source_ref = "market/naics_metrics"
-    out.note = " · ".join(parts)
+    out.note = f"{len(crit)} de 4 criterios evaluables · " + " · ".join(
+        t for v in crit.values() for _, _, t in v
+    )
     return out
 
 
@@ -556,6 +664,7 @@ def to_table_rows(run_id: str, phenomenon_id: str, rows: Sequence[Out]) -> list[
             "source_ref": r.source_ref,
             "note": r.note,
             "level": r.level or ("sin_dato" if r.status == SD else "directo"),
+            "percentile": dm.clean(r.percentile),
             "phrase": text,
         }
         for r in rows

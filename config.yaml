@@ -403,11 +403,13 @@ rank:
     price_min_pp_year: 1.0            # precio de la industria menos deflactor, puntos porcentuales por año
     productivity_min_pct_year: 1.0    # ingreso real por trabajador o establecimiento, % por año
     employment_stable_pct_year: 1.0   # empleo estable si su CAGR no supera esto (o si cae)
-    child_naics_shift_pp: 5.0         # cambio del peso de una subindustria, puntos porcentuales
-    concentration_shift_pp: 2.0       # cambio de CR4 o CR8 entre censos, puntos porcentuales
-    small_share_shift_pp: 2.0         # cambio del % de empresas pequeñas, puntos porcentuales
-    entry_exit_gap_pp: 2.0            # tasa de entrada o salida frente a la economía total
     composition_years: 7              # años hacia atrás para los pesos de subindustrias (CBP)
+    # Composición (ADR 0033): cada criterio se compara con la distribución de ese mismo cambio en
+    # todas las industrias del mismo nivel NAICS y periodo (market/naics_metrics); cuenta si su
+    # cambio absoluto cae en la cola (cuantil) y «composición» = sí con al menos k criterios.
+    composition_tail_quantile: 0.8
+    composition_min_criteria: 2
+    composition_min_peers: 10         # industrias del nivel mínimas para formar la distribución
   # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se
   # regresa sobre Δ de la tasa de corto plazo (context.reference_series.short_rate), rezagos
   # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary

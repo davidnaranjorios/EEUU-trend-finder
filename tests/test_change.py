@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 
 import pyarrow as pa
@@ -248,35 +249,68 @@ def test_productivity_sin_dato():
 # --- composición ----------
 
 
-def test_composition_each_criterion_alone_triggers():
-    cases = {
-        "subindustrias": {
-            ("62311", "employment", 2016): 50.0, ("62311", "employment", 2023): 80.0,
-            ("62312", "employment", 2016): 50.0, ("62312", "employment", 2023): 20.0,
-        },
-        "cr4": {("6231", "cr4", 2017): 10.0, ("6231", "cr4", 2022): 13.0},
-        "cr8": {("6231", "cr8", 2017): 10.0, ("6231", "cr8", 2022): 7.0},
-        "pequenas": {
-            ("6231", "small_firm_share", 2017): 20.0, ("6231", "small_firm_share", 2022): 23.0
-        },
-        "entrada": {("6231", "entry_rate", 2023): 14.0, ("00", "entry_rate", 2023): 10.0},
-        "salida": {("6231", "exit_rate", 2023): 5.0, ("00", "exit_rate", 2023): 9.0},
-    }  # fmt: skip
-    for name, rows in cases.items():
-        out = ch.classify_composition("6231", market(rows), P)
-        assert (out.status, out.value) == ("si", 1.0), name
+def comp_market(hot=(), n=20):
+    """20 industrias de 4 dígitos con cambios 0.0, 0.1 … 1.9 en cada criterio; el objetivo
+    «6231» tiene 5.0 (cola) en los criterios de `hot` y 0.05 (centro-bajo) en el resto."""
+    rows = {}
+    for i in range(n):
+        c, d = f"{1000 + i}", 0.1 * i
+        rows[(c, "cr4", 2017)], rows[(c, "cr4", 2022)] = 10.0, 10.0 + d
+        rows[(c, "cr8", 2017)], rows[(c, "cr8", 2022)] = 10.0, 10.0 + d
+        rows[(c, "small_firm_share", 2017)], rows[(c, "small_firm_share", 2022)] = 20.0, 20.0 + d
+        rows[(c, "entry_rate", 2023)] = 10.0 + d
+        rows[(f"{c}1", "employment", 2016)] = rows[(f"{c}2", "employment", 2016)] = 50.0
+        rows[(f"{c}1", "employment", 2023)], rows[(f"{c}2", "employment", 2023)] = (
+            50.0 + d,
+            50.0 - d,
+        )
+    rows[("00", "entry_rate", 2023)] = 10.0
+    t = {k: 5.0 if k in hot else 0.05 for k in ("sub", "conc", "peq", "ent")}
+    rows[("6231", "cr4", 2017)], rows[("6231", "cr4", 2022)] = 10.0, 10.0 + t["conc"]
+    rows[("6231", "cr8", 2017)], rows[("6231", "cr8", 2022)] = 10.0, 10.0 + t["conc"]
+    rows[("6231", "small_firm_share", 2017)] = 20.0
+    rows[("6231", "small_firm_share", 2022)] = 20.0 + t["peq"]
+    rows[("6231", "entry_rate", 2023)] = 10.0 + t["ent"]
+    rows[("62311", "employment", 2016)] = rows[("62312", "employment", 2016)] = 50.0
+    rows[("62311", "employment", 2023)] = 50.0 + t["sub"]
+    rows[("62312", "employment", 2023)] = 50.0 - t["sub"]
+    return market(rows)
 
 
-def test_composition_no_when_all_evaluated_below_thresholds():
-    rows = {
-        ("6231", "cr4", 2017): 10.0, ("6231", "cr4", 2022): 10.5,
-        ("6231", "small_firm_share", 2017): 20.0, ("6231", "small_firm_share", 2022): 20.5,
-        ("6231", "entry_rate", 2023): 10.5, ("00", "entry_rate", 2023): 10.0,
-        ("62311", "employment", 2016): 50.0, ("62311", "employment", 2023): 52.0,
-        ("62312", "employment", 2016): 50.0, ("62312", "employment", 2023): 48.0,
-    }  # fmt: skip
-    out = ch.classify_composition("6231", market(rows), P)
+def test_composition_one_criterion_is_not_enough():
+    for hot in ("sub", "conc", "peq", "ent"):
+        out = ch.classify_composition("6231", comp_market({hot}), P)
+        assert (out.status, out.value) == ("no", 1.0), hot
+
+
+def test_composition_two_criteria_in_tail_is_si():
+    out = ch.classify_composition("6231", comp_market({"conc", "peq"}), P)
+    assert (out.status, out.value) == ("si", 2.0)
+    assert out.percentile is not None and out.percentile >= 80.0
+    assert "P" in out.note and "cola" in out.note
+
+
+def test_composition_cr4_and_cr8_count_as_one_criterion():
+    out = ch.classify_composition("6231", comp_market({"conc"}), P)
+    assert out.value == 1.0  # CR4 y CR8 en la cola siguen siendo un solo criterio
+
+
+def test_composition_k_and_quantile_come_from_config():
+    one = replace(P, min_criteria=1)
+    assert ch.classify_composition("6231", comp_market({"peq"}), one).status == "si"
+    assert ch.classify_composition("6231", comp_market(), P).status == "no"
+    loose = replace(P, tail_quantile=0.0)  # toda la distribución cuenta como cola
+    assert ch.classify_composition("6231", comp_market(), loose).status == "si"
+
+
+def test_composition_none_in_tail_has_low_percentile():
+    out = ch.classify_composition("6231", comp_market(), P)
     assert (out.status, out.value) == ("no", 0.0)
+    assert out.percentile is not None and out.percentile < 20.0
+
+
+def test_composition_few_peers_is_sin_dato():
+    assert ch.classify_composition("6231", comp_market({"conc"}, n=3), P).status == "sin_dato"
 
 
 def test_composition_sin_dato():
@@ -312,7 +346,7 @@ def build(evidence, mk, roles=None):
 def test_phrase_template_and_buckets():
     rows = build(
         [ev("A", traj="rebote_bajo_pico")],
-        market({("6231", "cr4", 2017): 1.0, ("6231", "cr4", 2022): 9.0}),
+        comp_market({"conc", "peq"}),
     )
     text = ch.phrase(rows)
     assert text == (
