@@ -141,3 +141,5 @@ mismo dato de dos fuentes en un cluster y lo cuenta como una sola agencia.
   fuente, sin cambios en "Verificar R2".
 - Los exportes (`src/export.py`) siguen siendo solo de FRED; agregar las fichas de estas fuentes
   queda para la Fase 5.
+
+- 2026-11-23 (ADR 0031): una fuente cortada por presupuesto o watchdog es parcial (se sincroniza, avisa y la cadena sigue); la causa del corte de BLS era `_catalog_meta` cuadrático en `oe`.

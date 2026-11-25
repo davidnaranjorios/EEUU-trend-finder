@@ -2,7 +2,9 @@
 # Fuentes de la Fase 4 (BLS, BEA, Census; ADR 0007 y 0019): catálogo incremental + valores vigentes.
 #
 # Corre después de FRED en el mismo job (run_actions.sh). Cada fuente es independiente: si una
-# falla, se cuelga o se queda sin tiempo, las demás siguen y el script termina en error al final.
+# falla, las demás siguen y el script termina en error al final. Si se cuelga o se queda sin tiempo
+# (presupuesto o watchdog) es PARCIAL: se sincroniza lo hecho, se avisa y el script sale con éxito
+# para que la cadena (ADR 0027) siga; un error real sigue fallando.
 # `update` es reanudable (estado por unidad) y respeta un presupuesto de minutos por fuente; lo
 # pendiente (código 10) sigue en la corrida siguiente. Tras cada fuente se sincronizan solo sus
 # rutas, así nunca se toca lo de FRED ni lo de texto.
@@ -38,6 +40,15 @@ if [[ $# -eq 0 ]]; then set -- bls bea census cbp bds econcensus bea_io; fi
 START=$SECONDS
 failed=()
 skipped=()
+# Fuentes cortadas por su presupuesto o watchdog (ADR 0031): lo hecho se sincroniza y la cadena
+# sigue. Un error real (rc distinto de 0/10/11/124/137) sí cuenta como fallo.
+partial=()
+warn() {
+  echo "sources_update: AVISO $*" >&2
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    echo "⚠️ sources_update: $*" >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
 for src in "$@"; do
   # Tiempo del script que queda, descontando el margen y la sincronización de esta fuente.
   left=$(( TOTAL_S - (SECONDS - START) - GRACE_S - SYNC_S ))
@@ -56,11 +67,11 @@ for src in "$@"; do
     uv run --quiet python -m src.ingest."$src" update --budget-min "$(awk "BEGIN{print $budget/60}")" \
     >/dev/null || rc=$?
   if [[ $rc -eq 124 || $rc -eq 137 ]]; then
-    echo "sources_update: $src cortada por timeout (rc=$rc); se sincroniza lo hecho" >&2
-    failed+=("$src(timeout)")
+    warn "$src cortada por timeout (rc=$rc); parcial: se sincroniza lo hecho y la cadena sigue"
+    partial+=("$src(timeout)")
   elif [[ $rc -eq 11 ]]; then
-    echo "sources_update: $src cortada por su watchdog (rc=11); se sincroniza lo hecho" >&2
-    failed+=("$src(watchdog)")
+    warn "$src cortada por su watchdog (rc=11); parcial: se sincroniza lo hecho y la cadena sigue"
+    partial+=("$src(watchdog)")
   elif [[ $rc -ne 0 && $rc -ne 10 ]]; then
     echo "sources_update: $src falló (rc=$rc)" >&2
     failed+=("$src")
@@ -97,6 +108,9 @@ for src in "$@"; do
 done
 if [[ ${#skipped[@]} -gt 0 ]]; then
   echo "sources_update: sin tiempo, pendientes para la próxima corrida: ${skipped[*]}" >&2
+fi
+if [[ ${#partial[@]} -gt 0 ]]; then
+  warn "fuentes parciales (cortadas por presupuesto o watchdog): ${partial[*]}"
 fi
 if [[ ${#failed[@]} -gt 0 ]]; then
   echo "sources_update: fallaron ${failed[*]}" >&2

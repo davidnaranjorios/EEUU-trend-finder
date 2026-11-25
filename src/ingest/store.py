@@ -19,6 +19,7 @@ import re
 import shutil
 import sys
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -254,8 +255,12 @@ def read_table(
     source: str,
     where: str | None = None,
     params: list | None = None,
+    columns: Sequence[str] | None = None,
 ) -> pa.Table:
-    """Lee todas las particiones de `source` (opcionalmente filtradas con SQL `where`)."""
+    """Lee todas las particiones de `source` (opcionalmente filtradas con SQL `where`).
+
+    `columns` limita la lectura a esas columnas del esquema (catálogos grandes: títulos y rutas
+    no se cargan si no se usan)."""
     source_dir = Path(root) / source
     recover(source_dir)
     files = sorted(source_dir.glob("??/*.parquet")) if source_dir.is_dir() else []
@@ -274,7 +279,8 @@ def read_table(
             ).fetchall()
         }
         select = []
-        for field in spec.schema:
+        schema = pa.schema([f for f in spec.schema if columns is None or f.name in columns])
+        for field in schema:
             if field.name in present:
                 select.append(field.name)
             elif field.nullable:
@@ -287,7 +293,7 @@ def read_table(
         table = con.execute(sql, [paths, *(params or [])]).to_arrow_table()
     finally:
         con.close()
-    return table.cast(spec.schema)
+    return table.cast(schema)
 
 
 # --- Particiones por periodo (texto, ADR 0005) ------------------------------------------------

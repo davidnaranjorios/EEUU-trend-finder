@@ -247,9 +247,13 @@ case "$*" in {fail_pat}) exit 3;; esac
 def _codes(behavior):
     out = {}
     for src, what in behavior.items():
-        out[src] = {"hang": "sleep 30", "pending": "exit 10", "ok": "exit 0", "fail": "exit 2"}[
-            what
-        ]
+        out[src] = {
+            "hang": "sleep 30",
+            "watchdog": "exit 11",
+            "pending": "exit 10",
+            "ok": "exit 0",
+            "fail": "exit 2",
+        }[what]
     return out
 
 
@@ -283,9 +287,28 @@ def test_script_timeout_kills_a_hung_source_syncs_what_was_done_and_runs_the_res
     # Las tres fuentes corrieron y las tres se sincronizaron (también la cortada), en orden.
     assert [u.split("src.ingest.")[1].split()[0] for u in updates] == ["bls", "bea", "census"]
     assert [s.split("processed/series/")[1].split()[0] for s in syncs] == ["bls", "bea", "census"]
-    assert res.returncode == 1  # visible: una fuente fue cortada
-    assert "bls cortada por timeout" in res.stderr and "fallaron bls(timeout)" in res.stderr
-    assert "bea" not in res.stderr.split("fallaron")[-1]  # pendiente (10) no es fallo
+    # Cortada por presupuesto: parcial (ADR 0031). Se avisa, pero la cadena sigue (exit 0).
+    assert res.returncode == 0
+    assert "bls cortada por timeout" in res.stderr and "fuentes parciales" in res.stderr
+    assert "fallaron" not in res.stderr  # pendiente (10) y parcial no son fallo
+
+
+def test_script_watchdog_cut_is_partial_warns_in_step_summary_and_chain_continues(tmp_path):
+    bin_dir, calls = _script_env(tmp_path, {"bls": "watchdog", "bea": "ok"})
+    summary = tmp_path / "summary.md"
+    res = _run_script(tmp_path, bin_dir, {"GITHUB_STEP_SUMMARY": str(summary)}, "bls", "bea")
+    assert res.returncode == 0
+    assert "bls cortada por su watchdog" in res.stderr
+    assert "bls(watchdog)" in summary.read_text()
+    syncs = [ln for ln in calls.read_text().splitlines() if ln.startswith("sync ")]
+    assert len(syncs) == 2  # lo hecho por bls se sincroniza igual
+
+
+def test_script_real_error_still_fails_even_next_to_a_partial_source(tmp_path):
+    bin_dir, _ = _script_env(tmp_path, {"bls": "watchdog", "bea": "fail"})
+    res = _run_script(tmp_path, bin_dir, {}, "bls", "bea")
+    assert res.returncode == 1
+    assert "fallaron bea" in res.stderr and "bls" not in res.stderr.split("fallaron")[-1]
 
 
 def test_script_a_sync_failure_does_not_stop_the_other_sources(tmp_path):
