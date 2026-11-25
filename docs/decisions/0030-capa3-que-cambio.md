@@ -84,6 +84,6 @@ Efecto en la corrida de referencia (33 fenómenos): la mayoría de los fenómeno
 de producción evaluable (su respaldo son precios, empleo u otros insumos), así que cantidad queda
 `sin_dato` en 31; es el comportamiento pedido (los insumos no son cantidad), no una pérdida de datos.
 
-## Ajuste del 2026-11-24: composición con umbrales derivados de los datos (ADR 0031)
+## Ajuste del 2026-11-24: composición con umbrales derivados de los datos (ADR 0033)
 Los cuatro umbrales fijos en pp de «composición» y la regla «basta 1 criterio» se reemplazaron;
-ver `docs/decisions/0031-composicion-por-colas.md`.
+ver `docs/decisions/0033-composicion-por-colas.md`.

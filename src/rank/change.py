@@ -12,7 +12,7 @@ Por fenómeno (candidato o en observación) clasifica cinco tipos de cambio, cad
   umbral entre censos económicos mientras el empleo está estable o cae;
 - composición: al menos `k` de 4 criterios (peso de subindustrias, CR4/CR8, % de empresas
   pequeñas, entrada/salida frente a la economía) en la cola de la distribución de ese mismo cambio
-  entre las industrias del mismo nivel NAICS y periodo (umbral derivado de los datos, ADR 0031);
+  entre las industrias del mismo nivel NAICS y periodo (umbral derivado de los datos, ADR 0033);
 - regulación: no hay vínculo entre documentos del Registro Federal e industria; queda `sin_dato`.
 
 Solo describe: no filtra ni toca detectores, FDR, ranking ni dimensiones. Los umbrales viven en

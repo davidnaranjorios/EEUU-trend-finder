@@ -1,4 +1,4 @@
-# ADR 0031 — «Composición del mercado» por colas de la distribución entre industrias
+# ADR 0033 — «Composición del mercado» por colas de la distribución entre industrias
 
 Fecha: 2026-11-24 (aprobado por David; ajuste a la Sesión 2). Modifica la regla de composición del ADR 0030.
 

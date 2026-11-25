@@ -404,7 +404,7 @@ rank:
     productivity_min_pct_year: 1.0    # ingreso real por trabajador o establecimiento, % por año
     employment_stable_pct_year: 1.0   # empleo estable si su CAGR no supera esto (o si cae)
     composition_years: 7              # años hacia atrás para los pesos de subindustrias (CBP)
-    # Composición (ADR 0031): cada criterio se compara con la distribución de ese mismo cambio en
+    # Composición (ADR 0033): cada criterio se compara con la distribución de ese mismo cambio en
     # todas las industrias del mismo nivel NAICS y periodo (market/naics_metrics); cuenta si su
     # cambio absoluto cae en la cola (cuantil) y «composición» = sí con al menos k criterios.
     composition_tail_quantile: 0.8
