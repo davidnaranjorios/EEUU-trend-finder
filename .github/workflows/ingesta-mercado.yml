@@ -1,4 +1,4 @@
-# Ingesta de las fuentes de mercado (cbp, bds, econcensus; ADR 0024 y 0027) y `src.market build`.
+# Ingesta de las fuentes de mercado (cbp, bds, econcensus, bea_io; ADR 0024, 0027 y 0032) y `src.market build`.
 #
 # Tercer eslabón de la cadena semanal. Consultas pequeñas y anuales por NAICS: caben de sobra en
 # una hora. Deja `processed/market` en R2. Mismo grupo de concurrencia que FRED.
@@ -32,6 +32,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
+      BEA_API_KEY: ${{ secrets.BEA_API_KEY }}
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -47,9 +48,9 @@ jobs:
           done
       - name: Traer estado desde R2
         run: >-
-          infra/pull_r2.sh processed/series/cbp processed/series/bds processed/series/econcensus processed/series_meta/cbp processed/series_meta/bds processed/series_meta/econcensus processed/lineage/eligibility/cbp processed/lineage/eligibility/bds processed/lineage/eligibility/econcensus processed/_internal/source_catalog/cbp processed/_internal/source_catalog/bds processed/_internal/source_catalog/econcensus processed/_internal/source_unit_state/cbp processed/_internal/source_unit_state/bds processed/_internal/source_unit_state/econcensus processed/ingest_state logs
+          infra/pull_r2.sh processed/series/cbp processed/series/bds processed/series/econcensus processed/series/bea_io processed/series_meta/cbp processed/series_meta/bds processed/series_meta/econcensus processed/series_meta/bea_io processed/lineage/eligibility/cbp processed/lineage/eligibility/bds processed/lineage/eligibility/econcensus processed/lineage/eligibility/bea_io processed/_internal/source_catalog/cbp processed/_internal/source_catalog/bds processed/_internal/source_catalog/econcensus processed/_internal/source_catalog/bea_io processed/_internal/source_unit_state/cbp processed/_internal/source_unit_state/bds processed/_internal/source_unit_state/econcensus processed/_internal/source_unit_state/bea_io processed/ingest_state logs
       - name: Ingesta
-        run: infra/sources_update.sh cbp bds econcensus
+        run: infra/sources_update.sh cbp bds econcensus bea_io
       - name: Encadenar ingesta-texto.yml
         # Freno: solo si todos los pasos anteriores salieron bien (success()).
         if: ${{ success() && inputs.encadenar }}

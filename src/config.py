@@ -154,7 +154,7 @@ def _validate_relative(d: dict[str, Any], young: dict[str, Any]) -> None:
 
 
 # Fuentes de mercado (ADR 0024): métricas para las fichas; nunca entran a los detectores.
-MARKET_ONLY_SOURCES = ("cbp", "bds", "econcensus")
+MARKET_ONLY_SOURCES = ("cbp", "bds", "econcensus", "bea_io")
 
 
 def _validate_detect(d: dict[str, Any]) -> None:

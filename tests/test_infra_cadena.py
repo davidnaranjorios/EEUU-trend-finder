@@ -38,7 +38,7 @@ def test_ingesta_is_split_in_three_workflows_under_budget():
     run = " ".join(s.get("run", "") for s in fuentes["steps"])
     assert "sources_update.sh bls bea census" in run
     run_m = " ".join(s.get("run", "") for s in _steps("ingesta-mercado.yml"))
-    assert "sources_update.sh cbp bds econcensus" in run_m
+    assert "sources_update.sh cbp bds econcensus bea_io" in run_m
 
 
 def test_only_fred_is_scheduled_and_chain_is_braked():
@@ -102,3 +102,24 @@ def test_reporte_pulls_market_metrics_used_by_dimensions():
     workflow Reporte debe traerlo de R2 o esas cifras salen como «sin dato»."""
     pull = next(s["run"] for s in _steps("reporte.yml") if "pull_r2.sh" in s.get("run", ""))
     assert "processed/market" in re.sub(r"\s+", " ", pull)
+
+
+def test_reporte_pulls_what_rank_reads_for_consequences():
+    """Pregunta 2 (ADR 0032) lee `market/io_flows` (dentro de processed/market) y, para los
+    problemas declarados, `text_structure` (SIC por documento) y `term_freq`."""
+    pull = re.sub(
+        r"\s+",
+        " ",
+        next(s["run"] for s in _steps("reporte.yml") if "pull_r2.sh" in s.get("run", "")),
+    )
+    for part in ("processed/market", "processed/text_structure", "processed/term_freq"):
+        assert part in pull, part
+    assert "processed/series " in pull + " "  # series de vacantes y de ingresos/gastos
+
+
+def test_market_workflow_ingests_bea_io_with_its_key():
+    wf = next(iter(_wf("ingesta-mercado.yml")["jobs"].values()))
+    assert "BEA_API_KEY" in wf["env"]
+    text = " ".join(s.get("run", "") for s in wf["steps"])
+    for t in ("series/bea_io", "series_meta/bea_io", "source_unit_state/bea_io"):
+        assert f"processed/{'_internal/' if 'unit' in t else ''}{t}" in text or t in text, t

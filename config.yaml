@@ -193,6 +193,23 @@ sources:
     hard_grace_min: 10            # margen del watchdog sobre el presupuesto
     crawl_budget_share: 0.5
     lineage_aggregate_min_series: 100000
+  # Insumo-producto de BEA (ADR 0032): tabla de uso, nivel resumen. Fuente de mercado: no entra a los
+  # detectores. `table_regex` mira la descripción oficial de la tabla (no un tema).
+  bea_io:
+    requests_per_minute: 80
+    max_retries: 6
+    backoff_base_s: 2.0
+    timeout_s: 300
+    catalog_refresh_days: 30
+    write_batch_rows: 500000
+    unit_max_min: 40
+    hard_grace_min: 10
+    crawl_budget_share: 0.5
+    lineage_aggregate_min_series: 100000
+    ignore_staleness: true
+    dataset: InputOutput
+    table_regex: "^The Use of Commodities by Industries - Summary"
+    title_fields: [RowDescr, ColDescr]   # campos de la API que dan el título «fila → columna»
   census:
     requests_per_minute: 60       # sin cupo publicado con key
     max_retries: 6
@@ -253,6 +270,17 @@ sources:
 
 # Tabla derivada de mercado por NAICS (src/market, ADR 0024).
 market:
+  # Insumo-producto (ADR 0032): categorías de la demanda final por la descripción oficial de BEA
+  # de cada columna; la primera que coincide gana (gobierno antes que inversión). Una columna del
+  # uso que no es fila (industria) ni «Total» es demanda final.
+  io:
+    units: "Millions of dollars"      # unidad de la tabla de uso de BEA (millones, precios corrientes)
+    total_regex: "(?i)^total"
+    demand_categories:
+      hogares: "(?i)^personal consumption"
+      gobierno: "(?i)government|federal|state and local|national defense|nondefense"
+      inversion: "(?i)investment|inventories"
+      exportaciones: "(?i)^exports"
   small_firm_max_employees: 20    # «empresas pequeñas»: clases de tamaño con tope menor que esto
   # Nombre de la métrica derivada por fuente y variable oficial de Census. Una métrica = una fuente;
   # donde dos fuentes miden lo mismo con otra definición, la segunda lleva su origen en el nombre.
@@ -410,6 +438,23 @@ rank:
     composition_tail_quantile: 0.8
     composition_min_criteria: 2
     composition_min_peers: 10         # industrias del nivel mínimas para formar la distribución
+  # Capa 3, pregunta 2 (src/rank/consequences.py, ADR 0032): consecuencias con reglas fijas. Las
+  # expresiones describen el TIPO de medida en el título oficial de la serie (no temas); las series
+  # se encuentran por su código NAICS (`naics_links`), nunca por una lista.
+  consequences:
+    top_n: 5                          # compradores y proveedores principales que se listan
+    vacancies_regex: "(?i)job openings"
+    revenue_regex: "(?i)^total revenue for (?P<rest>.+)$"
+    expenses_regex: "(?i)^total (?:operating )?expenses for (?P<rest>.+)$"
+    # Problemas declarados: razón entre la proporción de documentos del NAICS que usan el término
+    # y la de todos los documentos; ≥ min_overrepresentation, con empresas y documentos mínimos.
+    min_overrepresentation: 2.0
+    min_companies: 5                  # empresas del NAICS en la ventana (sube de nivel si faltan)
+    min_docs_naics: 3                  # documentos del NAICS con el término
+    max_items: 10
+    # PAYANN (nómina anual de CBP) está en miles de dólares según Census, pero la serie lo etiqueta
+    # «Number»; la nómina por trabajador se multiplica por esto.
+    payroll_multiplier: 1000
   # Etiqueta "efecto de tasas" (src/rank/rate_effect.py, ADR 0013): el crecimiento del cluster se
   # regresa sobre Δ de la tasa de corto plazo (context.reference_series.short_rate), rezagos
   # 0..max_lag en periodos de la grilla. Marca si la relación es significativa (stationary

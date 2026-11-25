@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import Any
 
 from src.report.recent import INSUFFICIENT, STATES
-from src.schemas import ChangeType, Dimension
+from src.schemas import ChangeType, Consequence, Dimension
 
 DETECTOR_NAMES = {
     "slope": "cambio de pendiente",
@@ -695,6 +695,34 @@ def _change_line(p: dict[str, Any]) -> str:
     return f'<p class="plain change-line">{esc(ch["phrase"])}</p>' if ch else ""
 
 
+def _conseq_line(p: dict[str, Any]) -> str:
+    """Portada: comprador principal y consecuencia de mayor magnitud (ADR 0032)."""
+    c = p.get("consequences")
+    return f'<p class="plain conseq-line">{esc(c["line"])}</p>' if c and c.get("line") else ""
+
+
+def _consequences(p: dict[str, Any]) -> str:
+    """«¿Qué consecuencias genera?» (ADR 0032): cifras con unidad, periodo, fuente y nivel."""
+    c = p.get("consequences")
+    if not c or not c["rows"]:
+        return ""
+    body = "".join(
+        f"<tr><td>{esc(Consequence[r['consequence']].value)}</td><td>{esc(r['metric'])}</td>"
+        f"<td>{_MARK[r['level']]} "
+        f"{esc(fnum(r['value'], 2) if r.get('value') is not None else '')} "
+        f"{esc(r.get('unit') or '')}</td><td>{esc(r.get('value_text') or '')}</td>"
+        f"<td>{esc(r.get('period') or '')}</td><td>{esc(r.get('source_ref') or '')}</td>"
+        f"<td>{esc(r.get('note') or '')}</td></tr>"
+        for r in c["rows"]
+    )
+    return (
+        '<details class="consequences" open><summary><strong>¿Qué consecuencias genera?'
+        "</strong></summary><table><thead><tr><th>Consecuencia</th><th>Cifra</th><th>Valor</th>"
+        "<th>Detalle</th><th>Periodo</th><th>Fuente</th><th>Nota</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></details>"
+    )
+
+
 def _change(p: dict[str, Any]) -> str:
     """«¿Qué cambió realmente?» (ADR 0030): frase y tabla corta con cifra, umbral y fuente.
     Clasificación descriptiva con reglas fijas; los ids de series con copyright no llegan aquí."""
@@ -752,7 +780,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_change_line(p)}{_change(p)}{_dimensions(p)}</section>"""
+{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_dimensions(p)}</section>"""
 
 
 def _watch_sections(items: list[dict[str, Any]]) -> str:
@@ -792,7 +820,7 @@ efecto de tasas ni de inflación.</p>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_change_line(p)}{_change(p)}{_dimensions(p)}</section>"""
+{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_dimensions(p)}</section>"""
 
 
 def _tile(k: str, v: Any) -> str:

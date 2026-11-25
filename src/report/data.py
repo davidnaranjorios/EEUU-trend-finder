@@ -29,10 +29,12 @@ from src.report.phenomenon import build_phenomenon
 from src.report.recent import series_recent, summary_state, term_recent
 from src.schemas import (
     CHANGE_TYPE_NAMES,
+    CONSEQUENCE_NAMES,
     DETECTOR_RUNS,
     DIMENSION_NAMES,
     NAICS_LINKS,
     PHENOMENON_CHANGE,
+    PHENOMENON_CONSEQUENCES,
     PHENOMENON_DIMENSIONS,
     RANK_CANDIDATES,
     RANK_CONTEXT,
@@ -139,6 +141,36 @@ def change_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> dict[st
 
 
 CHANGE_HIDDEN = frozenset({"run_id", "phenomenon_id", "phrase"})
+
+
+def consequences_data(
+    cfg: dict[str, Any], rank_run: dict[str, Any] | None
+) -> dict[str, dict[str, Any]]:
+    """«¿Qué consecuencias genera?» por fenómeno (ADR 0032): línea de portada y filas. Las filas de
+    series con copyright (`public = false`) no salen: ni su id ni su valor llegan al sitio."""
+    from src.rank.consequences import headline
+
+    if not rank_run:
+        return {}
+    try:
+        rows = _rank_rows(
+            cfg, PHENOMENON_CONSEQUENCES, "phenomenon_consequences", rank_run["run_id"]
+        )
+    except (FileNotFoundError, OSError):  # corridas anteriores a la pregunta 2
+        return {}
+    order = {c: i for i, c in enumerate(CONSEQUENCE_NAMES)}
+    by: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        if r["public"]:
+            by[r["phenomenon_id"]].append({k: v for k, v in r.items() if k not in CONS_HIDDEN})
+    out = {}
+    for pid, rs in by.items():
+        rs.sort(key=lambda r: (order[r["consequence"]], r["position"]))
+        out[pid] = {"line": headline(rs), "rows": rs}
+    return out
+
+
+CONS_HIDDEN = frozenset({"run_id", "phenomenon_id", "public"})
 
 
 def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list[dict[str, Any]]:
