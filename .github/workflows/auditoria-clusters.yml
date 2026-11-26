@@ -101,7 +101,7 @@ jobs:
           from pathlib import Path
 
           manifest = json.loads(Path("work/audit-output/manifest.json").read_text(encoding="utf-8"))
-          sources = {"fred", "bls", "bea", "census", "edgar", "federal_register"}
+          sources = {"fred", "bls", "bea", "census", "eia", "edgar", "federal_register"}
           methods = {"codigo_en_metadatos", "codigo_en_id", "nombre_oficial", "heredado_origen", "heredado_cluster", "sic_concordancia"}
           statuses = {"candidato", "una_fuente", "fuera_del_tope", "sin_estado"}
 

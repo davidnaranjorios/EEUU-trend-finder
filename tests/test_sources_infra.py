@@ -65,6 +65,8 @@ def test_one_failing_source_does_not_stop_the_others(tmp_path):
         "sync processed/series/bea",
         "run src.ingest.census",
         "sync processed/series/census",
+        "run src.ingest.eia",
+        "sync processed/series/eia",
         "run src.ingest.cbp",
         "sync processed/series/cbp",
         "run src.ingest.bds",
