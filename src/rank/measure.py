@@ -29,14 +29,17 @@ import yaml
 from src.config import REPO_ROOT
 
 DEFAULT_PATH = REPO_ROOT / "config" / "measure_kind.yaml"
-KINDS = ("precio", "cantidad", "valor", "tasa", "otro")
+# `politica_contable` (ADR 0035): series del balance de la Reserva Federal y otras publicaciones de
+# política o contables; clase propia, excluida del ranking y de la lista en observación.
+POLICY_KIND = "politica_contable"
+KINDS = ("precio", "cantidad", "valor", "tasa", "otro", POLICY_KIND)
 # Subtipo -> clase de medida en la que se admite: el precio del trabajo es un precio; la
 # población (conteo de personas de la CPS) es una cantidad, pero demografía y no demanda de
 # mercado (ADR 0018).
 SUBTYPES = {"costo_laboral": "precio", "poblacion": "cantidad"}
 # Una serie de cada clase cuenta como "demanda" si es cantidad o valor real; precio y tasa no.
 DEMAND_KINDS = ("cantidad", "valor")
-MATCH_KEYS = frozenset({"source", "id_regex", "units_regex", "title_regex"})
+MATCH_KEYS = frozenset({"source", "id_regex", "units_regex", "title_regex", "release_id"})
 RULE_KEYS = frozenset({"id", "kind", "match"})
 
 
@@ -85,7 +88,10 @@ def validate_table(data: Any) -> list[Rule]:
             errors.append(f"{where}.match: claves permitidas {sorted(MATCH_KEYS)}")
             continue
         for k, v in m.items():
-            if not isinstance(v, str) or not v:
+            if k == "release_id":  # id de publicación de FRED (metadato de agencia)
+                if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                    errors.append(f"{where}.match.release_id debe ser un entero positivo")
+            elif not isinstance(v, str) or not v:
                 errors.append(f"{where}.match.{k} debe ser un texto no vacío")
             elif k != "source":
                 try:
@@ -110,6 +116,7 @@ def classify(
     series_id: str,
     units: str = "",
     title: str = "",
+    release_ids: Iterable[int] = (),
 ) -> Measure:
     """Clase de una serie: la primera regla que casa con su fuente, id, unidades y título."""
     for r in rules:
@@ -117,6 +124,8 @@ def classify(
         if "source" in m and m["source"] != source:
             continue
         if "id_regex" in m and not re.search(m["id_regex"], series_id or ""):
+            continue
+        if "release_id" in m and m["release_id"] not in set(release_ids):
             continue
         if "units_regex" in m and not re.search(m["units_regex"], units or ""):
             continue

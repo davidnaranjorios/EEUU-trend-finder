@@ -327,7 +327,8 @@ def test_table_only_contains_agency_metadata_never_topics():
     data = yaml.safe_load(TABLE.read_text("utf-8"))
     assert set(data) == {"version", "rules"}
     for rule in data["rules"]:
-        assert set(rule["match"]) <= {"source", "id_regex", "units_regex", "title_regex"}
+        allowed = {"source", "id_regex", "units_regex", "title_regex", "release_id"}
+        assert set(rule["match"]) <= allowed
         for key in ("units_regex", "title_regex"):
             if key in rule["match"]:
                 extra = _words(rule["match"][key]) - DESCRIPTORS

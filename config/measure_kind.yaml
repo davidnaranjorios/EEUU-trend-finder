@@ -8,6 +8,14 @@
 # sin regla, la serie es `otro`. Las reglas más específicas van primero.
 version: 1
 rules:
+  # --- Política o contable (ADR 0035, aprobada por David el 2026-11-26). El criterio es el
+  # `release_id` de FRED (metadato de agencia), nunca una lista de series: 20 = H.4.1, «Factors
+  # Affecting Reserve Balances» (balance de la Reserva Federal). Verificado en `fred_series_attrs`
+  # (WLAD, WOTHLIAB, RESPPLLOPNWW → [20]). Va primero: el balance también publica unidades y tasas.
+  - id: politica_contable_h41
+    kind: politica_contable
+    match: {release_id: 20}
+
   # --- Tasas (porcentajes y razones) antes que precios: el cambio porcentual de un índice de precios
   # es una tasa, no un precio.
   - id: tasa_titulo_cambio_porcentual
