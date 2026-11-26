@@ -431,6 +431,9 @@ rank:
     price_min_pp_year: 1.0            # precio de la industria menos deflactor, puntos porcentuales por año
     productivity_min_pct_year: 1.0    # ingreso real por trabajador o establecimiento, % por año
     employment_stable_pct_year: 1.0   # empleo estable si su CAGR no supera esto (o si cae)
+    # Si el empleo de la industria cae más que esto por año, la productividad no se presenta como
+    # mejora y se marca «posible escasez de personal» (ADR 0036).
+    employment_drop_pct_year: 2.0
     composition_years: 7              # años hacia atrás para los pesos de subindustrias (CBP)
     # Composición (ADR 0033): cada criterio se compara con la distribución de ese mismo cambio en
     # todas las industrias del mismo nivel NAICS y periodo (market/naics_metrics); cuenta si su

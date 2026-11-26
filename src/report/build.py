@@ -31,6 +31,7 @@ from src.catalog import connect
 from src.config import load_config
 from src.detect.run import _resolve
 from src.log import get_logger, run
+from src.rank import ficha as ficha_mod
 from src.report import data as rdata
 from src.report.explorer import explorer_files
 from src.report.guard import assert_publishable, forbidden_sets
@@ -70,6 +71,14 @@ def build_site(
         item["dimensions"] = dims.get(item["phenomenon_id"], [])
         item["change"] = changes.get(item["phenomenon_id"])
         item["consequences"] = conseq.get(item["phenomenon_id"])
+        item["ficha"] = ficha_mod.build(
+            item,
+            item["dimensions"],
+            (item["change"] or {}).get("rows") or [],
+            (item["consequences"] or {}).get("rows") or [],
+            q=float(cfg["fdr"]["q"]),
+            min_sources=int(cfg["rank"]["min_sources"]),
+        )
     published_series = {
         (s["source"], s["id"]): c["candidate_id"]
         for v in candidates.values()

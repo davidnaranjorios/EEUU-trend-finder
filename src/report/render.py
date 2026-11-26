@@ -8,6 +8,9 @@ import math
 from collections import defaultdict
 from typing import Any
 
+from src.rank.ficha import LEVEL_MARK as FICHA_MARK
+from src.rank.ficha import LEVEL_NAME as FICHA_NAME
+from src.rank.ficha import LEVELS as FICHA_LEVELS
 from src.report.recent import INSUFFICIENT, STATES
 from src.schemas import ChangeType, Consequence, Dimension
 
@@ -686,6 +689,60 @@ def _dimensions(p: dict[str, Any]) -> str:
     )
 
 
+def _ficha(p: dict[str, Any]) -> str:
+    """Ficha (ADR 0036): «Contexto de industria» aparte y las 9 preguntas con su nivel."""
+    f = p.get("ficha")
+    if not f:
+        return ""
+
+    def cell(x: dict[str, Any]) -> str:
+        v = (fnum(x["value"], 2) if x.get("value") is not None else "") + (
+            f" {x['text']}" if x.get("text") else ""
+        )
+        return (
+            f"<tr><td>{esc(x['label'])}</td><td>{esc(v.strip() or 'sin dato')}</td>"
+            f"<td>{esc(x.get('unit') or '')}</td><td>{esc(x.get('period') or '')}</td>"
+            f"<td>{esc(x.get('source') or '')}</td><td>{_MARK[x['level']]}</td></tr>"
+        )
+
+    head = (
+        "<thead><tr><th>Cifra</th><th>Valor</th><th>Unidad</th><th>Periodo</th><th>Fuente</th>"
+        "<th>Nivel</th></tr></thead>"
+    )
+    ctx = (
+        '<details class="context" open><summary><strong>Contexto de industria</strong></summary>'
+        f"<table>{head}<tbody>{''.join(cell(x) for x in f['context'])}</tbody></table></details>"
+        if f["context"]
+        else ""
+    )
+    blocks = []
+    for a in f["answers"]:
+        if a["dimension"] == "confianza":
+            c = a["counts"]
+            line = " · ".join(f"{FICHA_MARK[k]} {FICHA_NAME[k]}: {c[k]}" for k in FICHA_LEVELS)
+            blocks.append(
+                f'<div class="ask"><h4>{esc(a["question"])}</h4>'
+                f'<p class="plain">{esc(line)}</p></div>'
+            )
+            continue
+        note = f'<p class="muted">{esc(a["note"])}</p>' if a.get("note") else ""
+        body = (
+            f"<table>{head}<tbody>{''.join(cell(x) for x in a['figures'])}</tbody></table>"
+            if a["figures"]
+            else '<p class="muted">Sin evidencia: ninguna cifra responde la pregunta.</p>'
+        )
+        blocks.append(
+            f'<div class="ask" data-level="{esc(a["level"])}"><h4>{esc(a["question"])} '
+            f'<span class="state">{FICHA_MARK[a["level"]]} '
+            f"{esc(FICHA_NAME[a['level']])}</span></h4>"
+            f"{note}{body}</div>"
+        )
+    return (
+        f'{ctx}<details class="ficha" open><summary><strong>Las 9 preguntas</strong></summary>'
+        f"{''.join(blocks)}</details>"
+    )
+
+
 _STATUS = {"si": "✅ sí", "no": "no", "sin_dato": "⚪ sin dato"}
 
 
@@ -780,7 +837,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_dimensions(p)}</section>"""
+{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_ficha(p)}</section>"""
 
 
 def _watch_sections(items: list[dict[str, Any]]) -> str:
@@ -820,7 +877,7 @@ efecto de tasas ni de inflación.</p>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
 <p class="muted">Clusters: {clusters}</p>
-{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_dimensions(p)}</section>"""
+{_change_line(p)}{_conseq_line(p)}{_change(p)}{_consequences(p)}{_ficha(p)}</section>"""
 
 
 def _tile(k: str, v: Any) -> str:
