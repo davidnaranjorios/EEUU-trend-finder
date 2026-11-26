@@ -2,7 +2,7 @@
 
 Una evidencia (serie con señal o término emergente) lleva un conjunto de agencias:
 - serie de FRED: las agencias de sus releases (`fred_series_attrs.agencies`);
-- serie de BLS, BEA o Census: la agencia que declara su adaptador (`AGENCY`, con el nombre de FRED);
+- serie de BLS, BEA, Census o EIA: la agencia que declara su adaptador (`AGENCY`, nombre de FRED);
 - término de texto: la fuente de texto (`texto:edgar`, `texto:federal_register`).
 
 Dos evidencias son independientes solo si no comparten agencia, ni directamente ni a través de
@@ -17,10 +17,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from src.ingest import bea, bls, census
+from src.ingest import bea, bls, census, eia
 
 # Fuente de ingesta -> agencia declarada por su adaptador (FRED se resuelve serie por serie).
-ADAPTER_AGENCIES = {m.SOURCE: m.AGENCY for m in (bls, bea, census)}
+ADAPTER_AGENCIES = {m.SOURCE: m.AGENCY for m in (bls, bea, census, eia)}
 TEXT_PREFIX = "texto:"
 _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 

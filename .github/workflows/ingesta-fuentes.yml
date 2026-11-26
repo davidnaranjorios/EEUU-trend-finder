@@ -1,7 +1,7 @@
-# Ingesta de las fuentes de agencias (BLS, BEA, Census; ADR 0007, 0019 y 0027).
+# Ingesta de las fuentes de agencias (BLS, BEA, Census, EIA; ADR 0007, 0019 y 0027).
 #
 # Segundo eslabón de la cadena semanal. Trae de R2 solo el estado de estas tres fuentes, corre
-# `infra/sources_update.sh bls bea census` con presupuesto por fuente y total < 5 h 30 y sincroniza
+# `infra/sources_update.sh bls bea census eia` con presupuesto por fuente y total < 5 h 30 y sincroniza
 # solo sus rutas. Lo que no cabe queda pendiente para la próxima corrida. Mismo grupo de
 # concurrencia que FRED: nunca dos sync a R2 a la vez.
 name: Ingesta fuentes
@@ -53,9 +53,9 @@ jobs:
           done
       - name: Traer estado desde R2
         run: >-
-          infra/pull_r2.sh processed/series/bls processed/series/bea processed/series/census processed/series_meta/bls processed/series_meta/bea processed/series_meta/census processed/lineage/eligibility/bls processed/lineage/eligibility/bea processed/lineage/eligibility/census processed/_internal/source_catalog/bls processed/_internal/source_catalog/bea processed/_internal/source_catalog/census processed/_internal/source_unit_state/bls processed/_internal/source_unit_state/bea processed/_internal/source_unit_state/census processed/ingest_state logs
+          infra/pull_r2.sh processed/series/bls processed/series/bea processed/series/census processed/series/eia processed/series_meta/bls processed/series_meta/bea processed/series_meta/census processed/series_meta/eia processed/lineage/eligibility/bls processed/lineage/eligibility/bea processed/lineage/eligibility/census processed/lineage/eligibility/eia processed/_internal/source_catalog/bls processed/_internal/source_catalog/bea processed/_internal/source_catalog/census processed/_internal/source_catalog/eia processed/_internal/source_unit_state/bls processed/_internal/source_unit_state/bea processed/_internal/source_unit_state/census processed/_internal/source_unit_state/eia processed/ingest_state logs
       - name: Ingesta
-        run: infra/sources_update.sh bls bea census
+        run: infra/sources_update.sh bls bea census eia
       - name: Encadenar ingesta-mercado.yml
         # Freno: solo si todos los pasos anteriores salieron bien (success()).
         if: ${{ success() && inputs.encadenar }}

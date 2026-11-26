@@ -36,7 +36,7 @@ MIN_USEFUL_S="${SOURCES_MIN_USEFUL_S:-300}"
 # cbp, bds, econcensus y bea_io son métricas de mercado por NAICS (ADR 0024 y 0032): consultas pequeñas y anuales,
 # así que tienen un presupuesto propio corto (SOURCES_BUDGET_MARKET_MIN, 20 por defecto).
 MARKET_BUDGET_S="${SOURCES_BUDGET_MARKET_S:-$(( ${SOURCES_BUDGET_MARKET_MIN:-20} * 60 ))}"
-if [[ $# -eq 0 ]]; then set -- bls bea census cbp bds econcensus bea_io; fi
+if [[ $# -eq 0 ]]; then set -- bls bea census eia cbp bds econcensus bea_io; fi
 START=$SECONDS
 failed=()
 skipped=()

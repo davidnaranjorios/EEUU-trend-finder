@@ -225,7 +225,7 @@ def _validate_groups(groups: Any, name: str) -> None:
 
 
 # Fuentes con adaptador sobre src/ingest/common.py (Fase 4).
-COMMON_SOURCES = ("bls", "bea", "census", *MARKET_ONLY_SOURCES)
+COMMON_SOURCES = ("bls", "bea", "census", "eia", *MARKET_ONLY_SOURCES)
 
 
 def _validate_sources(src: dict[str, Any]) -> None:

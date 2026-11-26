@@ -56,7 +56,11 @@ def test_shared_agency_chains_into_one_source():
 
 def test_unmatched_adapter_agencies_reports_missing_names():
     assert unmatched_adapter_agencies([]) == []
-    assert unmatched_adapter_agencies(["U.S. Bureau of Labor Statistics"]) == ["bea", "census"]
+    assert unmatched_adapter_agencies(["U.S. Bureau of Labor Statistics"]) == [
+        "bea",
+        "census",
+        "eia",
+    ]
 
 
 # --- triangulación (propiedad) ------------------------------------------------------------------

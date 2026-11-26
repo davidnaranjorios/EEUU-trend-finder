@@ -90,6 +90,7 @@ Verifica siempre los límites actuales en la documentación oficial antes de imp
 | BEA | PIB por industria y estado | API key gratuita. |
 | Census | Permisos, comercio, encuestas a empresas | API key gratuita. |
 | SEC EDGAR | 10-K y otros reportes (texto) | Requiere header User-Agent con nombre y correo. Límite de solicitudes por segundo. |
+| EIA | Precios y consumo de electricidad (y demás series de ELEC) | Archivos masivos `eia.gov/opendata/bulk/ELEC.zip`, sin clave (ADR 0034). |
 | Federal Register | Regulación nueva (texto) | API pública. |
 
 Todas las descargas deben ser incrementales e idempotentes: volver a correr no duplica datos.
