@@ -181,6 +181,36 @@ def _bea_rows(target: str | None, io: IoFlows | None, p: ConsParams) -> tuple[li
             (r for r in cells if r["to_kind"] == "industria" and r["value"] > 0),
             key=lambda r: (-r["value"], r["to_industry"]),
         )[: p.top_n]
+        # Dinero (ADR 0036): lo que los compradores pagan por el producto, en dólares corrientes.
+        out_b.append(
+            Row(
+                "compradores",
+                "gasto_total",
+                total,
+                None,
+                "millones de dólares corrientes",
+                str(year),
+                ref,
+                level,
+                used,
+                note=note,
+            )
+        )
+        for i, r in enumerate(ind, 1):
+            out_b.append(
+                Row(
+                    "compradores",
+                    f"gasto_comprador_{i}",
+                    r["value"],
+                    f"{r['to_desc'] or r['to_industry']} (BEA {r['to_industry']})",
+                    "millones de dólares corrientes",
+                    str(year),
+                    ref,
+                    level,
+                    used,
+                    note=note,
+                )
+            )
         for i, r in enumerate(ind, 1):
             out_b.append(
                 Row(
@@ -610,7 +640,10 @@ def headline(rows: Sequence[Mapping[str, Any]]) -> str | None:
     buyers = [
         r
         for r in rows
-        if r["consequence"] == "compradores" and r["value"] is not None and r["level"] != NONE
+        if r["consequence"] == "compradores"
+        and r["value"] is not None
+        and r["level"] != NONE
+        and not r["metric"].startswith("gasto_")  # en dólares: Dinero, no participación
     ]
     if not buyers:
         return None

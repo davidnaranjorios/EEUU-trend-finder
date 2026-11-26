@@ -38,6 +38,9 @@ from src.schemas import ChangeType
 
 COUNTS = ("acelera", "gira_al_alza")  # etiquetas de trayectoria que cuentan como «creció más»
 RECOVERY = ("frena_caida", "rebote_bajo_pico")
+# Marca (ADR 0036): el empleo de la industria cae más que `employment_drop_pct_year`; la
+# productividad no es una mejora, es producir lo mismo con menos gente.
+SCARCITY = "posible escasez de personal"
 NO_REGULATION_NOTE = "falta vincular regulación con industria"
 MAIN = ("cantidad", "precio", "productividad", "composicion", "regulacion")
 SI, NO, SD = "si", "no", "sin_dato"
@@ -52,6 +55,7 @@ class ChangeParams:
     tail_quantile: float = 0.8  # un criterio cuenta si su cambio absoluto está en esta cola
     min_criteria: int = 2  # criterios en la cola para decir «composición: sí»
     min_peers: int = 10  # industrias del mismo nivel mínimas para formar la distribución
+    employment_drop_pct_year: float = 2.0  # caída del empleo (%/año) que anula «productividad: sí»
 
 
 def params_from(cfg: Mapping[str, Any]) -> ChangeParams:
@@ -64,6 +68,7 @@ def params_from(cfg: Mapping[str, Any]) -> ChangeParams:
         float(c["composition_tail_quantile"]),
         int(c["composition_min_criteria"]),
         int(c["composition_min_peers"]),
+        float(c.get("employment_drop_pct_year", 2.0)),
     )
 
 
@@ -356,7 +361,8 @@ def classify_productivity(
         out.value = per_w
         up = rise >= p.productivity_min_pct_year
         stable = g_emp <= p.employment_stable_pct_year
-        out.status = SI if up and stable else NO
+        shrinking = g_emp < -p.employment_drop_pct_year
+        out.status = SI if up and stable and not shrinking else NO
         out.period = f"{y0} a {y1}"
         out.source_ref = f"market/naics_metrics:revenue,{src}"
         pe = f" · por establecimiento {per_e:+.2f}%/año" if per_e is not None else ""
@@ -365,6 +371,11 @@ def classify_productivity(
         out.note = f"por trabajador {per_w:+.2f}%/año{pe} · empleo {g_emp:+.2f}%/año{lvl}" + (
             f" · deflactor: {defl_note}" if defl_note else ""
         )
+        if shrinking:
+            out.note += (
+                f" · {SCARCITY}: el empleo cae más de {p.employment_drop_pct_year:g}%/año, la "
+                "productividad no se presenta como mejora"
+            )
         return out
     out.note = "sin ingresos y empleo en dos censos económicos"
     return out
@@ -598,9 +609,13 @@ def phrase(rows: Sequence[Out]) -> str:
     def j(xs: Sequence[str]) -> str:
         return ", ".join(xs) if xs else "—"
 
+    prod = by.get("productividad")
+    flag = (
+        f" · {SCARCITY.capitalize()}" if prod is not None and SCARCITY in (prod.note or "") else ""
+    )
     return (
         f"Cambió: {j(changed)} · No cambió: {j(same)} · Recuperación: {j(back)} · "
-        f"Sin dato: {j(nodata)}"
+        f"Sin dato: {j(nodata)}{flag}"
     )
 
 

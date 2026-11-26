@@ -219,9 +219,19 @@ def prod_market(rev1, emp1, cbp1=None):
 
 
 def test_productivity_yes_with_falling_or_stable_employment():
-    for emp1 in (80.0, 100.0):
+    for emp1 in (95.0, 100.0):  # −1 %/año y estable: por debajo del umbral de caída (2 %/año)
         out = ch.classify_productivity("6231", prod_market(1500.0, emp1), DEFL, P)
         assert out.status == "si" and out.value > P.productivity_min_pct_year
+        assert ch.SCARCITY not in out.note
+
+
+def test_productivity_is_not_an_improvement_when_employment_falls_past_the_threshold():
+    """Empleo −4,4 %/año (100 → 80 en 5 años) > 2 %/año: no es mejora, es posible escasez."""
+    out = ch.classify_productivity("6231", prod_market(1500.0, 80.0), DEFL, P)
+    assert out.status == "no" and out.value > P.productivity_min_pct_year
+    assert ch.SCARCITY in out.note
+    rows = [out] + [ch.Out(t) for t in ("cantidad", "precio", "composicion", "regulacion")]
+    assert ch.phrase(rows).endswith("Posible escasez de personal")
 
 
 def test_productivity_no_when_employment_grows_or_income_flat():
