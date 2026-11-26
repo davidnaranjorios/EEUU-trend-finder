@@ -130,6 +130,7 @@ class TermMatrix:
     excluded: dict[str, int]
     mean_share: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (K,) prevalencia base
     industries: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (K,) NaN = no medido
+    entities: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (K,) NaN = no medido
     last_doc_date: date | None = None
 
 
@@ -146,6 +147,7 @@ def load_matrix(
     min_industries: int = 0,
     docs_files: Sequence[Path] = (),
     recent_rows_periods: int = 0,
+    defer_breadth: bool = False,
 ) -> TermMatrix:
     """Lee `term_freq` de una fuente, aplica el prefiltro y arma la matriz en la grilla.
 
@@ -158,6 +160,10 @@ def load_matrix(
     la ingesta) en los últimos `recent_rows_periods` periodos de la grilla: un término que en toda
     la ventana reciente quedó censurado en el piso no puede mostrar que emerge, y antes pasaba el
     filtro de amplitud porque "sin filas" se leía como "sin medida" (ADR 0021).
+
+    Con `defer_breadth` los filtros de amplitud (entidades e industrias) NO excluyen términos:
+    solo se miden (`entities`, `industries`) para aplicarlos a los resultados, después de BH
+    (ADR 0035). Los conteos `excluidos_*` dicen cuántos habrían salido.
     """
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
@@ -221,7 +227,8 @@ def load_matrix(
         [min_mean_share],
     )
     n_narrow = n_unmeasured = 0
-    if min_entities > 0 and recent > 0 and complete:
+    amp_by_key: dict[tuple[str, str], float] = {}
+    if (min_entities > 0 or defer_breadth) and recent > 0 and complete:
         recent_grid = set(complete[-recent:])
         recent_subs = sorted({p for _, p, _ in tot if to_grid(p, grid) in recent_grid})
         con.execute(
@@ -238,11 +245,19 @@ def load_matrix(
             "SELECT count(*) FILTER (amp < ?), count(*) FILTER (amp IS NULL) FROM breadth",
             [min_entities],
         ).fetchone()
-        con.execute(
-            "DELETE FROM keep WHERE EXISTS (SELECT 1 FROM breadth b WHERE b.section = "
-            "keep.section AND b.term = keep.term AND b.amp < ?)",
-            [min_entities],
-        )
+        if defer_breadth:
+            amp_by_key = {
+                (sec, term): float(amp)
+                for sec, term, amp in con.execute(
+                    "SELECT section, term, amp FROM breadth WHERE amp IS NOT NULL"
+                ).fetchall()
+            }
+        else:
+            con.execute(
+                "DELETE FROM keep WHERE EXISTS (SELECT 1 FROM breadth b WHERE b.section = "
+                "keep.section AND b.term = keep.term AND b.amp < ?)",
+                [min_entities],
+            )
     n_no_recent = 0
     if recent_rows_periods > 0 and complete:
         rr_grid = set(complete[-recent_rows_periods:])
@@ -288,7 +303,7 @@ def load_matrix(
             ).fetchall()
         }
         industries = np.array([got.get(k, np.nan) for k in keys], dtype=float)
-        if min_industries > 0:
+        if min_industries > 0 and not defer_breadth:
             few = np.nan_to_num(industries, nan=np.inf) < min_industries
             n_few_ind = int(few.sum())
             keys = [k for k, f in zip(keys, few, strict=True) if not f]
@@ -343,7 +358,10 @@ def load_matrix(
             continue
         counts[i, j] += min(c, n)
         totals[i, j] += n
-    return TermMatrix(complete, keys, counts, totals, excluded, mean_share, industries, last_doc)
+    entities = np.array([amp_by_key.get(k, np.nan) for k in keys], dtype=float)
+    return TermMatrix(
+        complete, keys, counts, totals, excluded, mean_share, industries, entities, last_doc
+    )
 
 
 def _has_column(files: Sequence[Path], name: str) -> bool:
@@ -356,6 +374,27 @@ def logit_share(counts: np.ndarray, totals: np.ndarray) -> np.ndarray:
     """logit de la proporción con suavizado de Jeffreys (+0,5 / +1)."""
     p = (counts + 0.5) / (totals + 1.0)
     return np.log(p / (1.0 - p))
+
+
+def post_filter_mask(
+    m: TermMatrix,
+    results: Sequence[tuple[float, float, str, int]],
+    min_entities: int,
+    min_industries: int,
+    min_length: int,
+) -> np.ndarray:
+    """Filtros aplicados a los resultados (ADR 0035): True = el término puede ser señal.
+
+    Amplitud (entidades, industrias) y largo mínimo del segmento elevado; un término sin medida
+    de amplitud no se excluye, igual que cuando el filtro se aplicaba antes de probar."""
+    ok = np.ones(len(results), dtype=bool)
+    if min_entities > 0 and m.entities.size:
+        ok &= ~(np.nan_to_num(m.entities, nan=np.inf) < min_entities)
+    if min_industries > 0 and m.industries.size:
+        ok &= ~(np.nan_to_num(m.industries, nan=np.inf) < min_industries)
+    if min_length > 0:
+        ok &= np.array([r[3] >= min_length for r in results], dtype=bool)
+    return ok
 
 
 # --- Estadístico y prueba ----------------------------------------------------------------------
@@ -509,8 +548,14 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
     window = td["window"][grid]
     persistence = cfg["persistence"]["min_consecutive_periods"][grid]
     # Persistencia mínima en años de calendario: la señal debe sostenerse >= min_signal_years.
-    persistence = max(persistence, math.ceil(td.get("min_signal_years", 0) * _PER_YEAR[grid]))
-    recent = max(td["recent"][grid], persistence)
+    min_len = math.ceil(td.get("min_signal_years", 0) * _PER_YEAR[grid])
+    persistence_full = max(persistence, min_len)
+    # `filter_stage` (ADR 0035): "after" aplica el filtro a los resultados, después de BH.
+    stage = td.get("filter_stage", {})
+    defer_breadth = stage.get("breadth", "before") == "after"
+    defer_persistence = stage.get("persistence", "before") == "after"
+    persistence = persistence if defer_persistence else persistence_full
+    recent = max(td["recent"][grid], persistence_full)
     cal = cfg["fdr"]["calibration"]
     q = float(cfg["fdr"]["q"])
     processed = _resolve(cfg["paths"]["processed_dir"])
@@ -529,7 +574,8 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         unigram_max_share=td["unigram_max_share"],
         min_industries=td["min_sic2"].get(source, 0),
         docs_files=sorted((processed / "text_docs" / source).glob("*/*.parquet")),
-        recent_rows_periods=persistence if td.get("require_recent_rows", True) else 0,
+        recent_rows_periods=persistence_full if td.get("require_recent_rows", True) else 0,
+        defer_breadth=defer_breadth,
     )
     g = len(m.periods)
     if g < window + recent + 3:
@@ -569,9 +615,16 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
     if m.last_doc_date is not None:
         w_end = min(w_end, m.last_doc_date)
     run_date = datetime.now(UTC).date()
+    keep_post = post_filter_mask(
+        m,
+        results,
+        td["min_entities"].get(source, 0) if defer_breadth else 0,
+        td["min_sic2"].get(source, 0) if defer_breadth else 0,
+        min_len if defer_persistence else 0,
+    )
     tests, signals = [], []
-    for (section, term), (t, pv, method, length), a, b in zip(
-        m.keys, results, q_bh, q_by, strict=True
+    for (section, term), (t, pv, method, length), a, b, ok in zip(
+        m.keys, results, q_bh, q_by, keep_post, strict=True
     ):
         object_id = f"{section}|{term}"
         w_start = min(grid_start(m.periods[g - length]), w_end)  # quiebre estimado por término
@@ -598,7 +651,7 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
                 "copyrighted": False,
             }
         )
-        if a <= q:
+        if a <= q and ok:
             signals.append(
                 {
                     "signal_id": signal_id(run_id, DETECTOR, source, object_id),
@@ -615,7 +668,8 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
                     "n_tests": len(results),
                 }
             )
-    n_by = int(np.sum(q_by <= q))
+    n_by = int(np.sum((q_by <= q) & keep_post))
+    n_bh_raw, n_by_raw = int(np.sum(q_bh <= q)), int(np.sum(q_by <= q))
     n_ind = {k: v for k, v in zip(m.keys, m.industries, strict=True)} if len(m.keys) else {}
     prio = priority_scores(
         m.keys,
@@ -645,6 +699,12 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "min_doc_count": cfg["text"]["min_doc_count"],
         "calibration": cal,
         "prefiltro": m.excluded,
+        "filter_stage": {
+            "breadth": "after" if defer_breadth else "before",
+            "persistence": "after" if defer_persistence else "before",
+        },
+        "bh_antes_de_filtros_posteriores": n_bh_raw,
+        "by_antes_de_filtros_posteriores": n_by_raw,
         "break_years": break_year_histogram(signals, recent > persistence),
     }
     runs = [
@@ -676,6 +736,8 @@ def detect_source(cfg: dict[str, Any], source: str, run_id: str, started_at: dat
         "n_tests": len(results),
         "n_bh": len(signals),
         "n_by": n_by,
+        "n_bh_raw": n_bh_raw,
+        "n_by_raw": n_by_raw,
         "block_length": block,
         "prefiltro": m.excluded,
         "bh_rate": len(signals) / len(results) if results else 0.0,
