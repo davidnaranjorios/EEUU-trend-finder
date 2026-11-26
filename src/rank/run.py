@@ -799,15 +799,15 @@ def trajectories(
     keys: list[tuple[str, str]],
     months: list[tuple[int, float]],
     p: traj_mod.TrajectoryParams,
-) -> dict[tuple[str, str], str | None]:
-    """Etiqueta de trayectoria por serie, sobre sus niveles reales (ver `trajectory.py`)."""
+) -> dict[tuple[str, str], tuple[str | None, bool | None]]:
+    """(etiqueta de trayectoria, marca de recuperación) por serie, sobre sus niveles reales
+    (ver `trajectory.py`)."""
     starts = {grid: traj_mod.recession_starts(months, grid) for grid in ("M", "Q", "A")}
-    return {
-        (s.source, s.series_id): traj_mod.classify(
-            s.level, s.first_index, s.grid, starts[s.grid], p
-        )[0]
-        for s in load_series(con, cfg, ids=keys)
-    }
+    out: dict[tuple[str, str], tuple[str | None, bool | None]] = {}
+    for s in load_series(con, cfg, ids=keys):
+        label, detail = traj_mod.classify(s.level, s.first_index, s.grid, starts[s.grid], p)
+        out[(s.source, s.series_id)] = (label, detail.get("recuperacion"))
+    return out
 
 
 def deflator_levels(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> dict[int, float]:
@@ -1240,6 +1240,7 @@ def rank_run(
                 "inflation_n_tests": infl_by_cid[c.candidate_id].n_tests
                 if c.candidate_id in infl_by_cid
                 else None,
+                "clase": c.clase,
                 "sin_evidencia_demanda": marks_mod.sin_evidencia_demanda(c.evidence),
                 "origen_posiblemente_compartido": marks_mod.origen_posiblemente_compartido(
                     c.evidence
@@ -1269,6 +1270,7 @@ def rank_run(
                     "real_effect": e.real_effect,
                     "trajectory": e.trajectory,
                     "inflacion_estimada": e.inflation_estimated,
+                    "recuperacion": e.recovery,
                 }
             )
     by_cid = {c.candidate_id: c for c in candidates}
@@ -1391,6 +1393,7 @@ def phenomena_rows(
                 "measure_mix_json": json.dumps(p.measure_mix),
                 "no_demand_evidence": p.no_demand_evidence,
                 "trajectory": p.trajectory,
+                "clase": c.clase,
                 "sin_evidencia_demanda": p.sin_evidencia_demanda,
                 "origen_posiblemente_compartido": p.origen_compartido,
                 "watch": watch[p.phenomenon_id].eligible if p.phenomenon_id in watch else None,
@@ -1460,7 +1463,7 @@ def _series_evidence(
     info: SeriesInfo,
     growth: dict[tuple[str, str], GrowthSeries] | None = None,
     inflation: dict[str, dict[int, float]] | None = None,
-    trajectory: str | None = None,
+    trajectory: tuple[str | None, bool | None] | None = None,
     estimated_months: set[int] | None = None,
 ) -> Evidence:
     best = min(sigs, key=lambda s: s["q_value"])
@@ -1489,7 +1492,8 @@ def _series_evidence(
         measure_kind=info.measure.kind,
         measure_subtype=info.measure.subtype,
         real_effect=real,
-        trajectory=trajectory,
+        trajectory=trajectory[0] if trajectory else None,
+        recovery=trajectory[1] if trajectory else None,
         inflation_estimated=estimated,
         chain=info.chain,
         possible_duplicates=bool(info.duplicates),

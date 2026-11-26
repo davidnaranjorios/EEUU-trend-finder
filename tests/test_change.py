@@ -83,7 +83,8 @@ def test_inputs_never_count_as_quantity():
     """Empleo, nómina y gastos son insumos: aunque aceleren, no son cantidad producida."""
     roles = {("bls", "A"): "insumo", ("bls", "B"): "sin_clasificar"}
     qty, rec = ch.classify_quantity([ev("A"), ev("B"), ev("C", kind="valor")], ctx(roles))
-    assert (qty.status, qty.value, rec.status) == ("sin_dato", None, "sin_dato")
+    # La recuperación sí mira todas las series de cantidad (ADR 0034): A acelera, no se recupera.
+    assert (qty.status, qty.value, rec.status) == ("sin_dato", None, "no")
 
 
 def test_population_and_prices_are_excluded():

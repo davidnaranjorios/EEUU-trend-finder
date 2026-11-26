@@ -486,6 +486,11 @@ rank:
     recent_years: 3
     peak_years: 2
     max_back_years: 10
+    # Prueba de tendencia pre-choque (ADR 0034): se compara el nivel actual con la extrapolación
+    # log-lineal de los `preshock_years` años previos al inicio de la última recesión (USREC).
+    preshock_years: 5
+    preshock_form: loglinear
+    preshock_tolerance_pct: 2.0
   # Lista "en observación" (src/rank/watchlist.py, ADR 0016; la clave es single_origin porque el
   # guard no admite «watch» en claves): fenómenos de UN solo origen con señal
   # (q <= fdr.q), evidencia de demanda (cantidad o valor), sin efecto de tasas ni de inflación y con

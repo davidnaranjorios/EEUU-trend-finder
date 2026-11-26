@@ -188,10 +188,13 @@ def watchlist_data(cfg: dict[str, Any], rank_run: dict[str, Any] | None) -> list
     names = naics_mod.load_tables(cfg, REPO_ROOT).names
     out = []
     for r in rows:
-        if not r.get("watch"):
+        # ADR 0034: una recuperación triangulada no entra al ranking; se lista aquí, marcada.
+        recovery = r.get("clase") == "recuperacion"
+        if not (r.get("watch") or (recovery and r["status"] == "candidato")):
             continue
         out.append(
             {
+                "recuperacion": recovery,
                 "phenomenon_id": r["phenomenon_id"],
                 "direction": r["direction"],
                 "sources": json.loads(r["sources_json"]),

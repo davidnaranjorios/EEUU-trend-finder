@@ -608,6 +608,13 @@ def _marks(p: dict[str, Any]) -> str:
         )
         if p["trajectory"] == "no_confirmada":
             out.append(f'<span class="muted not-confirmed">{esc(NOT_CONFIRMED_NOTE)}</span>')
+    if p.get("recuperacion"):
+        out.append(
+            '<span class="state recovery" title="Todas sus series de cantidad están bajo su pico '
+            "previo o bajo la tendencia de los años previos a la última recesión: se recupera de "
+            'un pozo, no es un cambio estructural. No entra al ranking principal.">'
+            "Recuperación</span>"
+        )
     if p.get("sin_evidencia_demanda"):
         out.append(
             '<span class="state no-demand" title="Ninguna serie de cantidad ni de valor con '
@@ -800,6 +807,22 @@ def _watch_sections(items: list[dict[str, Any]]) -> str:
     )
 
 
+def _watch_warning(p: dict[str, Any]) -> str:
+    if p.get("recuperacion"):
+        return (
+            '<p class="plain watch-warning"><strong>Recuperación, no cambio estructural.</strong> '
+            "Todas sus series de cantidad siguen bajo su pico previo o bajo la tendencia de los "
+            "años previos a la última recesión, por eso no entra al ranking principal "
+            "(ADR 0034).</p>"
+        )
+    return (
+        '<p class="plain watch-warning"><strong>Un solo origen: no triangulado.</strong> No es un '
+        f"candidato del ranking ni entra al score; pasa FDR y tiene {p['n_demand_series']} "
+        "serie(s) de cantidad o valor real (el valor nominal solo cuenta si su crecimiento "
+        "deflactado conserva el efecto), sin efecto de tasas ni de inflación.</p>"
+    )
+
+
 def _watch_card(p: dict[str, Any]) -> str:
     naics = "; ".join(f"{n['naics']} {n['name'] or ''} ({n['weight']:.0%})" for n in p["naics"])
     ws, we = p["window"]
@@ -812,10 +835,7 @@ def _watch_card(p: dict[str, Any]) -> str:
 <span>efecto {fnum(p["effect"], 2)}{real} · q {fnum(p["q"], 4)}</span>
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
 {esc(p["direction"])}{win}</span></header>
-<p class="plain watch-warning"><strong>Un solo origen: no triangulado.</strong> No es un candidato \
-del ranking ni entra al score; pasa FDR y tiene {p["n_demand_series"]} serie(s) de cantidad o \
-valor real (el valor nominal solo cuenta si su crecimiento deflactado conserva el efecto), sin \
-efecto de tasas ni de inflación.</p>
+{_watch_warning(p)}
 <div>{_sources_chips(p["sources"])}</div>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 <p class="muted">Clases de medida: {esc(_measure_mix(p.get("measure_mix") or {}))}</p>
