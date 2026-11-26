@@ -48,6 +48,9 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if fdr.get("comparison_method") not in (*FDR_METHODS, None):
         raise ConfigError(f"fdr.comparison_method inválido: {fdr.get('comparison_method')!r}")
 
+    fam = fdr.get("family_by_frequency", [])
+    if not isinstance(fam, list) or not set(fam) <= set(DETECTORS):
+        raise ConfigError(f"fdr.family_by_frequency: lista de detectores de {DETECTORS}")
     cal = fdr.get("calibration", {})
     if cal.get("method") not in CALIBRATION_METHODS:
         raise ConfigError(
@@ -182,6 +185,9 @@ def _validate_detect(d: dict[str, Any]) -> None:
             raise ConfigError(f"detect.{key} debe ser un entero positivo")
     if not isinstance(d.get("regime_escalate"), int) or d["regime_escalate"] < 0:
         raise ConfigError("detect.regime_escalate debe ser un entero >= 0")
+    esc_max = d.get("regime_escalate_max", 0)
+    if not isinstance(esc_max, int) or esc_max < 0 or (esc_max and esc_max <= d["regime_escalate"]):
+        raise ConfigError("detect.regime_escalate_max debe ser 0 o un entero > regime_escalate")
     if not isinstance(d.get("phi_margin"), int | float) or d["phi_margin"] < 0:
         raise ConfigError("detect.phi_margin debe ser >= 0")
     if not isinstance(d.get("winsor_mad"), int | float) or d["winsor_mad"] <= 0:

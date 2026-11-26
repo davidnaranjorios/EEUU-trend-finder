@@ -94,6 +94,8 @@ detect:
   # regime: las pruebas en el piso (< 10 excedencias de 999) se recalculan con estas réplicas
   # (el CUSUM es barato); después, cola GPD sobre ese nulo si aún hace falta.
   regime_escalate: 99999
+  # Bootstrap adaptativo (ADR 0034): las que siguen en el piso con 99.999 pasan a 999.999.
+  regime_escalate_max: 999999
   workers: 4                    # procesos (runner de GitHub Actions: 4 vCPU)
   tail:                         # cola GPD (Knijnenburg et al. 2009)
     method: gpd
@@ -133,7 +135,10 @@ fdr:
   comparison_method: by         # solo se reporta como comparación
   # Alerta: un detector con tasa BH (n_bh/n_tests) > factor × la mediana de los demás.
   approval_alert: {factor: 3.0, min_rate: 0.001}
-  family: detector_run          # una familia por detector y por corrida
+  family: detector_run          # una familia por detector y por corrida...
+  # ...salvo estos detectores: una familia por frecuencia nativa (A, M, Q, W, D). Aprobado por
+  # David el 2026-11-11 (ADR 0022, opción 1; reconfirmado el 2026-11-26; ADR 0034).
+  family_by_frequency: [regime]
   calibration:
     method: stationary_bootstrap  # block bootstrap; no permutación simple
     block_length: auto            # entero o "auto"

@@ -151,9 +151,10 @@ class Escalation:
     n_resamples: int
     block_length: float
     seed_key: tuple[int, ...]
+    n_max: int = 0  # segunda etapa (bootstrap adaptativo, ADR 0034); 0 = solo `n_resamples`
 
 
-@lru_cache(maxsize=12)
+@lru_cache(maxsize=4)
 def _escalation_indices(n: int, block: float, seed: tuple[int, ...], chunk: int) -> np.ndarray:
     return stationary_indices(n, ESCALATION_CHUNK, block, (*seed, 99, chunk), n_out=n + AR_BURN_IN)
 
@@ -179,20 +180,20 @@ def regime_test(
     t_null, _ = cusum_stat(ar_null(g, idx, phi), persistence)
     _, exceed = empirical_p(float(t_obs), t_null)
     if escalation is not None and exceed < tail.min_exceedances:
-        chunks = -(-escalation.n_resamples // ESCALATION_CHUNK)
-        t_null = np.concatenate(
-            [
-                cusum_stat(
-                    ar_null(
-                        g,
-                        _escalation_indices(n, escalation.block_length, escalation.seed_key, k),
-                        phi,
-                    ),
-                    persistence,
-                )[0]
-                for k in range(chunks)
-            ]
-        )[: escalation.n_resamples]
+        # Bootstrap adaptativo (ADR 0034): etapa 1 con `n_resamples`; si la prueba sigue en el
+        # piso (< min_exceedances), etapa 2 con `n_max`. Los trozos son los mismos (índices por
+        # trozo), así que la etapa 2 solo agrega trozos. Cola GPD si aún hace falta.
+        stages = [escalation.n_resamples]
+        if escalation.n_max > escalation.n_resamples:
+            stages.append(escalation.n_max)
+        parts: list[np.ndarray] = []
+        for target in stages:
+            for k in range(len(parts), -(-target // ESCALATION_CHUNK)):
+                idx_k = _escalation_indices(n, escalation.block_length, escalation.seed_key, k)
+                parts.append(cusum_stat(ar_null(g, idx_k, phi), persistence)[0])
+            t_null = np.concatenate(parts)[:target]
+            if empirical_p(float(t_obs), t_null)[1] >= tail.min_exceedances:
+                break
         p, method = bootstrap_p(float(t_obs), t_null, tail)
         method += "_esc"
     else:

@@ -156,6 +156,8 @@ detector, window_start, window_end, effect_size, p_value, q_value, run_date`.
     sobreviven también a BY); no es una opción por defecto ni decide el ranking.
   - Familia de FDR: una por detector y por corrida. Cada señal registra contra cuántas
     pruebas se corrigió.
+    Excepción aprobada por David el 2026-11-11 y reconfirmada el 2026-11-26 (ADR 0022 opción 1,
+    ADR 0034): `regime` usa una familia por frecuencia nativa (`fdr.family_by_frequency`).
   - Knockoffs generalizados (Liu, Sun & Ke 2024) quedan como mejora futura.
 - Deduplicación: agrupar series muy correlacionadas o derivadas de la misma fuente
   (p. ej., la misma variable en distintos estados o unidades) para que un fenómeno no aparezca

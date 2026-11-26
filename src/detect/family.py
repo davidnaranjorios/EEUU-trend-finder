@@ -37,6 +37,7 @@ class FamilyParams:
     window: int = 60  # solo slope
     phi_margin: float = 1.0  # margen conservador de φ en el post-blackening
     regime_escalate: int = 0  # réplicas para las pruebas de regime en el piso (0 = no)
+    regime_escalate_max: int = 0  # 2.ª etapa solo para las que siguen en el piso (0 = no)
     tail: TailConfig = field(default_factory=TailConfig)
     workers: int = 1
 
@@ -164,6 +165,7 @@ def run_family(
                 params.regime_escalate,
                 blocks[key],
                 tuple(seed_key(params.seed, detector, grid, n)),
+                params.regime_escalate_max,
             )
         # Trozos chicos para repartir carga entre procesos; acotados para limitar memoria.
         step = min(64, max(1, len(pos) // (4 * max(params.workers, 1))))

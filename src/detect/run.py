@@ -283,6 +283,7 @@ def family_params(cfg: dict[str, Any], grid: str) -> FamilyParams:
         workers=d["workers"],
         phi_margin=d["phi_margin"],
         regime_escalate=d["regime_escalate"],
+        regime_escalate_max=d.get("regime_escalate_max", 0),
     )
 
 
@@ -437,6 +438,35 @@ def run_detectors(
 # --- fdr -----------------------------------------------------------------------------------------
 
 
+def split_by_frequency(cfg: dict[str, Any], detector: str) -> bool:
+    """¿Corrige por familia de frecuencia nativa? (`fdr.family_by_frequency`, ADR 0034)."""
+    return detector in cfg["fdr"].get("family_by_frequency", [])
+
+
+def adjust_families(
+    rows: list[dict[str, Any]], by_frequency: bool, q: float
+) -> dict[str, dict[str, Any]]:
+    """BH y BY por familia (una, o una por frecuencia nativa); anota q y el tamaño de la familia."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        groups[r["frequency"] if by_frequency else "*"].append(r)
+    for fam in groups.values():
+        p = np.array([r["p_value"] for r in fam])
+        for r, a, b in zip(fam, bh_adjust(p), by_adjust(p), strict=True):
+            r["q_value"], r["q_by"], r["n_tests"] = float(a), float(b), len(fam)
+    out: dict[str, dict[str, Any]] = {}
+    for k, fam in sorted(groups.items()):
+        p_min = min(r["p_value"] for r in fam)
+        out[k] = {
+            "n_tests": len(fam),
+            "n_bh": sum(r["q_value"] <= q for r in fam),
+            "n_by": sum(r["q_by"] <= q for r in fam),
+            "p_min": p_min,
+            "p_floor_blocks_bh": p_min > q / len(fam),
+        }
+    return out
+
+
 def signal_id(run_id: str, detector: str, source: str, object_id: str) -> str:
     return hashlib.sha1(f"{run_id}|{detector}|{source}|{object_id}".encode()).hexdigest()[:20]
 
@@ -475,10 +505,7 @@ def finalize(
         "dedup": load_dedup(cfg, run_id),
     }
     for detector, rows in sorted(by_det.items()):
-        p = np.array([r["p_value"] for r in rows])
-        q_bh, q_by = bh_adjust(p), by_adjust(p)
-        for r, a, b in zip(rows, q_bh, q_by, strict=True):
-            r["q_value"], r["q_by"], r["n_tests"] = float(a), float(b), len(rows)
+        fam_info = adjust_families(rows, split_by_frequency(cfg, detector), q)
         survivors = [r for r in rows if r["q_value"] <= q]
         if detector == "regime" and survivors:
             _date_regimes(cfg, survivors)
@@ -496,7 +523,7 @@ def finalize(
                     "q_value": r["q_value"],
                     "run_date": run_date,
                     "run_id": run_id,
-                    "n_tests": len(rows),
+                    "n_tests": r["n_tests"],
                 }
             )
         n_bh = len(survivors)
@@ -522,6 +549,11 @@ def finalize(
             }
         )
         report["detectors"][detector] = summarize(rows, q)
+        report["detectors"][detector]["families"] = fam_info
+        if len(fam_info) > 1:  # con familias por frecuencia, el piso se evalúa en cada una
+            report["detectors"][detector]["p_floor_blocks_bh"] = all(
+                f["p_floor_blocks_bh"] for f in fam_info.values()
+            )
     ac = cfg["fdr"]["approval_alert"]
     for r, a in zip(runs, annotate(runs, ac["factor"], ac["min_rate"]), strict=True):
         extra = {"bh_rate": a["bh_rate"], "approval_alert": a["alert"]}
