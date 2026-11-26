@@ -19,8 +19,8 @@ Tarea aprobada por David en la revisión de la corrida `19979e2620e64e45beae7b9f
   sin ajuste estacional (`NSA`); `copyright` solo si EIA lo declara distinto de «None».
 - `AGENCY = "U.S. Energy Information Administration"` en `src/rank/agencies.py`: origen propio.
 - En `detect.sources`, en el contrato (`tests/test_sources_contract.py`, esquema e idempotencia), en
-  `infra/sources_update.sh` y en `ingesta-fuentes.yml` (estado de R2 y corrida). Prioridad de dedup 0
-  (como las otras agencias; FRED, 1).
+  `infra/sources_update.sh` y en `ingesta-fuentes.yml` (estado de R2 y corrida). `detect/dedup.py` no se modifica (otra sesión):
+  `SOURCE_RANK.get(..., 1)` da a eia el mismo rango que FRED y el desempate por nombre prefiere eia.
 - **NAICS:** los metadatos de EIA no traen NAICS. Con los métodos neutrales de `src/rank/naics.py`
   (código en metadatos/id, nombre oficial completo) **0 de 78 896** series regionales y nacionales
   con título reciben NAICS propio; no se escribió ninguna correspondencia a mano. Solo podrían
