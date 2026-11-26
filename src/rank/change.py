@@ -142,11 +142,11 @@ def real_level(
     return np.array([cells[i] for i in range(first, last + 1)]), first
 
 
-def _trajectory_of(e: Mapping[str, Any], c: Ctx) -> tuple[str | None, str, str] | None:
-    """(etiqueta, nivel, nota) de una serie de producción; None si no se puede evaluar."""
+def _trajectory_of(e: Mapping[str, Any], c: Ctx) -> tuple[str | None, str, str, bool | None] | None:
+    """(etiqueta, nivel, nota, marca de recuperación) de una serie; None si no se puede evaluar."""
     key = (e["source"], e["object_id"])
     if e.get("measure_kind") == "cantidad":
-        return e.get("trajectory"), "directo", ""
+        return e.get("trajectory"), "directo", "", e.get("recuperacion")
     got = c.series(*key)
     if not got or not got[0]:
         return None
@@ -167,53 +167,79 @@ def _trajectory_of(e: Mapping[str, Any], c: Ctx) -> tuple[str | None, str, str] 
     if real is None:
         return None
     levels, first = real
-    label_, _ = traj_mod.classify(levels, first, grid, c.starts.get(grid, []), c.tp)
-    return label_, level, note
+    label_, detail = traj_mod.classify(levels, first, grid, c.starts.get(grid, []), c.tp)
+    return label_, level, note, detail.get("recuperacion")
+
+
+def _in_recovery(e: Mapping[str, Any]) -> bool:
+    """Etiqueta de recuperación o marca `recuperacion` (bajo el pico o la tendencia pre-choque)."""
+    return e.get("trajectory") in RECOVERY or e.get("recuperacion") is True
 
 
 def classify_quantity(evidence: Sequence[Mapping[str, Any]], c: Ctx) -> tuple[Out, Out]:
-    """(cantidad, recuperacion): solo series de PRODUCCIÓN (ingresos, ventas, envíos). Las de
-    valor se deflactan con el índice de precios del productor de su propia industria (✅), con el de
-    otro nivel NAICS (🟡) o con el deflactor aprobado (🟡). Los insumos no cuentan."""
+    """(cantidad, recuperacion). `cantidad`: solo series de PRODUCCIÓN (ingresos, ventas, envíos).
+    Las de valor se deflactan con el índice de precios del productor de su propia industria (✅),
+    con el de otro nivel NAICS (🟡) o con el deflactor aprobado (🟡). Los insumos no cuentan.
+    `recuperacion` (ADR 0034): considera TODAS las series de cantidad del fenómeno (empleo
+    incluido) y las de producción deflactadas; sí si alguna está en recuperación."""
     qty = Out("cantidad", threshold="trayectoria acelera o gira_al_alza", unit="series")
-    rec = Out("recuperacion", threshold="trayectoria frena_caida o rebote_bajo_pico", unit="series")
-    pool, skipped, notes = [], 0, []
+    rec = Out(
+        "recuperacion",
+        threshold="bajo su pico previo o su tendencia pre-choque (o rebote/frena_caida)",
+        unit="series",
+    )
+    pool, rpool, skipped, notes = [], [], 0, []
     for e in evidence:
         if e["item_kind"] != "series" or e.get("measure_subtype") == "poblacion":
             continue
         if e.get("measure_kind") not in ("cantidad", "valor"):
             continue
-        if c.roles.get((e["source"], e["object_id"])) != "produccion":
+        is_prod = c.roles.get((e["source"], e["object_id"])) == "produccion"
+        if not is_prod and e.get("measure_kind") != "cantidad":
             continue
         got = _trajectory_of(e, c)
         if got is None:
-            skipped += 1
+            skipped += is_prod
             continue
-        pool.append({**e, "trajectory": got[0], "_level": got[1]})
-        if got[2]:
-            notes.append(got[2])
+        item = {**e, "trajectory": got[0], "recuperacion": got[3], "_level": got[1]}
+        rpool.append(item)
+        if is_prod:
+            pool.append(item)
+            if got[2]:
+                notes.append(got[2])
     if not pool:
         qty.note = "sin series de producción evaluables (los insumos no cuentan como cantidad)"
-        rec.note = qty.note
-        return qty, rec
-    up = [e for e in pool if e["trajectory"] in COUNTS]
-    back = [e for e in pool if e["trajectory"] in RECOVERY]
-    for out, items in ((qty, up), (rec, back)):
-        out.status = SI if items else NO
-        out.value = float(len(items))
-        out.source_ref, hidden = _refs(items)
-        out.period = _period(items)
-        shown = items or pool
-        out.level = "directo" if any(e["_level"] == "directo" for e in shown) else "indirecto"
-        extra = f" (+{hidden} con derechos, no listada(s))" if hidden else ""
-        labels = ", ".join(sorted({str(e["trajectory"]) for e in pool}))
-        out.note = (
-            f"{len(items)} de {len(pool)} series de producción; trayectorias: {labels}"
-            + (f"; {'; '.join(sorted(set(notes)))}" if notes else "")
-            + (f"; {skipped} sin deflactor" if skipped else "")
-            + extra
-        )
+    else:
+        up = [e for e in pool if e["trajectory"] in COUNTS]
+        _fill(qty, up, pool, notes, skipped)
+    if not rpool:
+        rec.note = "sin series de cantidad ni de producción evaluables"
+    else:
+        _fill(rec, [e for e in rpool if _in_recovery(e)], rpool, [], 0)
     return qty, rec
+
+
+def _fill(
+    out: Out,
+    items: Sequence[Mapping[str, Any]],
+    pool: Sequence[Mapping[str, Any]],
+    notes: Sequence[str],
+    skipped: int,
+) -> None:
+    out.status = SI if items else NO
+    out.value = float(len(items))
+    out.source_ref, hidden = _refs(items)
+    out.period = _period(items)
+    shown = items or pool
+    out.level = "directo" if any(e["_level"] == "directo" for e in shown) else "indirecto"
+    extra = f" (+{hidden} con derechos, no listada(s))" if hidden else ""
+    labels = ", ".join(sorted({str(e["trajectory"]) for e in pool}))
+    out.note = (
+        f"{len(items)} de {len(pool)} series; trayectorias: {labels}"
+        + (f"; {'; '.join(sorted(set(notes)))}" if notes else "")
+        + (f"; {skipped} sin deflactor" if skipped else "")
+        + extra
+    )
 
 
 def insumos_note(evidence: Sequence[Mapping[str, Any]], c: Ctx) -> str:

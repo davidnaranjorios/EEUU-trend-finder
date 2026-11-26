@@ -330,6 +330,8 @@ RANK_CANDIDATES = TableSpec(
         # Marcas que NO filtran (ADR 0025): NULL = no aplica o partición anterior.
         ("sin_evidencia_demanda", pa.bool_(), True),
         ("origen_posiblemente_compartido", pa.bool_(), True),
+        # `estructural` o `recuperacion` (ADR 0034); NULL en particiones anteriores.
+        ("clase", pa.string(), True),
     ),
     key=("run_id", "candidate_id"),
 )
@@ -363,6 +365,8 @@ RANK_EVIDENCE = TableSpec(
         # efecto real usó un mes de inflación interpolado.
         ("trajectory", pa.string(), True),
         ("inflacion_estimada", pa.bool_(), True),
+        # Bajo su pico previo o su tendencia pre-choque (ADR 0034); NULL si no se evaluó.
+        ("recuperacion", pa.bool_(), True),
     ),
     key=("run_id", "candidate_id", "item_kind", "source", "object_id"),
 )
@@ -426,6 +430,8 @@ RANK_PHENOMENA = TableSpec(
         ("trajectory", pa.string(), True),
         ("sin_evidencia_demanda", pa.bool_(), True),
         ("origen_posiblemente_compartido", pa.bool_(), True),
+        # `estructural` o `recuperacion` (ADR 0034); NULL en particiones anteriores.
+        ("clase", pa.string(), True),
     ),
     key=("run_id", "phenomenon_id"),
 )

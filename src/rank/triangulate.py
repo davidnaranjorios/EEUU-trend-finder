@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 from scipy.stats import rankdata
 
+from src.rank import trajectory as traj_mod
 from src.rank.agencies import independent_groups
 
 
@@ -62,6 +63,7 @@ class Evidence:
     real_effect: float | None = None  # efecto deflactado de una serie `valor` (ADR 0018)
     trajectory: str | None = None  # etiqueta de trayectoria de la serie (ADR 0025)
     inflation_estimated: bool | None = None  # el efecto real usó un mes de inflación interpolado
+    recovery: bool | None = None  # bajo su pico previo o su tendencia pre-choque (ADR 0034)
     chain: tuple[
         str, ...
     ] = ()  # cadena de origen del dato (marca `origen_posiblemente_compartido`)
@@ -81,6 +83,7 @@ class Candidate:
     rank: int | None = None
     status: str = "una_fuente"
     published: bool = False
+    clase: str = "estructural"  # `recuperacion`: fuera del ranking principal (ADR 0034)
 
     @property
     def n_sources(self) -> int:
@@ -96,7 +99,15 @@ def assess(c: Candidate, min_sources: int) -> Candidate:
     c.groups = independent_groups(e.agencies for e in c.evidence if e.agencies)
     c.public_groups = independent_groups(e.agencies for e in c.evidence if e.agencies and e.public)
     c.status = "candidato" if c.n_sources >= min_sources else "una_fuente"
-    c.published = c.status == "candidato" and c.n_sources_public >= min_sources
+    c.clase = traj_mod.class_of(
+        (e.measure_kind, e.measure_subtype, e.recovery) for e in c.evidence if e.kind == "series"
+    )
+    # ADR 0034: una recuperación no entra al ranking principal (condición adicional al principio 4).
+    c.published = (
+        c.status == "candidato"
+        and c.n_sources_public >= min_sources
+        and c.clase != traj_mod.RECOVERY_CLASS
+    )
     return c
 
 
@@ -146,7 +157,11 @@ def score(
         raise ValueError(f"rank.weights sin peso para {sorted(missing)}")
     total = sum(weights[k] for k in COMPONENTS)
     for kind in sorted({c.kind for c in candidates}):
-        group = [c for c in candidates if c.kind == kind and c.status == "candidato"]
+        group = [
+            c
+            for c in candidates
+            if c.kind == kind and c.status == "candidato" and c.clase != traj_mod.RECOVERY_CLASS
+        ]
         if not group:
             continue
         raw = {k: [] for k in COMPONENTS}

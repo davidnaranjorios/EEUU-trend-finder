@@ -29,6 +29,12 @@ Etiquetas simétricas para caídas (ADR 0028). Solo se asignan si no aplica ning
 - `acelera_caida`: tendencia previa ≤ 0, la ventana reciente es menor y no está sobre el valle.
 - `frena_subida`: tendencia previa > 0 y ventana reciente en [0, previa): sube más despacio.
 
+Recuperación (ADR 0034, aprobada el 2026-11-26). Aparte de la etiqueta, cada serie lleva la marca
+`recuperacion`: el último nivel está bajo su pico previo **o** bajo la extrapolación de la tendencia
+de los `preshock_years` años anteriores al inicio de la última recesión (ajuste log-lineal;
+tolerancia `preshock_tolerance_pct`). Sin recesión en el rango la prueba de tendencia no se evalúa.
+Un fenómeno cuyas series de cantidad están todas en recuperación es de clase `recuperacion`.
+
 `no_confirmada` es del fenómeno: ninguna de sus series cae en una etiqueta. Es una marca visible;
 no filtra.
 """
@@ -38,6 +44,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -55,6 +62,9 @@ class TrajectoryParams:
     recent_years: float = 3.0
     peak_years: float = 2.0
     max_back_years: float = 10.0
+    preshock_years: float = 5.0  # años previos al inicio de la última recesión (tendencia)
+    preshock_tolerance_pct: float = 2.0  # «bajo la tendencia» = más de este % por debajo
+    preshock_form: str = "loglinear"
 
 
 def params_from(cfg: dict) -> TrajectoryParams:
@@ -64,6 +74,9 @@ def params_from(cfg: dict) -> TrajectoryParams:
         float(t["recent_years"]),
         float(t["peak_years"]),
         float(t["max_back_years"]),
+        float(t["preshock_years"]),
+        float(t["preshock_tolerance_pct"]),
+        str(t["preshock_form"]),
     )
 
 
@@ -83,6 +96,23 @@ def _to_grid(month: int, grid: str) -> int:
     return month // (12 // PER_YEAR[grid])
 
 
+def preshock_trend_gap(
+    level: np.ndarray, anchor: int, p: TrajectoryParams, py: int
+) -> float | None:
+    """Distancia (en log) del último nivel a la extrapolación de la tendencia de los
+    `preshock_years` años previos a `anchor`; None si la serie no cubre esa ventana.
+    Negativa = el nivel está bajo la tendencia."""
+    if p.preshock_form != "loglinear":
+        raise ValueError(f"preshock_form no soportada: {p.preshock_form}")
+    n = round(p.preshock_years * py)
+    end = level.size - 1
+    if n < 3 or anchor - n < 0 or anchor >= end:
+        return None
+    x = np.arange(anchor - n, anchor + 1, dtype=float)
+    slope, icpt = np.polyfit(x, level[anchor - n : anchor + 1], 1)
+    return float(level[end] - (icpt + slope * end))
+
+
 def _cagr(level: np.ndarray, i0: int, i1: int, per_year: int) -> float | None:
     if i0 < 0 or i1 <= i0 or i1 >= level.size:
         return None
@@ -95,7 +125,7 @@ def classify(
     grid: str,
     starts: Sequence[int],
     p: TrajectoryParams | None = None,
-) -> tuple[str | None, dict[str, float | None]]:
+) -> tuple[str | None, dict[str, Any]]:
     """(etiqueta, detalle) de una serie. `levels`: niveles reales (no el crecimiento preparado,
     que recorta los outliers y atenúa justo las caídas de las recesiones) en su grilla, el primero
     en `first_index`; `starts`: inicios de recesión en esa grilla. Con niveles ≤ 0 no se evalúa."""
@@ -119,7 +149,13 @@ def classify(
     below_peak = bool(peaks) and bool(level[end] < max(peaks))
     troughs = [level[max(a - peak_n, 0) : a + 1].min() for a in anchors if 0 < a < end]
     above_trough = bool(troughs) and bool(level[end] > min(troughs))
-    detail = {"cagr_previo": g_prev, "cagr_reciente": g_rec, "cagr_cola": g_tail}
+    detail: dict[str, Any] = {"cagr_previo": g_prev, "cagr_reciente": g_rec, "cagr_cola": g_tail}
+    # Recuperación (ADR 0034): bajo el pico previo o bajo la tendencia pre-choque extrapolada.
+    gap = preshock_trend_gap(level, anchor, p, py) if cands else None
+    below_trend = None if gap is None else bool(gap < np.log1p(-p.preshock_tolerance_pct / 100))
+    detail["bajo_tendencia"] = below_trend
+    detail["bajo_pico"] = below_peak if peaks else None
+    detail["recuperacion"] = bool(below_trend) or (below_peak if peaks else False)
     if g_prev is None or g_rec is None:
         return None, detail
     label: str | None = None
@@ -151,3 +187,15 @@ def of_phenomenon(labels: Iterable[str | None]) -> str:
     if not c:
         return NOT_CONFIRMED
     return max(c, key=lambda k: (c[k], -LABELS.index(k)))
+
+
+RECOVERY_CLASS = "recuperacion"
+STRUCTURAL_CLASS = "estructural"
+
+
+def class_of(evidence: Iterable[tuple[str | None, str | None, bool | None]]) -> str:
+    """Clase del cluster o fenómeno (ADR 0034). Cada elemento: (clase de medida, subtipo,
+    marca `recuperacion` de la serie). Es `recuperacion` si TODAS sus series de cantidad (no
+    poblacionales) están en recuperación; sin series de cantidad evaluables, `estructural`."""
+    qty = [r for k, sub, r in evidence if k == "cantidad" and sub != "poblacion"]
+    return RECOVERY_CLASS if qty and all(r is True for r in qty) else STRUCTURAL_CLASS
