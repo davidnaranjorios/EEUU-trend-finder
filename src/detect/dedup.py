@@ -23,7 +23,7 @@ import numpy as np
 
 # Código de serie de BEA: mezcla de letras y dígitos (no un índice de línea).
 _CODE = re.compile(r"^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{4,}$")
-SOURCE_RANK = {"bls": 0, "bea": 0, "census": 0, "eia": 0, "fred": 1}
+SOURCE_RANK = {"bls": 0, "bea": 0, "census": 0, "fred": 1}
 
 
 def base_key(source: str, series_id: str, grid: str) -> tuple[str, ...] | None:
