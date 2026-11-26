@@ -28,6 +28,7 @@ from typing import Any
 
 from src.rank import naics as naics_mod
 from src.rank import trajectory as traj_mod
+from src.rank.phenomena import display_direction
 from src.schemas import DIMENSION_NAMES
 
 DIMENSIONS = DIMENSION_NAMES
@@ -293,7 +294,7 @@ def build_phenomenon_rows(
         Row(
             "fenomeno",
             "direccion",
-            value_text=phen["direction"],
+            value_text=display_direction(phen["direction"], phen.get("trajectory")),
             period=f"{phen['window_start']} a {phen['window_end']}",
             source_ref="rank_phenomena",
             level="directo",

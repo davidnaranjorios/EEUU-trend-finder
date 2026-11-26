@@ -95,6 +95,13 @@ def rise_only_by_value(evidence: list[Evidence]) -> bool:
     return bool(qty) and all(e.trajectory == "frena_caida" or e.effect_size < 0 for e in qty)
 
 
+def display_direction(direction: str, trajectory: str | None) -> str:
+    """Dirección mostrada (ADR 0035): con trayectoria `frena_subida` (sigue subiendo, más
+    despacio) es «desacelera»; «baja» queda para niveles que caen. No cambia la dirección guardada
+    (que agrupa fenómenos), solo cómo se muestra."""
+    return "desacelera" if direction == "baja" and trajectory == "frena_subida" else direction
+
+
 def direction_of(evidence: list[Evidence], min_share: float) -> str:
     """Signo mediano del efecto de las series; "mixto" si no hay acuerdo ≥ `min_share`."""
     # «frena_caida» (sigue cayendo, más despacio) no cuenta como «sube» (ADR 0025).

@@ -8,6 +8,7 @@ import math
 from collections import defaultdict
 from typing import Any
 
+from src.rank.phenomena import display_direction
 from src.report.recent import INSUFFICIENT, STATES
 from src.schemas import ChangeType, Consequence, Dimension
 
@@ -528,6 +529,21 @@ def _naics_line(items: list[dict[str, Any]]) -> str:
     return f'<p class="plain naics">Industria (NAICS): {esc(txt)}</p>'
 
 
+def _policy_excluded(rr: dict[str, Any]) -> str:
+    """Sección «Política o contable (excluidas)» (ADR 0035): solo el conteo."""
+    try:
+        n = int(json.loads(rr.get("params_json") or "{}")["summary"]["n_policy_excluded"])
+    except (KeyError, ValueError, TypeError):
+        return ""
+    return (
+        '<section id="politica-contable"><h3>Política o contable (excluidas)</h3>'
+        f'<p class="plain"><strong>{n}</strong> serie(s) con señal son de política monetaria o '
+        "contables (balance de la Reserva Federal, publicación H.4.1 de FRED). Reflejan decisiones "
+        "o registros, no demanda: se excluyen del ranking y de la lista en observación.</p>"
+        "</section>"
+    )
+
+
 def _naics_coverage(rr: dict[str, Any]) -> str:
     try:
         cov = json.loads(rr.get("params_json") or "{}")["summary"]["naics_coverage"]
@@ -775,7 +791,7 @@ def _phenomenon_card(p: dict[str, Any]) -> str:
 <strong>{p["n_sources"]} fuentes independientes</strong> <span>score {fnum(p["score"], 3)}</span>
 {_marks(p)}
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
-{esc(p["direction"])}{win}</span></header>
+{esc(display_direction(p["direction"], p.get("trajectory")))}{win}</span></header>
 <div>{_sources_chips(p["sources"])}</div>
 <p class="plain naics">Industria (NAICS): {esc(naics) or "sin anclaje"}</p>
 {demand}{grouping}<p class="muted">Clases de medida: {mix}</p>
@@ -811,7 +827,7 @@ def _watch_card(p: dict[str, Any]) -> str:
 <header><span class="state watch-flag">🟡 En observación</span>{_marks(p)}
 <span>efecto {fnum(p["effect"], 2)}{real} · q {fnum(p["q"], 4)}</span>
 <span class="muted">{p["n_clusters"]} cluster(s) · {p["n_members"]} serie(s) · \
-{esc(p["direction"])}{win}</span></header>
+{esc(display_direction(p["direction"], p.get("trajectory")))}{win}</span></header>
 <p class="plain watch-warning"><strong>Un solo origen: no triangulado.</strong> No es un candidato \
 del ranking ni entra al score; pasa FDR y tiene {p["n_demand_series"]} serie(s) de cantidad o \
 valor real (el valor nominal solo cuenta si su crecimiento deflactado conserva el efecto), sin \
@@ -843,6 +859,7 @@ def ranking_page(data: dict[str, Any]) -> str:
         _tile("Una sola fuente (descartados)", fnum(rr.get("n_single_source"))),
         "</div>",
         _naics_coverage(rr),
+        _policy_excluded(rr),
     )
     det_rows = [
         [

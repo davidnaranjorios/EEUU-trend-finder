@@ -267,6 +267,7 @@ def series_info(
                 series_id=sid,
                 units=units.get((src, sid), ""),
                 title=title or "",
+                release_ids=fred_releases.get(sid, ()) if src == "fred" else (),
             ),
         )
     return out
@@ -900,6 +901,11 @@ def rank_run(
         sorted(set(tested) | {(s, i, False) for s, i in signal_keys}),
         set(signal_keys),
     )
+    # Clase «política o contable» (ADR 0035): fuera del ranking y de la lista en observación.
+    policy_keys = sorted(k for k in signal_keys if info[k].measure.kind == measure_mod.POLICY_KIND)
+    if policy_keys:
+        by_series = {k: v for k, v in by_series.items() if k not in set(policy_keys)}
+        signal_keys = sorted(by_series)
     inner = embedder or make_embedder(cfg, _resolve(rk["embeddings"]["cache_dir"]))
     emb = CachedEmbedder(inner, processed / "_internal" / "embeddings")
 
@@ -1279,6 +1285,7 @@ def rank_run(
         "numeric_run_id": numeric_run,
         "text_run_ids": text_runs,
         "n_signal_series": len(signal_keys),
+        "n_policy_excluded": len(policy_keys),
         "n_signal_terms": len(terms),
         "n_clusters": len(clusters),
         "n_clusters_multi": sum(len(m) > 1 for m in clusters),
