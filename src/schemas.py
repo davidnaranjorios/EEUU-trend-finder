@@ -482,6 +482,21 @@ class Dimension(Enum):
     confianza = "Confianza"
 
 
+class Question(Enum):
+    """La pregunta literal de cada dimensión en la ficha (ADR 0036). Como `Dimension`, son
+    nombres estables de la estructura de la ficha, no temas ni series de interés."""
+
+    fenomeno = "¿Qué cambió?"
+    evidencia = "¿Qué lo prueba?"
+    demanda = "¿Quién necesita algo como consecuencia?"
+    brecha = "¿Qué no resuelve la oferta?"
+    competencia = "¿Quién la atiende hoy?"
+    dinero = "¿Cuánto gastan hoy los compradores en esa necesidad?"
+    entrada = "¿Qué cuesta entrar?"
+    riesgo = "¿Qué puede salir mal?"
+    confianza = "¿Cuánto de esto está demostrado?"
+
+
 DIMENSION_NAMES = tuple(Dimension.__members__)
 DIMENSION_LEVELS = ("directo", "indirecto", "sin_dato")
 PHENOMENON_DIMENSIONS = TableSpec(

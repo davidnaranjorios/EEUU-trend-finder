@@ -6,8 +6,8 @@ Base: ADR 0029 (dimensiones), 0030 («qué cambió») y 0032 (consecuencias, ins
 ## Decisiones
 1. **Contexto de industria** (bloque aparte, fuera de las 9): CR4/CR8, empresas, ingresos, entrada y
    salida (y su referencia de la economía total), nivel frente al pico y precio frente al deflactor.
-2. **Cada dimensión responde su pregunta literal** (`src/rank/ficha.py`, `QUESTIONS`; se muestran así
-   en el reporte):
+2. **Cada dimensión responde su pregunta literal** (`schemas.Question`, un `Enum` como `Dimension`, ADR 0029 punto 8: el guard
+   de listas literales no se toca ni se esquiva; se muestran así en el reporte):
 
    | Dimensión | Pregunta | Evidencia que la responde |
    |---|---|---|

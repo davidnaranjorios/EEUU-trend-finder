@@ -19,18 +19,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from src.rank.change import SCARCITY
+from src.schemas import Question
 
-QUESTIONS = {
-    "fenomeno": "¿Qué cambió?",
-    "evidencia": "¿Qué lo prueba?",
-    "demanda": "¿Quién necesita algo como consecuencia?",
-    "brecha": "¿Qué no resuelve la oferta?",
-    "competencia": "¿Quién la atiende hoy?",
-    "dinero": "¿Cuánto gastan hoy los compradores en esa necesidad?",
-    "entrada": "¿Qué cuesta entrar?",
-    "riesgo": "¿Qué puede salir mal?",
-    "confianza": "¿Cuánto de esto está demostrado?",
-}
+QUESTIONS = {d.name: d.value for d in Question}
 LEVELS = ("demostrado", "indicio", "hipotesis", "sin_evidencia")
 LEVEL_MARK = {"demostrado": "✅", "indicio": "🟡", "hipotesis": "⚪", "sin_evidencia": "—"}
 LEVEL_NAME = {
